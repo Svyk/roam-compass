@@ -25,9 +25,9 @@ Name::
 
 Once this repository exists, install Compass from its GitHub Pages URL:
 
-`https://svyk.github.io/roam-compass`
+`https://svyk.github.io/roam-compass/`
 
-Include `https://`. Do not append `/extension.js`. In Roam, add that URL under **Settings → Roam Depot → Developer Extensions**.
+Include `https://` and the trailing slash. Do not append `/extension.js`. Do not paste the github.com repository page. In Roam, add that URL under **Settings → Roam Depot → Developer Extensions**.
 
 ## License
 

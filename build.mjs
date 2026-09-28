@@ -3,6 +3,13 @@ import { copyFile, mkdir, readFile, rm, watch, writeFile } from "node:fs/promise
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+const INDEX_HTML = `<!doctype html>
+<meta charset="utf-8">
+<title>Compass</title>
+<p><a href="extension.js">extension.js</a></p>
+<p><a href="README.md">README.md</a></p>
+`;
+
 const thisFile = fileURLToPath(import.meta.url);
 const defaultRoot = dirname(thisFile);
 
@@ -68,6 +75,7 @@ export async function build(rootDirectory = defaultRoot) {
       copyFile(resolve(rootDirectory, name), resolve(deployDir, name))
     )),
     writeFile(resolve(deployDir, ".nojekyll"), "", "utf8"),
+    writeFile(resolve(deployDir, "index.html"), INDEX_HTML, "utf8"),
   ]);
   process.stdout.write(`Built extension.js, extension.css, and ${deployDir}\n`);
 }
