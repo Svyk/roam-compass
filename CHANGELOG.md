@@ -4,6 +4,10 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+### Changed
+
+- Named the extension Compass (`roam-compass`). Log prefix is `[compass]`. Settings tab is Compass. The palette command is `Compass: Open`.
+
 ## [0.1.0] - 2026-08-03
 
 ### Added

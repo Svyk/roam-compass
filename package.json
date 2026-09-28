@@ -1,8 +1,8 @@
 {
-  "name": "roam-extension-template",
+  "name": "roam-compass",
   "version": "0.1.0",
   "private": true,
-  "description": "Zero-runtime-dependency template for Roam Depot extensions",
+  "description": "Spatial neighborhood navigator for a Roam graph",
   "type": "module",
   "main": "extension.js",
   "scripts": {
