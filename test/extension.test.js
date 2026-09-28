@@ -4,27 +4,28 @@ import test from "node:test";
 import extension from "../src/extension.js";
 
 const SETTING_IDS = [
-  "compass-parents",
-  "compass-children",
-  "compass-friends",
-  "compass-challengers",
+  "compass-north",
+  "compass-south",
+  "compass-west",
+  "compass-east",
+  "compass-previous",
+  "compass-next",
   "compass-hidden",
-  "compass-untyped",
+  "compass-links",
   "compass-siblings",
   "compass-badges",
-  "compass-outline",
   "compass-sidecar",
+  "compass-outline",
   "compass-max-zone",
   "compass-pins",
-  "compass-lenses",
 ];
 
 const SWITCH_IDS = [
-  "compass-untyped",
+  "compass-links",
   "compass-siblings",
   "compass-badges",
-  "compass-outline",
   "compass-sidecar",
+  "compass-outline",
 ];
 
 function versionHost() {
@@ -130,19 +131,20 @@ test("extension exports the Roam lifecycle contract and survives repeated unload
     const cleanup = await extension.onload({ extensionAPI: api, extension: { version: "test" } });
     assert.equal(typeof cleanup, "function");
     assert.equal(versionHost().__ROAM_COMPASS_VERSION, "test");
-    assert.equal(api.settings.get("compass-parents"), "Parent");
-    assert.equal(api.settings.get("compass-children"), "Child");
-    assert.equal(api.settings.get("compass-friends"), "Friend, Previous");
-    assert.equal(api.settings.get("compass-challengers"), "Challenger, Next");
+    assert.equal(api.settings.get("compass-north"), "Parent, Up, Part of, Is a, Type, Category, Project, BT_attrProject");
+    assert.equal(api.settings.get("compass-south"), "Child, Has part, Contains");
+    assert.equal(api.settings.get("compass-west"), "Friend, Related, See also");
+    assert.equal(api.settings.get("compass-east"), "Challenger, Opposes, Contradicts");
+    assert.equal(api.settings.get("compass-previous"), "Previous");
+    assert.equal(api.settings.get("compass-next"), "Next");
     assert.equal(api.settings.get("compass-hidden"), "Hidden");
-    assert.equal(api.settings.get("compass-untyped"), true);
+    assert.equal(api.settings.get("compass-links"), true);
     assert.equal(api.settings.get("compass-siblings"), true);
     assert.equal(api.settings.get("compass-badges"), true);
-    assert.equal(api.settings.get("compass-outline"), false);
     assert.equal(api.settings.get("compass-sidecar"), true);
-    assert.equal(api.settings.get("compass-max-zone"), "24");
+    assert.equal(api.settings.get("compass-outline"), false);
+    assert.equal(api.settings.get("compass-max-zone"), "12");
     assert.deepEqual(api.settings.get("compass-pins"), []);
-    assert.deepEqual(api.settings.get("compass-lenses"), []);
     assert.deepEqual(api.panel.settings.map((row) => row.id), SETTING_IDS);
     for (const row of api.panel.settings) {
       assert.equal(row.action.type, SWITCH_IDS.includes(row.id) ? "switch" : "input");
@@ -150,11 +152,11 @@ test("extension exports the Roam lifecycle contract and survives repeated unload
     await api.panel.settings.find((row) => row.id === "compass-outline").action.onChange({
       target: { checked: true },
     });
-    await api.panel.settings.find((row) => row.id === "compass-parents").action.onChange({
+    await api.panel.settings.find((row) => row.id === "compass-north").action.onChange({
       target: { value: "Mother" },
     });
     assert.equal(api.settings.get("compass-outline"), true);
-    assert.equal(api.settings.get("compass-parents"), "Mother");
+    assert.equal(api.settings.get("compass-north"), "Mother");
     for (const command of api.commands) command.callback();
     menu.command.callback({ "block-uid": "block-1" });
     await cleanup();

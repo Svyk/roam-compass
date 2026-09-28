@@ -7,6 +7,18 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 ### Changed
 
 - Named the extension Compass (`roam-compass`). Log prefix is `[compass]`. Settings tab is Compass. The palette command is `Compass: Open`.
+- Replaced the neighborhood model and the overlay. Every typed attribute now places a node: listed attributes go to their side, unlisted ones read as children. Plain links come from the whole outline, nested bullets included; linked references sit north; a two-way link sits west.
+- Daily notes show their links, linked references, and the day before and after. Compass: Open falls back to today's note on the daily notes log.
+- `BT_attr*` relations are visible and read-only.
+- Siblings come from typed parents, co-mentions in the same block, sibling blocks, and namespaces.
+- Dragging a typed node to another side renames or splits its one `Name::` block. Dragging a plain link opens its block instead.
+- Outline mode expands the center into foldable blocks, and edges leave the card at the block that holds them.
+- Nodes glide to their new place on refocus. Edge details list each source block. Search ranks exact, prefix, word, and loose matches.
+- Settings ids are now `compass-north`, `compass-south`, `compass-west`, `compass-east`, `compass-previous`, `compass-next`, `compass-hidden`, `compass-links`, `compass-siblings`, `compass-badges`, `compass-sidecar`, `compass-outline`, `compass-max-zone`, and `compass-pins`.
+
+### Removed
+
+- Lenses, the edge annotate form, and the `related` zone.
 
 ## [0.1.0] - 2026-08-03
 

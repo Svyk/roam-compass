@@ -1,192 +1,159 @@
-// x/y are the top-left. The origin is the center of the center card.
-const NODE_W = 160;
-const NODE_H = 36;
-const GAP_X = 12;
-const GAP_Y = 10;
-const SIB_W = 120;
-const SIB_H = 28;
-const SOUTH_GAP = 28;
+// Deterministic geometry. Coordinates are box centers; the center card sits at (0, 0).
+export const NODE = Object.freeze({ w: 180, h: 34 });
+export const SIBLING = Object.freeze({ w: 148, h: 28 });
+export const ROW_H = 24;
 
-function compareNodes(a, b) {
-  const at = String(a.title ?? "");
-  const bt = String(b.title ?? "");
-  if (at < bt) return -1;
-  if (at > bt) return 1;
-  const au = String(a.uid ?? "");
-  const bu = String(b.uid ?? "");
-  if (au < bu) return -1;
-  if (au > bu) return 1;
-  return 0;
+const COL_GAP = 14;
+const ROW_GAP = 12;
+const V_GAP = 64;
+const H_GAP = 72;
+const CHIP_GAP = 22;
+const HEADER_H = 56;
+const BADGE_H = 24;
+const MAX_ROWS = 40;
+
+function gridWidth(count, columns, width) {
+  const used = Math.min(count, columns);
+  return used ? used * width + (used - 1) * COL_GAP : 0;
 }
 
-function byZone(nodes, zone) {
-  return nodes.filter((node) => node && node.zone === zone && node.uid != null).slice().sort(compareNodes);
+function grid(nodes, columns, direction, edge) {
+  const rows = Math.ceil(nodes.length / columns);
+  return nodes.map((node, index) => {
+    const row = Math.floor(index / columns);
+    const column = index % columns;
+    const inRow = row === rows - 1 ? nodes.length - row * columns : columns;
+    const width = gridWidth(inRow, columns, NODE.w);
+    return {
+      uid: node.uid,
+      zone: node.zone,
+      x: -width / 2 + column * (NODE.w + COL_GAP) + NODE.w / 2,
+      y: direction * (edge + NODE.h / 2 + row * (NODE.h + ROW_GAP)),
+      w: NODE.w,
+      h: NODE.h,
+    };
+  });
 }
 
-function placeRow(items, y, w, h) {
-  const count = items.length;
-  if (!count) return [];
-  const total = count * w + (count - 1) * GAP_X;
-  const start = -total / 2;
-  return items.map((node, index) => ({
-    uid: node.uid,
-    zone: node.zone,
-    x: start + index * (w + GAP_X),
-    y,
-    w,
-    h,
-  }));
-}
-
-function placeColumn(items, x, w, h) {
-  const count = items.length;
-  if (!count) return [];
-  const total = count * h + (count - 1) * GAP_Y;
-  const start = -total / 2;
-  return items.map((node, index) => ({
+function column(nodes, x, top, size, gap) {
+  return nodes.map((node, index) => ({
     uid: node.uid,
     zone: node.zone,
     x,
-    y: start + index * (h + GAP_Y),
-    w,
-    h,
+    y: top + size.h / 2 + index * (size.h + gap),
+    w: size.w,
+    h: size.h,
   }));
 }
 
-function placeSouth(origin, children, related, siblings) {
-  const rows = [
-    [children, NODE_W, NODE_H],
-    [related, NODE_W, NODE_H],
-    [siblings, SIB_W, SIB_H],
-  ];
-  const placed = [];
-  let y = origin;
-  let started = false;
-  for (const [items, w, h] of rows) {
-    if (!items.length) continue;
-    if (started) y += SOUTH_GAP;
-    placed.push(...placeRow(items, y, w, h));
-    y += h;
-    started = true;
-  }
-  return placed;
+function columnHeight(count, size, gap) {
+  return count ? count * size.h + (count - 1) * gap : 0;
 }
 
-export function layout(nodes, options = {}) {
-  const list = Array.isArray(nodes) ? nodes : [];
-  const showOutline = options.showOutline === true;
-  const parents = byZone(list, "parents");
-  const friends = byZone(list, "friends");
-  const challengers = byZone(list, "challengers");
-  const children = byZone(list, "children");
-  const related = byZone(list, "related");
-  const siblings = byZone(list, "siblings");
-  const outline = showOutline ? byZone(list, "outline") : [];
-  const childrenTop = 80 + outline.length * (NODE_H + GAP_Y);
-  return [
-    ...placeRow(parents, -70 - NODE_H, NODE_W, NODE_H),
-    ...placeColumn(friends, -200 - NODE_W, NODE_W, NODE_H),
-    ...placeColumn(challengers, 200, NODE_W, NODE_H),
-    ...outline.map((node, index) => ({
-      uid: node.uid,
-      zone: node.zone,
-      x: -NODE_W / 2,
-      y: 80 + index * (NODE_H + GAP_Y),
-      w: NODE_W,
-      h: NODE_H,
-    })),
-    ...placeSouth(childrenTop, children, related, siblings),
-  ];
-}
-
-function nameList(value) {
-  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
-  if (typeof value === "string" && value.trim()) {
-    return value.split(",").map((item) => item.trim()).filter(Boolean);
-  }
-  return [];
-}
-
-function lensOf(lens) {
-  const source = lens ?? {};
+export function centerSize({ badges = 0, rows = 0, more = false } = {}) {
+  const expanded = rows > 0 || more;
+  const shown = Math.min(rows, MAX_ROWS) + (more ? 1 : 0);
   return {
-    keyword: String(source.keyword ?? "").trim().toLowerCase(),
-    include: nameList(source.attributes?.include),
-    exclude: nameList(source.attributes?.exclude),
-    kinds: nameList(source.kinds?.include),
+    w: expanded ? 320 : 240,
+    h: HEADER_H + (badges ? BADGE_H : 0) + (expanded ? shown * ROW_H + 8 : 0),
   };
 }
 
-function attributesFor(node, edges) {
-  const incident = (edges ?? []).filter((edge) => edge.from === node.uid || edge.to === node.uid);
-  const primary = incident.filter((edge) => edge.zone === node.zone && edge.kind === node.kind);
-  const chosen = primary.length ? primary : incident;
-  const names = [];
-  for (const edge of chosen) {
-    if (edge.attribute && !names.includes(edge.attribute)) names.push(edge.attribute);
-  }
-  return names;
-}
+export function layout(neighborhood, options = {}) {
+  const nodes = Array.isArray(neighborhood?.nodes) ? neighborhood.nodes : [];
+  const rowsIn = Array.isArray(options.rows) ? options.rows.slice(0, MAX_ROWS) : [];
+  const more = rowsIn.length < (options.rows?.length ?? 0);
+  const badges = neighborhood?.center?.badges?.length ?? 0;
+  const size = centerSize({ badges, rows: rowsIn.length, more });
+  const cw = size.w;
+  const ch = size.h;
+  const zone = (name) => nodes.filter((node) => node.zone === name);
+  const north = zone("north");
+  const south = zone("south");
+  const west = zone("west");
+  const east = zone("east");
+  const siblings = zone("siblings");
+  const northColumns = 3;
+  const southColumns = 4;
 
-function nodeVisible(node, edges, lens) {
-  if (lens.keyword && !String(node.title ?? "").toLowerCase().includes(lens.keyword)) return false;
-  if (lens.kinds.length && !lens.kinds.includes(node.kind)) return false;
-  const names = attributesFor(node, edges);
-  if (lens.include.length && !names.some((name) => lens.include.includes(name))) return false;
-  if (lens.exclude.length && names.some((name) => lens.exclude.includes(name))) return false;
-  return true;
-}
-
-function badgeVisible(badge, lens) {
-  if (lens.include.length && !lens.include.includes(badge.attribute)) return false;
-  if (lens.exclude.length && lens.exclude.includes(badge.attribute)) return false;
-  return true;
-}
-
-function showOutlineOf(classified, nodes) {
-  if (classified?.showOutline === true) return true;
-  if (classified?.showOutline === false) return false;
-  return nodes.some((node) => node.zone === "outline");
-}
-
-function endVisible(uid, visible, nodeUids) {
-  if (visible.has(uid)) return true;
-  return !nodeUids.has(uid);
-}
-
-export function applyLens(classified, lens, mode) {
-  const source = classified ?? {};
-  const nodes = source.nodes ?? [];
-  const edges = source.edges ?? [];
-  const rule = lensOf(lens);
-  const visible = new Set();
-  const hidden = new Set();
-  for (const node of nodes) {
-    if (nodeVisible(node, edges, rule)) visible.add(node.uid);
-    else hidden.add(node.uid);
-  }
-  const showOutline = showOutlineOf(source, nodes);
-  const badges = (source.badges ?? []).filter((badge) => badgeVisible(badge, rule));
-  if (mode === "keep") {
-    const previous = Array.isArray(source.layout) ? source.layout : layout(nodes, { showOutline });
-    return {
-      nodes: nodes.map((node) => (hidden.has(node.uid) ? { ...node, hidden: true } : { ...node })),
-      edges: edges.map((edge) => ({ ...edge })),
-      badges,
-      overflow: source.overflow ?? {},
-      layout: previous.map((item) => ({ ...item })),
-    };
-  }
-  const kept = nodes.filter((node) => visible.has(node.uid));
-  const nodeUids = new Set(nodes.map((node) => node.uid));
-  const keptEdges = edges.filter((edge) => (
-    endVisible(edge.from, visible, nodeUids) && endVisible(edge.to, visible, nodeUids)
-  ));
-  return {
-    nodes: kept.map((node) => ({ ...node })),
-    edges: keptEdges.map((edge) => ({ ...edge })),
-    badges,
-    overflow: source.overflow ?? {},
-    layout: layout(kept, { showOutline }),
+  const items = [
+    ...grid(north, northColumns, -1, ch / 2 + V_GAP),
+    ...grid(south, southColumns, 1, ch / 2 + V_GAP),
+  ];
+  const wideHalf = Math.max(
+    cw / 2,
+    gridWidth(north.length, northColumns, NODE.w) / 2,
+    gridWidth(south.length, southColumns, NODE.w) / 2,
+  );
+  // A short lateral column fits between the north and south bands; a tall one moves outside them.
+  const lateralX = (count) => {
+    const half = columnHeight(count, NODE, ROW_GAP) / 2;
+    const clear = half <= ch / 2 + V_GAP - ROW_GAP;
+    return (clear ? cw / 2 : wideHalf) + H_GAP + NODE.w / 2;
   };
+  const westX = -lateralX(west.length);
+  const eastX = lateralX(east.length);
+  items.push(...column(west, westX, -columnHeight(west.length, NODE, ROW_GAP) / 2, NODE, ROW_GAP));
+  items.push(...column(east, eastX, -columnHeight(east.length, NODE, ROW_GAP) / 2, NODE, ROW_GAP));
+
+  const eastOuter = east.length ? eastX + NODE.w / 2 : 0;
+  const siblingX = Math.max(eastOuter, wideHalf) + H_GAP * 0.75 + SIBLING.w / 2;
+  const siblingTop = -(ch / 2 + V_GAP + NODE.h);
+  items.push(...column(siblings, siblingX, siblingTop, SIBLING, 8));
+
+  const rowTop = -ch / 2 + HEADER_H + (badges ? BADGE_H : 0);
+  const rows = rowsIn.map((row, index) => ({
+    uid: row.uid,
+    depth: row.depth,
+    x: 0,
+    y: rowTop + ROW_H / 2 + index * ROW_H,
+    w: cw - 16,
+    h: ROW_H,
+  }));
+
+  const chips = [];
+  const byZone = (name) => items.filter((item) => item.zone === name);
+  for (const name of Object.keys(neighborhood?.overflow ?? {})) {
+    const members = byZone(name);
+    if (!members.length) continue;
+    const top = Math.min(...members.map((item) => item.y - item.h / 2));
+    const bottom = Math.max(...members.map((item) => item.y + item.h / 2));
+    const x = members[0].zone === "north" || members[0].zone === "south" ? 0 : members[0].x;
+    chips.push({ zone: name, x, y: name === "north" ? top - CHIP_GAP : bottom + CHIP_GAP });
+  }
+
+  let minX = -cw / 2;
+  let maxX = cw / 2;
+  let minY = -ch / 2;
+  let maxY = ch / 2;
+  for (const item of items) {
+    minX = Math.min(minX, item.x - item.w / 2);
+    maxX = Math.max(maxX, item.x + item.w / 2);
+    minY = Math.min(minY, item.y - item.h / 2);
+    maxY = Math.max(maxY, item.y + item.h / 2);
+  }
+  for (const chip of chips) {
+    minY = Math.min(minY, chip.y - 12);
+    maxY = Math.max(maxY, chip.y + 12);
+  }
+
+  return {
+    center: { x: 0, y: 0, w: cw, h: ch },
+    items,
+    rows,
+    more,
+    chips,
+    bounds: { minX, minY, maxX, maxY },
+  };
+}
+
+// Which side a point (world coordinates) falls on, for drag-to-reclassify.
+export function sideAt(point, center) {
+  const halfW = center.w / 2;
+  const halfH = center.h / 2;
+  if (Math.abs(point.x) <= halfW && Math.abs(point.y) <= halfH) return null;
+  const nx = point.x / (halfW + H_GAP);
+  const ny = point.y / (halfH + V_GAP);
+  if (Math.abs(ny) >= Math.abs(nx)) return ny < 0 ? "north" : "south";
+  return nx < 0 ? "west" : "east";
 }

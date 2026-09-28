@@ -1,57 +1,62 @@
+import { MODEL_DEFAULTS } from "./model/neighborhood.js";
+
 export const SETTING_IDS = Object.freeze({
-  parents: "compass-parents",
-  children: "compass-children",
-  friends: "compass-friends",
-  challengers: "compass-challengers",
+  north: "compass-north",
+  south: "compass-south",
+  west: "compass-west",
+  east: "compass-east",
+  previous: "compass-previous",
+  next: "compass-next",
   hidden: "compass-hidden",
-  untyped: "compass-untyped",
+  links: "compass-links",
   siblings: "compass-siblings",
   badges: "compass-badges",
-  outline: "compass-outline",
   sidecar: "compass-sidecar",
+  outline: "compass-outline",
   maxZone: "compass-max-zone",
   pins: "compass-pins",
-  lenses: "compass-lenses",
 });
 
 export const DEFAULTS = Object.freeze({
-  "compass-parents": "Parent",
-  "compass-children": "Child",
-  "compass-friends": "Friend, Previous",
-  "compass-challengers": "Challenger, Next",
-  "compass-hidden": "Hidden",
-  "compass-untyped": true,
+  "compass-north": MODEL_DEFAULTS.parent,
+  "compass-south": MODEL_DEFAULTS.child,
+  "compass-west": MODEL_DEFAULTS.friend,
+  "compass-east": MODEL_DEFAULTS.challenger,
+  "compass-previous": MODEL_DEFAULTS.previous,
+  "compass-next": MODEL_DEFAULTS.next,
+  "compass-hidden": MODEL_DEFAULTS.hidden,
+  "compass-links": true,
   "compass-siblings": true,
   "compass-badges": true,
-  "compass-outline": false,
   "compass-sidecar": true,
-  "compass-max-zone": "24",
+  "compass-outline": false,
+  "compass-max-zone": "12",
   "compass-pins": [],
-  "compass-lenses": [],
 });
 
 const SWITCHES = new Set([
-  SETTING_IDS.untyped,
+  SETTING_IDS.links,
   SETTING_IDS.siblings,
   SETTING_IDS.badges,
-  SETTING_IDS.outline,
   SETTING_IDS.sidecar,
+  SETTING_IDS.outline,
 ]);
 
 const ROWS = [
-  [SETTING_IDS.parents, "Parents", "Comma-separated attribute titles for north."],
-  [SETTING_IDS.children, "Children", "Comma-separated attribute titles for south."],
-  [SETTING_IDS.friends, "Friends", "Comma-separated attribute titles for west."],
-  [SETTING_IDS.challengers, "Challengers", "Comma-separated attribute titles for east."],
-  [SETTING_IDS.hidden, "Hidden", "Comma-separated attribute titles to drop."],
-  [SETTING_IDS.untyped, "Untyped links", "Show plain page links and mentions."],
-  [SETTING_IDS.siblings, "Siblings", "Show sibling pages from an inverse parent."],
-  [SETTING_IDS.badges, "Badges", "Show scalar text on the center card."],
-  [SETTING_IDS.outline, "Outline", "Show direct child blocks under the center."],
-  [SETTING_IDS.sidecar, "Sidecar", "Open the center in the right sidebar."],
-  [SETTING_IDS.maxZone, "Max per zone", "Relation nodes kept in each zone."],
-  [SETTING_IDS.pins, "Pins", "JSON list of uid and title."],
-  [SETTING_IDS.lenses, "Lenses", "JSON list of named lenses."],
+  [SETTING_IDS.north, "Parents (north)", "Attributes whose value sits above the center. The first one is written when you drag a node north."],
+  [SETTING_IDS.south, "Children (south)", "Attributes whose value sits below. Any attribute not listed anywhere also lands here."],
+  [SETTING_IDS.west, "Friends (west)", "Attributes whose value sits to the left, from either end."],
+  [SETTING_IDS.east, "Challengers (east)", "Attributes whose value sits to the right, from either end."],
+  [SETTING_IDS.previous, "Previous (west)", "The value sits left; seen from the value, this page sits right."],
+  [SETTING_IDS.next, "Next (east)", "The value sits right; seen from the value, this page sits left."],
+  [SETTING_IDS.hidden, "Hidden", "Attributes Compass leaves out."],
+  [SETTING_IDS.links, "Plain links", "Show [[links]] inside the outline (south) and linked references (north)."],
+  [SETTING_IDS.siblings, "Siblings", "Show other children of the center's parents."],
+  [SETTING_IDS.badges, "Text values", "Show Name:: text values on the center card."],
+  [SETTING_IDS.sidecar, "Sidecar", "Keep the center open in the right sidebar."],
+  [SETTING_IDS.outline, "Outline", "Expand the center into its blocks."],
+  [SETTING_IDS.maxZone, "Nodes per side", "How many nodes a side shows before it offers Show all."],
+  [SETTING_IDS.pins, "Pins", "JSON list of {uid, title}. Use the Pin button instead of editing this."],
 ];
 
 function flag(value, fallback) {
@@ -61,45 +66,21 @@ function flag(value, fallback) {
   return Boolean(value);
 }
 
-function asArray(value) {
-  if (Array.isArray(value)) return value;
-  if (typeof value !== "string") return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
 function readPins(value) {
-  return asArray(value).flatMap((item) => {
-    if (!item || typeof item.uid !== "string" || !item.uid) return [];
-    const title = typeof item.title === "string" && item.title ? item.title : item.uid;
-    return [{ uid: item.uid, title }];
-  });
-}
-
-function nameList(value) {
-  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
-  if (typeof value === "string" && value.trim()) {
-    return value.split(",").map((item) => item.trim()).filter(Boolean);
+  let list = value;
+  if (typeof value === "string") {
+    try {
+      list = JSON.parse(value);
+    } catch {
+      list = [];
+    }
   }
-  return [];
-}
-
-function readLenses(value) {
-  return asArray(value).flatMap((item) => {
-    if (!item || typeof item.name !== "string" || !item.name.trim()) return [];
-    return [{
-      name: item.name.trim(),
-      keyword: typeof item.keyword === "string" ? item.keyword : "",
-      attributes: {
-        include: nameList(item.attributes?.include),
-        exclude: nameList(item.attributes?.exclude),
-      },
-      kinds: { include: nameList(item.kinds?.include) },
-    }];
+  if (!Array.isArray(list)) return [];
+  const seen = new Set();
+  return list.flatMap((item) => {
+    if (!item || typeof item.uid !== "string" || !item.uid || seen.has(item.uid)) return [];
+    seen.add(item.uid);
+    return [{ uid: item.uid, title: typeof item.title === "string" && item.title ? item.title : item.uid }];
   });
 }
 
@@ -110,44 +91,30 @@ function readKey(extensionAPI, id) {
 
 export function readCompassSettings(extensionAPI) {
   if (!extensionAPI?.settings?.get) throw new TypeError("extensionAPI.settings is required");
-  const parents = readKey(extensionAPI, SETTING_IDS.parents);
-  const children = readKey(extensionAPI, SETTING_IDS.children);
-  const friends = readKey(extensionAPI, SETTING_IDS.friends);
-  const challengers = readKey(extensionAPI, SETTING_IDS.challengers);
-  const hidden = readKey(extensionAPI, SETTING_IDS.hidden);
-  const maxZone = readKey(extensionAPI, SETTING_IDS.maxZone);
-  const untyped = flag(readKey(extensionAPI, SETTING_IDS.untyped), true);
-  const siblings = flag(readKey(extensionAPI, SETTING_IDS.siblings), true);
-  const badges = flag(readKey(extensionAPI, SETTING_IDS.badges), true);
-  const outline = flag(readKey(extensionAPI, SETTING_IDS.outline), false);
-  const sidecar = flag(readKey(extensionAPI, SETTING_IDS.sidecar), true);
+  const read = (id) => readKey(extensionAPI, id);
   return {
-    parents,
-    children,
-    friends,
-    challengers,
-    hidden,
-    maxZone,
-    untyped,
-    siblings,
-    badges,
-    outline,
-    sidecar,
-    pins: readPins(readKey(extensionAPI, SETTING_IDS.pins)),
-    lenses: readLenses(readKey(extensionAPI, SETTING_IDS.lenses)),
     model: {
-      parents,
-      children,
-      friends,
-      challengers,
-      hidden,
-      maxPerZone: maxZone,
-      showUntyped: untyped,
-      showSiblings: siblings,
-      showBadges: badges,
-      showOutline: outline,
+      parent: read(SETTING_IDS.north),
+      child: read(SETTING_IDS.south),
+      friend: read(SETTING_IDS.west),
+      challenger: read(SETTING_IDS.east),
+      previous: read(SETTING_IDS.previous),
+      next: read(SETTING_IDS.next),
+      hidden: read(SETTING_IDS.hidden),
+      links: flag(read(SETTING_IDS.links), true),
+      siblings: flag(read(SETTING_IDS.siblings), true),
+      badges: flag(read(SETTING_IDS.badges), true),
+      maxPerZone: read(SETTING_IDS.maxZone),
     },
+    sidecar: flag(read(SETTING_IDS.sidecar), true),
+    outline: flag(read(SETTING_IDS.outline), false),
+    pins: readPins(read(SETTING_IDS.pins)),
   };
+}
+
+export async function writeSetting(extensionAPI, id, value) {
+  if (extensionAPI?.settings?.canSet === false || !extensionAPI?.settings?.set) return;
+  await extensionAPI.settings.set(id, value);
 }
 
 export async function initializeSettings(extensionAPI) {
@@ -161,31 +128,24 @@ export async function initializeSettings(extensionAPI) {
 }
 
 function parseInput(id, raw) {
-  if (id === SETTING_IDS.pins || id === SETTING_IDS.lenses) {
-    const text = String(raw ?? "").trim();
-    if (!text) return [];
-    try {
-      const parsed = JSON.parse(text);
-      if (Array.isArray(parsed)) return parsed;
-    } catch {
-      // Draft text stays a string until it parses.
-    }
-    return text;
+  if (id !== SETTING_IDS.pins) return raw ?? "";
+  const text = String(raw ?? "").trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {
+    // Draft text stays a string until it parses.
   }
-  return raw ?? "";
+  return text;
 }
 
 export function createSettingsPanel({ extensionAPI, onChange } = {}) {
-  const persist = (id, value) => {
-    const write = extensionAPI?.settings?.canSet === false || !extensionAPI?.settings?.set
-      ? Promise.resolve()
-      : Promise.resolve(extensionAPI.settings.set(id, value)).catch((error) => {
-        console.error("[compass] setting", error);
-      });
-    return write.then(() => {
+  const persist = (id, value) => Promise.resolve(writeSetting(extensionAPI, id, value))
+    .catch((error) => console.error("[compass] setting", error))
+    .then(() => {
       if (typeof onChange === "function") onChange(id, value);
     });
-  };
   return {
     tabTitle: "Compass",
     settings: ROWS.map(([id, name, description]) => ({
@@ -193,14 +153,8 @@ export function createSettingsPanel({ extensionAPI, onChange } = {}) {
       name,
       description,
       action: SWITCHES.has(id)
-        ? {
-          type: "switch",
-          onChange: (event) => persist(id, Boolean(event?.target?.checked)),
-        }
-        : {
-          type: "input",
-          onChange: (event) => persist(id, parseInput(id, event?.target?.value)),
-        },
+        ? { type: "switch", onChange: (event) => persist(id, Boolean(event?.target?.checked)) }
+        : { type: "input", onChange: (event) => persist(id, parseInput(id, event?.target?.value)) },
     })),
   };
 }

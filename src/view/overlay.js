@@ -1,21 +1,31 @@
-import { applyLens } from "../model/layout.js";
-import { readCompassSettings, SETTING_IDS } from "../settings.js";
+import { attributeForRole, buildNeighborhood, DROP_ROLE, inverseRole } from "../model/neighborhood.js";
+import { layout, sideAt } from "../model/layout.js";
+import { rankTitles } from "../model/search.js";
+import { readCompassSettings, SETTING_IDS, writeSetting } from "../settings.js";
 
-const CENTER = { x: -100, y: -32, w: 200, h: 64 };
-const ANCHORS = {
-  parents: [-80, -130],
-  children: [-80, 90],
-  friends: [-280, -20],
-  challengers: [210, -20],
-  related: [-80, 150],
-  siblings: [-70, 190],
-  outline: [80, 90],
+const SVG_NS = "http://www.w3.org/2000/svg";
+const SIDE_NAME = { north: "Parents", south: "Children", west: "Friends", east: "Challengers", siblings: "Siblings" };
+const ENTER_FROM = { north: [0, -36], south: [0, 36], west: [-36, 0], east: [36, 0], siblings: [36, 0] };
+const CLICK_DELAY = 230;
+const HISTORY_CAP = 100;
+
+const REASONS = {
+  changed: "That block changed in Roam. Compass reloaded it; try again.",
+  "missing-value": "That value is no longer in its block. Compass reloaded.",
+  "read-only": "That attribute belongs to another plugin. Compass does not rewrite it.",
+  "text-value": "That value is text, not a link. Nothing to move.",
+  "no-parent": "Compass could not find where to put the new block.",
+  "no-uid": "Roam did not hand out a new block uid.",
+  locked: "Another Roam tab is writing this block.",
+  missing: "The source block is gone. Compass reloaded.",
+  same: "It is already on that side.",
+  forbidden: "Refused a write that touched derived attribute data.",
 };
 
 function guard(work) {
-  return () => {
+  return (...args) => {
     try {
-      Promise.resolve(work()).catch((error) => console.error("[compass]", error));
+      Promise.resolve(work(...args)).catch((error) => console.error("[compass]", error));
     } catch (error) {
       console.error("[compass]", error);
     }
@@ -24,124 +34,94 @@ function guard(work) {
 
 async function registerCommands({ extensionAPI, lifecycle, host, view }) {
   const palette = extensionAPI?.ui?.commandPalette;
-  if (!palette?.addCommand || !palette?.removeCommand) {
-    throw new TypeError("A command palette is required");
-  }
-  await lifecycle.command(palette, {
-    label: "Compass: Open",
-    callback: guard(() => view.toggle()),
-  });
-  await lifecycle.command(palette, {
-    label: "Compass: Focus page",
-    callback: guard(() => view.focusPage()),
-  });
-  await lifecycle.command(palette, {
-    label: "Compass: Focus block",
-    callback: guard(() => view.focusBlock()),
-  });
+  if (!palette?.addCommand || !palette?.removeCommand) throw new TypeError("A command palette is required");
+  await lifecycle.command(palette, { label: "Compass: Open", callback: guard(() => view.toggle()) });
+  await lifecycle.command(palette, { label: "Compass: Focus page", callback: guard(() => view.focusPage()) });
+  await lifecycle.command(palette, { label: "Compass: Focus block", callback: guard(() => view.focusBlock()) });
   const menu = host.blockContextMenu?.();
   if (menu?.addCommand && menu?.removeCommand) {
     await lifecycle.command(menu, {
       label: "Compass: Focus block",
-      callback: (info) => {
-        try {
-          Promise.resolve(view.focusBlock(info?.["block-uid"])).catch((error) => {
-            console.error("[compass]", error);
-          });
-        } catch (error) {
-          console.error("[compass]", error);
-        }
-      },
+      callback: guard((info) => view.focusBlock(info?.["block-uid"])),
     });
   }
 }
 
-function el(tag, className) {
+function el(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
+  if (text != null) node.textContent = text;
   return node;
 }
 
-function textInput(placeholder) {
-  const node = el("input");
-  node.type = "text";
-  node.autocomplete = "off";
-  node.placeholder = placeholder;
+function button(className, text, label) {
+  const node = el("button", className, text);
+  node.type = "button";
+  if (label) {
+    node.title = label;
+    node.setAttribute("aria-label", label);
+  }
   return node;
 }
 
-function labeled(text, input) {
-  const wrap = el("label", "compass-field");
-  const name = el("span", "compass-field-name");
-  name.textContent = text;
-  wrap.append(name, input);
-  return wrap;
+function svg(tag, className) {
+  const node = document.createElementNS(SVG_NS, tag);
+  if (className) node.setAttribute("class", className);
+  return node;
 }
 
-function blankLens() {
-  return { keyword: "", attributes: { include: [], exclude: [] }, kinds: { include: [] } };
+function visibleRows(rows, open) {
+  const shown = [];
+  const visible = new Set();
+  for (const row of rows ?? []) {
+    if (row.parentUid && (!visible.has(row.parentUid) || !open.has(row.parentUid))) continue;
+    visible.add(row.uid);
+    shown.push(row);
+  }
+  return shown;
 }
 
-function splitList(value) {
-  return String(value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+function clamp(value, low, high) {
+  return Math.max(low, Math.min(high, value));
 }
 
-function parseAnnotation(value) {
-  const raw = String(value ?? "").trim();
-  const doubled = raw.indexOf("::");
-  const marker = doubled >= 0 ? doubled : raw.indexOf(":");
-  const width = doubled >= 0 ? 2 : 1;
-  if (marker < 0) return { attribute: "", text: "" };
+function curve(sx, sy, ex, ey, vertical) {
+  const c1 = vertical ? [sx, sy + (ey - sy) / 2] : [sx + (ex - sx) / 2, sy];
+  const c2 = vertical ? [ex, ey - (ey - sy) / 2] : [ex - (ex - sx) / 2, ey];
   return {
-    attribute: raw.slice(0, marker).trim(),
-    text: raw.slice(marker + width).trim(),
+    d: `M${sx},${sy} C${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${ex},${ey}`,
+    mid: [(sx + 3 * c1[0] + 3 * c2[0] + ex) / 8, (sy + 3 * c1[1] + 3 * c2[1] + ey) / 8],
   };
 }
 
-function boundaryPoint(x, y, w, h, tx, ty) {
-  const cx = x + w / 2;
-  const cy = y + h / 2;
-  const dx = tx - cx;
-  const dy = ty - cy;
-  if (!dx && !dy) return { x: cx, y: cy };
-  const sx = dx === 0 ? Infinity : (w / 2) / Math.abs(dx);
-  const sy = dy === 0 ? Infinity : (h / 2) / Math.abs(dy);
-  const scale = Math.min(sx, sy);
-  return { x: cx + dx * scale, y: cy + dy * scale };
+function luminance(color) {
+  const match = /rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)/.exec(color ?? "");
+  if (!match) return null;
+  const [r, g, b] = match.slice(1, 4).map((value) => {
+    const channel = Number(value) / 255;
+    return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
-function segmentDistance(px, py, x0, y0, x1, y1) {
-  const dx = x1 - x0;
-  const dy = y1 - y0;
-  const len = dx * dx + dy * dy;
-  if (!len) return Math.hypot(px - x0, py - y0);
-  const t = Math.max(0, Math.min(1, ((px - x0) * dx + (py - y0) * dy) / len));
-  return Math.hypot(px - (x0 + t * dx), py - (y0 + t * dy));
-}
-
-function strokeFor(kind) {
-  if (kind === "typed") return { width: 2, dash: [] };
-  if (kind === "inverse") return { width: 1, dash: [] };
-  return { width: 1.25, dash: [5, 4] };
-}
-
-function caption(edge) {
-  const parts = [];
-  if (edge.attribute) parts.push(edge.attribute);
-  for (const label of edge.labels ?? []) {
-    if (label?.attribute) parts.push(`${label.attribute}: ${label.text ?? ""}`);
+function describe(item, titleOf) {
+  if (item.kind === "typed") {
+    const labels = item.labels?.length ? ` (${item.labels.join(", ")})` : "";
+    return item.direction === "out"
+      ? `${item.attribute}:: on the center${labels}`
+      : `${item.attribute}:: on this node, pointing at the center${labels}`;
   }
-  return parts.join(" · ");
-}
-
-function endpoint(edge, centerUid) {
-  if (edge.to && edge.to !== centerUid) return edge.to;
-  if (edge.from && edge.from !== centerUid) return edge.from;
-  return null;
-}
-
-function centerLabel(center) {
-  return center?.title || center?.string || center?.uid || "Nothing centered";
+  if (item.kind === "link") return "Linked from a block in the center's outline";
+  if (item.kind === "mention") return "Links to the center from a block here";
+  if (item.kind === "structural") {
+    if (item.note === "namespace") return "Namespace";
+    if (item.note === "day") return "Adjacent daily note";
+    if (item.note === "page") return "The page this block is on";
+    return "The block this block sits under";
+  }
+  if (item.attribute) return `Shares ${item.attribute}:: under ${titleOf(item.via) || "a parent"}`;
+  if (item.note === "mentioned together") return "Mentioned in the same block";
+  return item.note === "sibling block" ? "Sibling block" : "Same namespace";
 }
 
 export function mountOverlay({ extensionAPI, lifecycle, host }) {
@@ -153,12 +133,7 @@ export function mountOverlay({ extensionAPI, lifecycle, host }) {
       focusPage() { return Promise.resolve(); },
       focusBlock() { return Promise.resolve(); },
     };
-    return {
-      ...view,
-      installCommands() {
-        return registerCommands({ extensionAPI, lifecycle, host, view });
-      },
-    };
+    return { ...view, installCommands: () => registerCommands({ extensionAPI, lifecycle, host, view }) };
   }
   return mountReal({ extensionAPI, lifecycle, host });
 }
@@ -170,162 +145,141 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   root.setAttribute("aria-label", "Compass");
 
   const bar = el("div", "compass-bar");
-  const backButton = el("button", "compass-back");
-  backButton.type = "button";
-  backButton.textContent = "Back";
-  const forwardButton = el("button", "compass-forward");
-  forwardButton.type = "button";
-  forwardButton.textContent = "Forward";
+  const backButton = button("compass-back", "Back", "Back (Alt+Left)");
+  const forwardButton = button("compass-forward", "Forward", "Forward (Alt+Right)");
+  const find = el("div", "compass-find");
   const searchInput = el("input", "compass-search");
   searchInput.type = "search";
   searchInput.autocomplete = "off";
   searchInput.placeholder = "Find a page";
-  searchInput.setAttribute("aria-label", "Search pages");
+  searchInput.setAttribute("aria-label", "Find a page");
   const results = el("div", "compass-results");
   results.hidden = true;
-  const pinButton = el("button", "compass-pin");
-  pinButton.type = "button";
-  pinButton.textContent = "Pin";
-  const outlineButton = el("button", "compass-outline");
-  outlineButton.type = "button";
-  outlineButton.textContent = "Outline";
+  results.setAttribute("role", "listbox");
+  find.append(searchInput, results);
+  const pinButton = button("compass-pin", "Pin", "Pin the center");
+  const outlineButton = button("compass-outline", "Outline", "Expand the center into its blocks");
   outlineButton.setAttribute("aria-pressed", "false");
-  const closeButton = el("button", "compass-close");
-  closeButton.type = "button";
-  closeButton.textContent = "Close";
+  const fitButton = button("compass-fit", "Fit", "Fit the neighborhood");
+  const refreshButton = button("compass-refresh", "Refresh", "Read the graph again");
   const status = el("span", "compass-status");
-  bar.append(backButton, forwardButton, searchInput, results, pinButton, outlineButton, closeButton, status);
+  status.setAttribute("role", "status");
+  const closeButton = button("compass-close", "Close", "Close (Esc)");
+  bar.append(backButton, forwardButton, find, pinButton, outlineButton, fitButton, refreshButton, status, closeButton);
 
-  const body = el("div", "compass-body");
+  const pinRow = el("div", "compass-pins");
+  pinRow.hidden = true;
+
   const stage = el("div", "compass-stage");
+  stage.tabIndex = 0;
   const world = el("div", "compass-world");
-  const canvas = el("canvas", "compass-edges");
-  const centerCard = el("div", "compass-center");
-  const centerTitle = el("div", "compass-center-title");
-  const centerBadges = el("div", "compass-badges");
-  centerCard.append(centerTitle, centerBadges);
-  world.append(canvas, centerCard);
-  const gutters = [
-    ["compass-gutter compass-gutter-north", "parents", "Parents"],
-    ["compass-gutter compass-gutter-south", "children", "Children"],
-    ["compass-gutter compass-gutter-west", "friends", "Friends"],
-    ["compass-gutter compass-gutter-east", "challengers", "Challengers"],
-  ].map(([className, zone, label]) => {
-    const gutter = el("div", className);
-    gutter.dataset.zone = zone;
-    gutter.textContent = label;
-    return gutter;
-  });
-  stage.append(world, ...gutters);
+  const edgeLayer = svg("svg", "compass-edges");
+  edgeLayer.setAttribute("width", "1");
+  edgeLayer.setAttribute("height", "1");
+  const empty = el("p", "compass-empty");
+  empty.hidden = true;
+  world.append(edgeLayer, empty);
+  const hints = {};
+  for (const side of ["north", "south", "west", "east"]) {
+    const hint = el("div", `compass-hint compass-hint-${side}`);
+    hint.dataset.side = side;
+    hints[side] = hint;
+    stage.append(hint);
+  }
+  stage.prepend(world);
 
-  const side = el("aside", "compass-side");
-  const pinHeading = el("p", "compass-section");
-  pinHeading.textContent = "Pins";
-  const pinList = el("div", "compass-pin-list");
-  const lensHeading = el("p", "compass-section");
-  lensHeading.textContent = "Lens";
-  const keywordInput = textInput("Keyword");
-  const includeInput = textInput("Attributes to keep");
-  const excludeInput = textInput("Attributes to hide");
-  const kindsInput = textInput("Kinds");
-  const lensNameInput = textInput("Lens name");
-  const actions = el("div", "compass-actions");
-  const keepButton = el("button", "compass-keep");
-  keepButton.type = "button";
-  keepButton.textContent = "Keep layout";
-  const reflowButton = el("button", "compass-reflow");
-  reflowButton.type = "button";
-  reflowButton.textContent = "Reflow";
-  const saveButton = el("button", "compass-save");
-  saveButton.type = "button";
-  saveButton.textContent = "Save";
-  actions.append(keepButton, reflowButton, saveButton);
-  const lensList = el("div", "compass-lens-list");
-  side.append(
-    pinHeading,
-    pinList,
-    lensHeading,
-    labeled("Keyword", keywordInput),
-    labeled("Include", includeInput),
-    labeled("Exclude", excludeInput),
-    labeled("Kinds", kindsInput),
-    labeled("Name", lensNameInput),
-    actions,
-    lensList,
-  );
-
-  const popover = el("div", "compass-popover");
-  popover.hidden = true;
+  const menu = el("div", "compass-menu");
+  menu.hidden = true;
+  menu.setAttribute("role", "menu");
+  const details = el("div", "compass-details");
+  details.hidden = true;
   const ghost = el("div", "compass-ghost");
   ghost.hidden = true;
-  root.append(bar, body, popover, ghost);
-  body.append(stage, side);
+  root.append(bar, pinRow, stage, menu, details, ghost);
 
-  const palette = { ink: "#222222", paper: "#ffffff" };
+  const nodeEls = new Map();
+  const chipEls = new Map();
   const timers = new Set();
-  let colored = false;
+  const back = [];
+  const forward = [];
+  const expandedZones = new Map();
+  const openRows = new Map();
+  let current = null;
+  let snapshot = null;
+  let hood = null;
+  let geometry = null;
+  let settings = null;
+  let nodeByUid = new Map();
   let panX = 0;
   let panY = 0;
   let zoom = 1;
-  let current = null;
-  const back = [];
-  const forward = [];
-  let lastModel = null;
-  let lastLayout = null;
-  let lastEdges = [];
-  let lensMode = null;
-  let activeLens = null;
-  let pullToken = 0;
-  let watchTimer = null;
-  let searchTimer = null;
-  let clickTimer = null;
   let pointer = null;
   let suppressClick = false;
+  let clickTimer = null;
+  let reloadTimer = null;
+  let statusTimer = null;
+  let searchTimer = null;
+  let titleCache = null;
   let activeResult = 0;
-  let segments = [];
 
-  function delay(fn, ms) {
+  function later(fn, ms) {
     const id = globalThis.setTimeout(() => {
       timers.delete(id);
-      fn();
+      if (!lifecycle.disposed) fn();
     }, ms);
     timers.add(id);
     return id;
   }
 
-  function cancelDelay(id) {
-    if (id == null) return;
+  function cancel(id) {
+    if (id == null) return null;
     globalThis.clearTimeout(id);
     timers.delete(id);
+    return null;
   }
 
-  function setStatus(text) {
+  function frame(fn) {
+    const raf = globalThis.requestAnimationFrame;
+    if (typeof raf !== "function") return later(fn, 16);
+    raf(() => {
+      if (!lifecycle.disposed) fn();
+    });
+    return null;
+  }
+
+  function setStatus(text, sticky = false) {
     status.textContent = text || "";
+    statusTimer = cancel(statusTimer);
+    if (text && !sticky) statusTimer = later(() => { status.textContent = ""; }, 5000);
   }
 
-  function applyTransform() {
-    world.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+  function readSettings() {
+    try {
+      return readCompassSettings(extensionAPI);
+    } catch (error) {
+      console.error("[compass] settings", error);
+      return null;
+    }
   }
 
-  function sampleColors() {
-    if (colored) return;
-    const bodyStyle = getComputedStyle(document.body);
-    let paper = bodyStyle.backgroundColor || "";
-    const ink = bodyStyle.color || "";
+  function titleOf(uid) {
+    if (!uid) return "";
+    if (uid === hood?.center?.uid) return hood.center.title;
+    return nodeByUid.get(uid)?.title ?? "";
+  }
+
+  // ---- frame, theme, camera ----
+
+  function sampleTheme() {
+    const body = getComputedStyle(document.body);
+    let paper = body.backgroundColor;
     if (!paper || paper === "transparent" || paper === "rgba(0, 0, 0, 0)") {
-      paper = getComputedStyle(document.documentElement).backgroundColor || "";
+      paper = getComputedStyle(document.documentElement).backgroundColor;
     }
-    if (ink) {
-      root.style.color = ink;
-      root.style.setProperty("--compass-ink", ink);
-      palette.ink = ink;
-    }
-    if (paper && paper !== "transparent" && paper !== "rgba(0, 0, 0, 0)") {
-      root.style.backgroundColor = paper;
-      root.style.setProperty("--compass-paper", paper);
-      palette.paper = paper;
-    }
-    colored = true;
+    if (paper && paper !== "transparent" && paper !== "rgba(0, 0, 0, 0)") root.style.setProperty("--compass-paper", paper);
+    if (body.color) root.style.setProperty("--compass-ink", body.color);
+    const light = luminance(paper);
+    root.dataset.tone = light != null && light < 0.35 ? "dark" : "light";
   }
 
   function placeFrame() {
@@ -334,139 +288,148 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     let inset = 0;
     if (sidebar?.getBoundingClientRect && viewport) {
       const width = sidebar.getBoundingClientRect().width;
-      if (width > 48 && width < viewport * 0.55) inset = Math.round(width);
+      if (width > 48 && width < viewport * 0.6) inset = Math.round(width);
     }
     root.style.right = `${inset}px`;
   }
 
-  function reveal() {
-    if (root.hidden) {
-      sampleColors();
-      root.hidden = false;
-      placeFrame();
+  function applyCamera(glide = false) {
+    world.classList.toggle("compass-glide", glide);
+    world.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+    if (glide) later(() => world.classList.remove("compass-glide"), 320);
+  }
+
+  function fit(glide = true) {
+    if (!geometry) return;
+    const rect = stage.getBoundingClientRect();
+    const { minX, minY, maxX, maxY } = geometry.bounds;
+    const width = Math.max(1, maxX - minX + 48);
+    const height = Math.max(1, maxY - minY + 48);
+    zoom = clamp(Math.min(1, (rect.width || width) / width, (rect.height || height) / height), 0.3, 1);
+    panX = -((minX + maxX) / 2) * zoom;
+    panY = -((minY + maxY) / 2) * zoom;
+    applyCamera(glide);
+  }
+
+  function clientToWorld(clientX, clientY) {
+    const rect = stage.getBoundingClientRect();
+    return {
+      x: (clientX - rect.left - rect.width / 2 - panX) / zoom,
+      y: (clientY - rect.top - rect.height / 2 - panY) / zoom,
+    };
+  }
+
+  // ---- loading ----
+
+  function expandedFor(uid) {
+    if (!expandedZones.has(uid)) expandedZones.set(uid, new Set());
+    return expandedZones.get(uid);
+  }
+
+  function rowsFor(uid) {
+    if (!openRows.has(uid)) openRows.set(uid, new Set());
+    return openRows.get(uid);
+  }
+
+  function rebuild() {
+    if (!snapshot || !settings) return;
+    hood = buildNeighborhood(snapshot, settings.model, { expanded: expandedFor(current) });
+    nodeByUid = new Map(hood.nodes.map((node) => [node.uid, node]));
+  }
+
+  function load({ navigate = false } = {}) {
+    if (!current || root.hidden || lifecycle.disposed) return;
+    const next = readSettings();
+    if (!next) return;
+    settings = next;
+    try {
+      snapshot = host.snapshot(current, settings.model);
+    } catch (error) {
+      console.error("[compass] read failed", error);
+      setStatus("Could not read this neighborhood.", true);
+      return;
     }
-  }
-
-  function hideResults() {
-    results.hidden = true;
-    results.replaceChildren();
-    activeResult = 0;
-  }
-
-  function hidePopover() {
-    popover.hidden = true;
-    popover.replaceChildren();
-  }
-
-  function hideGhost() {
-    ghost.hidden = true;
-    root.classList.remove("compass-dragging");
-  }
-
-  function updateHistory() {
-    backButton.disabled = back.length === 0;
-    forwardButton.disabled = forward.length === 0;
-  }
-
-  function close() {
-    root.hidden = true;
-    pullToken += 1;
-    host.unwatch();
-    if (watchTimer != null) globalThis.clearTimeout(watchTimer);
-    watchTimer = null;
-    hidePopover();
-    hideResults();
-    hideGhost();
-    setStatus("");
+    rebuild();
+    render({ navigate });
+    renderPins();
+    if (snapshot.missing) setStatus("Nothing in this graph has that uid.", true);
+    const uid = current;
+    void host.syncSidecar(uid, settings.sidecar)
+      .catch((error) => console.error("[compass] sidecar", error))
+      .then(() => {
+        placeFrame();
+        later(placeFrame, 350);
+      });
   }
 
   function scheduleReload() {
     if (root.hidden || lifecycle.disposed) return;
-    if (watchTimer != null) globalThis.clearTimeout(watchTimer);
-    watchTimer = lifecycle.timeout(() => {
-      watchTimer = null;
-      void reload();
-    }, 80);
-  }
-
-  async function reload() {
-    if (lifecycle.disposed || root.hidden || !current) return;
-    const token = ++pullToken;
-    const uid = current;
-    let settings;
-    try {
-      settings = readCompassSettings(extensionAPI);
-    } catch (error) {
-      console.error("[compass] settings", error);
-      return;
-    }
-    let model;
-    try {
-      model = await host.load(uid, settings.model);
-    } catch (error) {
-      console.error("[compass] pull failed", error);
-      setStatus("Could not load this neighborhood");
-      return;
-    }
-    if (token !== pullToken || lifecycle.disposed || root.hidden || current !== uid) return;
-    paint(model);
-    renderPins(settings.pins);
-    renderLensList(settings.lenses);
-    outlineButton.setAttribute("aria-pressed", settings.outline ? "true" : "false");
-    updateHistory();
-    if (model.missing) setStatus("No block for this uid");
-    try {
-      await host.syncSidecar(uid, settings.sidecar);
-    } catch (error) {
-      console.error("[compass] sidecar", error);
-    }
-    if (token === pullToken && !lifecycle.disposed) placeFrame();
+    reloadTimer = cancel(reloadTimer);
+    reloadTimer = later(() => {
+      reloadTimer = null;
+      load();
+    }, 300);
   }
 
   function repullIfOpen() {
-    if (root.hidden || lifecycle.disposed) return;
     scheduleReload();
   }
 
-  async function showUid(uid, record) {
+  function updateButtons() {
+    backButton.disabled = back.length === 0;
+    forwardButton.disabled = forward.length === 0;
+    const pinned = (settings?.pins ?? []).some((pin) => pin.uid === current);
+    pinButton.textContent = pinned ? "Unpin" : "Pin";
+    pinButton.setAttribute("aria-pressed", pinned ? "true" : "false");
+    outlineButton.setAttribute("aria-pressed", settings?.outline ? "true" : "false");
+  }
+
+  function reveal() {
+    if (!root.hidden) return;
+    sampleTheme();
+    root.hidden = false;
+    placeFrame();
+  }
+
+  function focusUid(uid, { record = true } = {}) {
     if (!uid) return;
+    hideFloating();
     if (record && current && current !== uid) {
       back.push(current);
+      if (back.length > HISTORY_CAP) back.shift();
       forward.length = 0;
     }
-    if (current !== uid && lensMode === "keep") lensMode = "reflow";
+    const changed = current !== uid;
     current = uid;
-    host.setDisplayed(uid);
     reveal();
-    host.watch(uid);
-    updateHistory();
-    hidePopover();
-    hideResults();
-    await reload();
+    host.watch(uid, scheduleReload);
+    load({ navigate: changed });
+    updateButtons();
   }
 
-  async function goBack() {
+  function goBack() {
     if (!back.length) return;
     if (current) forward.push(current);
-    const uid = back.pop();
-    updateHistory();
-    await showUid(uid, false);
+    focusUid(back.pop(), { record: false });
   }
 
-  async function goForward() {
+  function goForward() {
     if (!forward.length) return;
     if (current) back.push(current);
-    const uid = forward.pop();
-    updateHistory();
-    await showUid(uid, false);
+    focusUid(forward.pop(), { record: false });
   }
 
-  async function revealCurrent() {
-    reveal();
-    if (!current) return;
-    host.setDisplayed(current);
-    host.watch(current);
-    await reload();
+  function close() {
+    root.hidden = true;
+    host.unwatch();
+    host.releaseSidecar();
+    reloadTimer = cancel(reloadTimer);
+    clickTimer = cancel(clickTimer);
+    titleCache = null;
+    pointer = null;
+    hideFloating();
+    endDrag();
+    setStatus("");
   }
 
   async function toggle() {
@@ -475,558 +438,662 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       return;
     }
     const uid = await host.openPageUid();
-    if (uid) await showUid(uid, true);
-    else await revealCurrent();
+    if (uid) focusUid(uid);
+    else if (current) focusUid(current, { record: false });
   }
 
   async function focusPage() {
     const uid = await host.openPageUid();
-    if (uid) await showUid(uid, true);
-    else await revealCurrent();
+    if (uid) focusUid(uid);
   }
 
   async function focusBlock(uid) {
     const target = uid || host.focusedBlock();
-    if (target) await showUid(target, true);
-    else await revealCurrent();
+    if (target) focusUid(target);
+    else setStatus("Put the cursor in a block first.");
   }
 
-  function readLensForm() {
-    return {
-      keyword: keywordInput.value,
-      attributes: {
-        include: splitList(includeInput.value),
-        exclude: splitList(excludeInput.value),
-      },
-      kinds: { include: splitList(kindsInput.value) },
-    };
+  // ---- rendering ----
+
+  function nodeClass(node, isCenter) {
+    const parts = ["compass-node"];
+    if (isCenter) parts.push("compass-node-center");
+    if (!isCenter && node?.writable) parts.push("compass-writable");
+    return parts.join(" ");
   }
 
-  function paint(model) {
-    lastModel = model;
-    const classified = model.classified;
-    const showOutline = classified.nodes.some((node) => node.zone === "outline");
-    let view;
-    if (lensMode) {
-      view = applyLens({
-        nodes: classified.nodes,
-        edges: classified.edges,
-        badges: classified.badges,
-        overflow: classified.overflow,
-        layout: lensMode === "keep" ? (lastLayout ?? model.placed) : model.placed,
-        showOutline,
-      }, activeLens ?? blankLens(), lensMode);
-    } else {
-      view = {
-        nodes: classified.nodes,
-        edges: classified.edges,
-        badges: classified.badges,
-        overflow: classified.overflow,
-        layout: model.placed,
-      };
-    }
-    lastLayout = view.layout;
-    lastEdges = view.edges ?? [];
-    renderScene(view, model);
-  }
-
-  function renderScene(view, model) {
-    for (const child of [...world.children]) {
-      if (child !== canvas && child !== centerCard) child.remove();
-    }
-    centerTitle.textContent = centerLabel(model.fixture?.center);
-    centerBadges.replaceChildren();
-    for (const badge of view.badges ?? []) {
-      const chip = el("span", "compass-badge");
-      chip.textContent = `${badge.attribute}: ${badge.text}`;
-      chip.title = chip.textContent;
-      centerBadges.append(chip);
-    }
-    const positions = new Map((view.layout ?? []).map((item) => [item.uid, item]));
-    for (const node of view.nodes ?? []) {
-      const box = positions.get(node.uid);
-      if (!box) continue;
-      world.append(renderNode(node, box));
-    }
-    renderOverflow(model, view.layout);
-    drawEdges(view, model.fixture?.center?.uid);
-  }
-
-  function renderNode(node, box) {
-    const slot = el("div", "compass-slot");
-    if (node.hidden) slot.hidden = true;
-    slot.style.left = `${box.x}px`;
-    slot.style.top = `${box.y}px`;
-    slot.style.width = `${box.w}px`;
-    slot.style.height = `${box.h}px`;
-    const button = el("button", "compass-node");
-    button.type = "button";
-    button.dataset.uid = node.uid;
-    button.dataset.zone = node.zone;
-    button.dataset.kind = node.kind;
-    button.textContent = node.title || node.uid;
-    button.title = node.title || node.uid;
-    if (writableEdge(node.uid)) button.classList.add("compass-node-writable");
-    const open = el("button", "compass-open");
-    open.type = "button";
-    open.textContent = "Open";
-    open.addEventListener("click", (event) => {
-      event.stopPropagation();
-      void openMapped(node.uid, node.kind);
-    });
-    button.addEventListener("click", (event) => onNodeClick(event, node));
-    button.addEventListener("dblclick", (event) => {
-      event.preventDefault();
-      cancelDelay(clickTimer);
-      clickTimer = null;
-      void openMapped(node.uid, node.kind);
-    });
-    slot.append(button, open);
-    return slot;
-  }
-
-  function writableEdge(uid) {
-    return (lastEdges ?? []).find((edge) => edge.writable && edge.kind === "typed" && edge.to === uid) ?? null;
-  }
-
-  function renderOverflow(model, layoutItems) {
-    const overflow = model.classified?.overflow ?? {};
-    const byUid = new Map((layoutItems ?? []).map((item) => [item.uid, item]));
-    for (const zone of Object.keys(overflow)) {
-      const extra = overflow[zone];
-      if (!extra) continue;
-      const members = (model.classified.nodes ?? []).filter((node) => node.zone === zone);
-      const boxes = members.map((node) => byUid.get(node.uid)).filter(Boolean);
-      const badge = el("div", "compass-overflow");
-      badge.dataset.zone = zone;
-      badge.textContent = `${members.length}/${members.length + extra}`;
-      badge.title = zone;
-      const anchor = ANCHORS[zone] ?? [0, 0];
-      let x = anchor[0];
-      let y = anchor[1];
-      if (boxes.length) {
-        x = Math.max(...boxes.map((box) => box.x + box.w)) + 8;
-        y = Math.min(...boxes.map((box) => box.y));
+  function renderCenterContent(element, box) {
+    element.replaceChildren();
+    const head = el("div", "compass-center-head");
+    const kind = el("span", "compass-kind", hood.center.kind === "block" ? "Block" : "Page");
+    const title = el("span", "compass-node-title", hood.center.title);
+    head.append(kind, title);
+    element.append(head);
+    if (hood.center.badges.length) {
+      const badges = el("div", "compass-badges");
+      for (const badge of hood.center.badges) {
+        const chip = el("span", "compass-badge", `${badge.attribute}: ${badge.text}`);
+        chip.title = chip.textContent;
+        badges.append(chip);
       }
-      badge.style.left = `${x}px`;
-      badge.style.top = `${y}px`;
-      world.append(badge);
+      element.append(badges);
     }
-  }
-
-  function drawEdges(view, centerUid) {
-    segments = [];
-    const boxes = view.layout ?? [];
-    let minX = CENTER.x;
-    let minY = CENTER.y;
-    let maxX = CENTER.x + CENTER.w;
-    let maxY = CENTER.y + CENTER.h;
-    for (const box of boxes) {
-      minX = Math.min(minX, box.x);
-      minY = Math.min(minY, box.y);
-      maxX = Math.max(maxX, box.x + box.w);
-      maxY = Math.max(maxY, box.y + box.h);
-    }
-    const pad = 48;
-    minX -= pad;
-    minY -= pad;
-    maxX += pad;
-    maxY += pad;
-    const width = Math.max(1, maxX - minX);
-    const height = Math.max(1, maxY - minY);
-    const dpr = globalThis.devicePixelRatio || 1;
-    canvas.style.left = `${minX}px`;
-    canvas.style.top = `${minY}px`;
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
-    canvas.width = Math.max(1, Math.floor(width * dpr));
-    canvas.height = Math.max(1, Math.floor(height * dpr));
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.setTransform(dpr, 0, 0, dpr, -minX * dpr, -minY * dpr);
-    ctx.clearRect(minX, minY, width, height);
-    ctx.lineJoin = "round";
-    ctx.lineCap = "round";
-    ctx.font = "12px sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    const byUid = new Map(boxes.map((box) => [box.uid, box]));
-    const hidden = new Set((view.nodes ?? []).filter((node) => node.hidden).map((node) => node.uid));
-    for (const edge of view.edges ?? []) {
-      const uid = endpoint(edge, centerUid);
-      if (!uid || hidden.has(uid)) continue;
-      const box = byUid.get(uid);
-      if (!box) continue;
-      const nx = box.x + box.w / 2;
-      const ny = box.y + box.h / 2;
-      const start = boundaryPoint(CENTER.x, CENTER.y, CENTER.w, CENTER.h, nx, ny);
-      const end = boundaryPoint(box.x, box.y, box.w, box.h, 0, 0);
-      const style = strokeFor(edge.kind);
-      ctx.beginPath();
-      ctx.strokeStyle = palette.ink;
-      ctx.lineWidth = style.width;
-      ctx.setLineDash(style.dash);
-      ctx.moveTo(start.x, start.y);
-      ctx.lineTo(end.x, end.y);
-      ctx.stroke();
-      const angle = Math.atan2(end.y - start.y, end.x - start.x);
-      const length = 8;
-      ctx.beginPath();
-      ctx.moveTo(end.x, end.y);
-      ctx.lineTo(end.x - length * Math.cos(angle - 0.45), end.y - length * Math.sin(angle - 0.45));
-      ctx.moveTo(end.x, end.y);
-      ctx.lineTo(end.x - length * Math.cos(angle + 0.45), end.y - length * Math.sin(angle + 0.45));
-      ctx.stroke();
-      const text = caption(edge);
-      if (text) {
-        const mx = (start.x + end.x) / 2;
-        const my = (start.y + end.y) / 2 - 8;
-        ctx.setLineDash([]);
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = palette.paper;
-        ctx.strokeText(text, mx, my);
-        ctx.fillStyle = palette.ink;
-        ctx.fillText(text, mx, my);
-      }
-      segments.push({ edge, x0: start.x, y0: start.y, x1: end.x, y1: end.y });
-    }
-    ctx.setLineDash([]);
-  }
-
-  function clientToModel(clientX, clientY) {
-    const rect = stage.getBoundingClientRect();
-    const originX = rect.left + rect.width / 2;
-    const originY = rect.top + rect.height / 2;
-    return {
-      x: (clientX - originX - panX) / zoom,
-      y: (clientY - originY - panY) / zoom,
-    };
-  }
-
-  function hitEdge(event) {
-    const point = clientToModel(event.clientX, event.clientY);
-    let best = null;
-    let bestDist = 8 / zoom;
-    for (const segment of segments) {
-      const dist = segmentDistance(point.x, point.y, segment.x0, segment.y0, segment.x1, segment.y1);
-      if (dist <= bestDist) {
-        best = segment;
-        bestDist = dist;
-      }
-    }
-    return best?.edge ?? null;
-  }
-
-  function showPopover(edge, event) {
-    popover.replaceChildren();
-    const title = el("p", "compass-popover-title");
-    title.textContent = edge.attribute || "Untyped";
-    popover.append(title);
-    for (const label of edge.labels ?? []) {
-      const line = el("p", "compass-popover-label");
-      line.textContent = `${label.attribute}: ${label.text ?? ""}`;
-      popover.append(line);
-    }
-    const open = el("button", "compass-popover-open");
-    open.type = "button";
-    open.textContent = "Open source";
-    open.disabled = !edge.sourceUid;
-    open.addEventListener("click", () => {
-      if (!edge.sourceUid) return;
-      void commitAction({ type: "open", sourceUid: edge.sourceUid });
-    });
-    const form = el("form", "compass-annotate");
-    const field = textInput("Attribute: text");
-    field.className = "compass-annotate-text";
-    const submit = el("button", "compass-annotate-submit");
-    submit.type = "submit";
-    submit.textContent = "Annotate";
-    form.append(field, submit);
-    form.addEventListener("submit", (submitEvent) => {
-      submitEvent.preventDefault();
-      const parsed = parseAnnotation(field.value);
-      if (!edge.sourceUid || !parsed.attribute || parsed.attribute.includes("::") || !parsed.text) {
-        setStatus("Use Attribute: text");
-        return;
-      }
-      void commitAction({
-        type: "annotate",
-        sourceUid: edge.sourceUid,
-        attribute: parsed.attribute,
-        text: parsed.text,
-      });
-    });
-    popover.append(open, form);
-    popover.hidden = false;
-    const rect = root.getBoundingClientRect();
-    const left = Math.max(8, Math.min(event.clientX - rect.left, rect.width - 230));
-    const top = Math.max(8, Math.min(event.clientY - rect.top + 8, Math.max(8, rect.height - 180)));
-    popover.style.left = `${left}px`;
-    popover.style.top = `${top}px`;
-  }
-
-  function openMapped(uid, kind) {
-    const page = kind !== "outline" && !lastModel?.blockUids?.has(uid);
-    return host.openNode(uid, page).catch((error) => console.error("[compass]", error));
-  }
-
-  function onNodeClick(event, node) {
-    if (suppressClick) return;
-    if (event.shiftKey) {
-      void openMapped(node.uid, node.kind);
-      return;
-    }
-    cancelDelay(clickTimer);
-    clickTimer = delay(() => {
-      clickTimer = null;
-      void showUid(node.uid, true);
-    }, 220);
-  }
-
-  async function commitAction(action) {
-    setStatus("Writing…");
-    try {
-      const result = await host.commit(action);
-      if (!result?.ok && result?.reason === "lock") {
-        setStatus("Another tab is writing this center");
-        return;
-      }
-      if (!result?.ok || result.empty) {
-        setStatus("Nothing to change");
-        return;
-      }
-      if (result.model && result.model.fixture?.center?.uid === current && !root.hidden) {
-        paint(result.model);
-        const settings = readCompassSettings(extensionAPI);
-        renderPins(settings.pins);
-        renderLensList(settings.lenses);
-        await host.syncSidecar(current, settings.sidecar);
-        placeFrame();
+    const top = box.y - box.h / 2;
+    const open = rowsFor(current);
+    for (const row of geometry.rows) {
+      const info = hood.outline.find((item) => item.uid === row.uid);
+      const line = el("div", "compass-row");
+      line.dataset.uid = row.uid;
+      line.style.top = `${row.y - row.h / 2 - top}px`;
+      line.style.paddingLeft = `${4 + row.depth * 14}px`;
+      if (info?.childCount) {
+        const caret = button("compass-caret", open.has(row.uid) ? "−" : "+", open.has(row.uid) ? "Fold" : "Unfold");
+        caret.dataset.uid = row.uid;
+        line.append(caret);
       } else {
-        await reload();
+        line.append(el("span", "compass-caret-space"));
       }
-      setStatus("");
-    } catch (error) {
-      console.error("[compass] write failed", error);
-      setStatus("Write failed");
-      try {
-        await reload();
-      } catch (reloadError) {
-        console.error("[compass] pull failed", reloadError);
-      }
+      line.append(el("span", "compass-row-text", info?.text ?? ""));
+      line.title = info?.text ?? "";
+      element.append(line);
+    }
+    if (geometry.more) {
+      const more = el("div", "compass-row compass-row-more", "More blocks in the sidebar");
+      more.style.top = `${box.h - 8 - 24}px`;
+      element.append(more);
     }
   }
 
-  function gutterAt(x, y) {
-    const stack = document.elementsFromPoint?.(x, y) ?? [];
-    for (const item of stack) {
-      if (!item?.closest || !root.contains(item) || item.closest(".compass-ghost")) continue;
-      const gutter = item.closest(".compass-gutter");
-      if (gutter) return gutter.dataset.zone || null;
+  function placeElement(element, box) {
+    element.style.width = `${box.w}px`;
+    element.style.height = `${box.h}px`;
+    element.style.transform = `translate(${box.x - box.w / 2}px, ${box.y - box.h / 2}px)`;
+  }
+
+  function render({ navigate = false } = {}) {
+    if (!hood) return;
+    const open = rowsFor(current);
+    const rows = settings?.outline ? visibleRows(hood.outline, open) : [];
+    geometry = layout(hood, { rows });
+    const boxes = new Map(geometry.items.map((item) => [item.uid, item]));
+    const keep = new Set([hood.center.uid, ...boxes.keys()]);
+
+    for (const [uid, element] of nodeEls) {
+      if (keep.has(uid)) continue;
+      element.remove();
+      nodeEls.delete(uid);
+    }
+
+    const entering = [];
+    const place = (uid, box, isCenter, node) => {
+      let element = nodeEls.get(uid);
+      if (!element) {
+        element = el("div");
+        element.dataset.uid = uid;
+        element.tabIndex = 0;
+        element.setAttribute("role", "button");
+        world.append(element);
+        nodeEls.set(uid, element);
+        const [dx, dy] = ENTER_FROM[box.zone] ?? [0, 0];
+        element.style.opacity = "0";
+        placeElement(element, { ...box, x: box.x + dx, y: box.y + dy });
+        entering.push(element);
+      }
+      element.className = nodeClass(node, isCenter);
+      element.dataset.zone = isCenter ? "center" : box.zone;
+      element.dataset.style = isCenter ? "center" : node.style;
+      element.dataset.kind = isCenter ? hood.center.kind : node.kind;
+      if (isCenter) {
+        renderCenterContent(element, box);
+        element.setAttribute("aria-label", `Center: ${hood.center.title}`);
+        element.title = hood.center.title;
+      } else {
+        element.replaceChildren(el("span", "compass-node-title", node.title));
+        const why = node.label ? ` — ${node.label}` : "";
+        element.setAttribute("aria-label", `${node.title}, ${SIDE_NAME[box.zone]}${why}`);
+        element.title = `${node.title}${why}`;
+      }
+      if (!entering.includes(element)) placeElement(element, box);
+      else element.dataset.target = JSON.stringify(box);
+    };
+
+    place(hood.center.uid, { ...geometry.center, zone: "center" }, true, null);
+    for (const node of hood.nodes) {
+      const box = boxes.get(node.uid);
+      if (box) place(node.uid, box, false, node);
+    }
+    if (entering.length) {
+      frame(() => {
+        for (const element of entering) {
+          if (!element.isConnected) continue;
+          const box = JSON.parse(element.dataset.target ?? "null");
+          delete element.dataset.target;
+          element.style.opacity = "";
+          if (box) placeElement(element, box);
+        }
+      });
+    }
+
+    renderChips();
+    renderEdges(boxes);
+    empty.hidden = hood.nodes.length > 0;
+    if (!empty.hidden) {
+      empty.textContent = "Nothing is connected here yet. Write Name:: [[Page]] in this outline, or link a page, and it appears here.";
+      empty.style.transform = `translate(-50%, ${geometry.center.h / 2 + 36}px)`;
+    }
+    updateButtons();
+    if (navigate) fit(true);
+  }
+
+  function renderChips() {
+    const keep = new Set();
+    for (const chip of geometry.chips) {
+      keep.add(chip.zone);
+      let element = chipEls.get(chip.zone);
+      if (!element) {
+        element = button("compass-chip");
+        element.dataset.zone = chip.zone;
+        world.append(element);
+        chipEls.set(chip.zone, element);
+      }
+      const info = hood.overflow[chip.zone];
+      element.textContent = info.shown < info.total ? `Show all ${info.total}` : "Show fewer";
+      element.style.transform = `translate(${chip.x}px, ${chip.y}px) translate(-50%, -50%)`;
+    }
+    for (const [zone, element] of chipEls) {
+      if (keep.has(zone)) continue;
+      element.remove();
+      chipEls.delete(zone);
+    }
+  }
+
+  function anchorRow(uid) {
+    if (!settings?.outline || !geometry.rows.length) return null;
+    const visible = new Set(geometry.rows.map((row) => row.uid));
+    let at = uid;
+    while (at) {
+      if (visible.has(at)) return at;
+      at = hood.outlineIndex.get(at)?.parentUid ?? null;
     }
     return null;
   }
 
-  function setHotGutter(zone) {
-    for (const gutter of root.querySelectorAll(".compass-gutter")) {
-      gutter.classList.toggle("compass-gutter-hot", Boolean(zone) && gutter.dataset.zone === zone);
+  function edgeFromCenter(box) {
+    const c = geometry.center;
+    if (box.zone === "north") {
+      return curve(clamp(box.x, -c.w / 2 + 16, c.w / 2 - 16), -c.h / 2, box.x, box.y + box.h / 2, true);
+    }
+    if (box.zone === "south") {
+      return curve(clamp(box.x, -c.w / 2 + 16, c.w / 2 - 16), c.h / 2, box.x, box.y - box.h / 2, true);
+    }
+    if (box.zone === "west") {
+      return curve(-c.w / 2, clamp(box.y, -c.h / 2 + 12, c.h / 2 - 12), box.x + box.w / 2, box.y, false);
+    }
+    return curve(c.w / 2, clamp(box.y, -c.h / 2 + 12, c.h / 2 - 12), box.x - box.w / 2, box.y, false);
+  }
+
+  // Leaves the card at the row's height, on the side facing the node.
+  function edgeFromRow(row, box) {
+    const c = geometry.center;
+    const sign = box.zone === "west" || (box.zone !== "east" && box.x < 0) ? -1 : 1;
+    const sx = sign * (c.w / 2);
+    if (box.zone === "north" || box.zone === "south") {
+      // Run down (or up) the card's side, then swing into the gap before the node.
+      const dir = box.zone === "north" ? -1 : 1;
+      const side = sx + sign * 18;
+      const end = [box.x, box.y - dir * (box.h / 2)];
+      const c1 = [side, dir * (c.h / 2 + 20)];
+      const c2 = [end[0], end[1] - dir * 30];
+      return {
+        d: `M${sx},${row.y} L${side},${row.y} C${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${end[0]},${end[1]}`,
+        mid: [(side + 3 * c1[0] + 3 * c2[0] + end[0]) / 8, (row.y + 3 * c1[1] + 3 * c2[1] + end[1]) / 8],
+      };
+    }
+    const end = [box.x - sign * (box.w / 2), box.y];
+    const c1 = [sx + sign * 48, row.y];
+    const c2 = [end[0] - sign * 48, end[1]];
+    return {
+      d: `M${sx},${row.y} C${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${end[0]},${end[1]}`,
+      mid: [(sx + 3 * c1[0] + 3 * c2[0] + end[0]) / 8, (row.y + 3 * c1[1] + 3 * c2[1] + end[1]) / 8],
+    };
+  }
+
+  // Arcs over the north band from the shared parent's top edge.
+  function edgeToSibling(via, box) {
+    const sx = via.x;
+    const sy = via.y - via.h / 2;
+    const ex = box.x - box.w / 2;
+    const lift = Math.min(sy, box.y) - 36;
+    return {
+      d: `M${sx},${sy} C${sx},${lift} ${ex - 36},${lift} ${ex},${box.y}`,
+      mid: [(sx + ex) / 2, lift],
+    };
+  }
+
+  function renderEdges(boxes) {
+    edgeLayer.replaceChildren();
+    const rowBoxes = new Map(geometry.rows.map((row) => [row.uid, row]));
+    const draw = (node, shape, label) => {
+      const group = svg("g", "compass-edge");
+      group.dataset.uid = node.uid;
+      group.dataset.style = node.style;
+      const hit = svg("path", "compass-edge-hit");
+      hit.setAttribute("d", shape.d);
+      const line = svg("path", "compass-edge-line");
+      line.setAttribute("d", shape.d);
+      group.append(hit, line);
+      if (label) {
+        const text = svg("text", "compass-edge-label");
+        text.setAttribute("x", String(shape.mid[0]));
+        text.setAttribute("y", String(shape.mid[1] - 4));
+        text.textContent = label.length > 48 ? `${label.slice(0, 47)}…` : label;
+        group.append(text);
+      }
+      edgeLayer.append(group);
+    };
+    for (const node of hood.nodes) {
+      const box = boxes.get(node.uid);
+      if (!box) continue;
+      if (node.zone === "siblings") {
+        const via = node.via ? boxes.get(node.via) : null;
+        if (via) draw(node, edgeToSibling(via, box), "");
+        continue;
+      }
+      const anchors = new Set();
+      for (const item of node.evidence) {
+        const row = item.sourceUid ? anchorRow(item.sourceUid) : null;
+        if (row && (item.kind === "link" || (item.kind === "typed" && item.direction === "out"))) anchors.add(row);
+        else anchors.add("");
+      }
+      let labeled = false;
+      for (const anchor of anchors) {
+        const shape = anchor ? edgeFromRow(rowBoxes.get(anchor), box) : edgeFromCenter(box);
+        draw(node, shape, labeled ? "" : node.label);
+        labeled = true;
+      }
     }
   }
 
-  function showGhost(title, x, y) {
-    ghost.hidden = false;
-    ghost.textContent = title || "";
+  function renderPins() {
+    const pins = settings?.pins ?? [];
+    pinRow.replaceChildren();
+    pinRow.hidden = pins.length === 0;
+    for (const pin of pins) {
+      const chip = el("span", "compass-pin-chip");
+      const jump = button("compass-pin-jump", pin.title);
+      jump.dataset.uid = pin.uid;
+      const remove = button("compass-pin-remove", "×", `Unpin ${pin.title}`);
+      remove.dataset.uid = pin.uid;
+      chip.append(jump, remove);
+      pinRow.append(chip);
+    }
+  }
+
+  async function savePins(pins) {
+    await writeSetting(extensionAPI, SETTING_IDS.pins, pins);
+    if (settings) settings.pins = pins;
+    renderPins();
+    updateButtons();
+  }
+
+  async function togglePin(uid = current) {
+    if (!uid || !settings) return;
+    const pins = settings.pins ?? [];
+    if (pins.some((pin) => pin.uid === uid)) {
+      await savePins(pins.filter((pin) => pin.uid !== uid));
+      return;
+    }
+    await savePins([...pins, { uid, title: titleOf(uid) || uid }]);
+  }
+
+  async function toggleOutline() {
+    if (!settings) return;
+    settings.outline = !settings.outline;
+    await writeSetting(extensionAPI, SETTING_IDS.outline, settings.outline);
+    render();
+  }
+
+  // ---- floating UI ----
+
+  function hideFloating() {
+    menu.hidden = true;
+    menu.replaceChildren();
+    details.hidden = true;
+    details.replaceChildren();
+    hideResults();
+  }
+
+  function placeFloating(element, clientX, clientY) {
     const rect = root.getBoundingClientRect();
-    ghost.style.left = `${x - rect.left + 8}px`;
-    ghost.style.top = `${y - rect.top + 8}px`;
+    element.hidden = false;
+    const width = element.offsetWidth || 240;
+    const height = element.offsetHeight || 160;
+    element.style.left = `${clamp(clientX - rect.left, 8, Math.max(8, rect.width - width - 8))}px`;
+    element.style.top = `${clamp(clientY - rect.top + 6, 8, Math.max(8, rect.height - height - 8))}px`;
+  }
+
+  function nodeKind(uid) {
+    if (uid === hood?.center?.uid) return hood.center.kind;
+    return nodeByUid.get(uid)?.kind ?? "page";
+  }
+
+  function openSidebar(uid, kind = nodeKind(uid)) {
+    return host.openInSidebar(uid, kind).catch((error) => console.error("[compass] open", error));
+  }
+
+  function openMain(uid, kind = nodeKind(uid)) {
+    close();
+    return host.openInMain(uid, kind).catch((error) => console.error("[compass] open", error));
+  }
+
+  function menuItem(text, action) {
+    const item = button("compass-menu-item", text);
+    item.setAttribute("role", "menuitem");
+    item.addEventListener("click", () => {
+      hideFloating();
+      guard(action)();
+    });
+    menu.append(item);
+    return item;
+  }
+
+  function showMenu(uid, clientX, clientY) {
+    hideFloating();
+    const node = nodeByUid.get(uid);
+    const isCenter = uid === hood?.center?.uid;
+    if (!isCenter) menuItem("Focus here", () => focusUid(uid));
+    menuItem("Open in sidebar", () => openSidebar(uid));
+    menuItem("Open in main window", () => openMain(uid));
+    const pinned = (settings?.pins ?? []).some((pin) => pin.uid === uid);
+    if (nodeKind(uid) === "page" || isCenter) menuItem(pinned ? "Unpin" : "Pin", () => togglePin(uid));
+    if (node) menuItem("Why is this here?", () => showDetails(uid, clientX, clientY));
+    if (node?.writable) {
+      for (const side of ["north", "south", "west", "east"]) {
+        if (side === node.zone) continue;
+        const attribute = targetAttribute(node, side);
+        if (attribute) menuItem(`Move to ${SIDE_NAME[side]} (${attribute}::)`, () => moveNode(node, side));
+      }
+    }
+    placeFloating(menu, clientX, clientY);
+    menu.querySelector("button")?.focus();
+  }
+
+  function showDetails(uid, clientX, clientY) {
+    hideFloating();
+    const node = nodeByUid.get(uid);
+    if (!node) return;
+    details.append(el("p", "compass-details-title", node.title));
+    details.append(el("p", "compass-details-side", `${SIDE_NAME[node.zone]}${node.writable ? " · drag to another side to rewrite" : ""}`));
+    const list = el("ul", "compass-details-list");
+    const seen = new Set();
+    for (const item of node.evidence) {
+      const key = `${item.kind}:${item.attribute ?? ""}:${item.sourceUid ?? ""}:${item.note ?? ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const entry = el("li", "compass-details-item");
+      entry.append(el("span", "", describe({ ...item, via: node.via }, titleOf)));
+      if (item.sourceUid) {
+        const open = button("compass-details-open", "Open block");
+        open.addEventListener("click", () => { void openSidebar(item.sourceUid, "block"); });
+        entry.append(open);
+      }
+      list.append(entry);
+    }
+    details.append(list);
+    const actions = el("div", "compass-details-actions");
+    const focus = button("", "Focus here");
+    focus.addEventListener("click", () => focusUid(uid));
+    const side = button("", "Open in sidebar");
+    side.addEventListener("click", () => { void openSidebar(uid); });
+    actions.append(focus, side);
+    details.append(actions);
+    placeFloating(details, clientX, clientY);
+  }
+
+  // ---- rewriting ----
+
+  function targetAttribute(node, side) {
+    const edge = node?.writable;
+    const role = DROP_ROLE[side];
+    if (!edge || !role || !hood) return null;
+    return attributeForRole(edge.direction === "out" ? role : inverseRole(role), hood.settings);
+  }
+
+  async function moveNode(node, side) {
+    const edge = node.writable;
+    const attribute = targetAttribute(node, side);
+    if (!attribute) {
+      setStatus(`No attribute is set for ${SIDE_NAME[side]}. Add one under Settings → Compass.`);
+      return;
+    }
+    const value = edge.direction === "out"
+      ? (node.kind === "page" ? { uid: node.uid, title: node.title } : { uid: node.uid })
+      : (hood.center.kind === "page" ? { uid: hood.center.uid, title: hood.center.title } : { uid: hood.center.uid });
+    node.zone = side;
+    render();
+    setStatus(`Writing ${attribute}::`, true);
+    let result;
+    try {
+      result = await host.move({
+        sourceUid: edge.sourceUid,
+        fromAttribute: edge.attribute,
+        toAttribute: attribute,
+        value,
+        expectedString: edge.sourceString,
+      });
+    } catch (error) {
+      console.error("[compass] write failed", error);
+      result = { ok: false, reason: "failed" };
+    }
+    if (result?.ok) setStatus(`Moved to ${SIDE_NAME[side]} as ${attribute}::`);
+    else setStatus(REASONS[result?.reason] ?? "The write failed. Compass reloaded.");
+    load();
+  }
+
+  function handleDrop(uid, side) {
+    const node = nodeByUid.get(uid);
+    if (!node || !side || side === node.zone) return;
+    if (node.writable) {
+      void moveNode(node, side);
+      return;
+    }
+    const typed = node.evidence.filter((item) => item.kind === "typed");
+    if (typed.length > 1) {
+      setStatus("Several blocks make this edge. Pick one to edit.");
+      const rect = stage.getBoundingClientRect();
+      showDetails(uid, rect.left + rect.width / 2, rect.top + 60);
+      return;
+    }
+    const source = node.evidence.find((item) => item.sourceUid)?.sourceUid;
+    if (typed.length === 1) {
+      setStatus("That attribute belongs to another plugin, so Compass opened its block instead.");
+    } else if (source) {
+      setStatus("Plain links are not rewritten. Compass opened the block that links them.");
+    } else {
+      setStatus("This edge comes from the page structure. There is no block to rewrite.");
+      return;
+    }
+    if (source) void openSidebar(source, "block");
+  }
+
+  // ---- pointer ----
+
+  function hintText(side, node) {
+    const attribute = node?.writable ? targetAttribute(node, side) : null;
+    return attribute ? `${SIDE_NAME[side]} · ${attribute}::` : SIDE_NAME[side];
+  }
+
+  function startDrag(state) {
+    state.dragging = true;
     root.classList.add("compass-dragging");
+    const node = nodeByUid.get(state.uid);
+    for (const side of Object.keys(hints)) hints[side].textContent = hintText(side, node);
+    ghost.textContent = node?.title ?? "";
+    ghost.hidden = false;
+    nodeEls.get(state.uid)?.classList.add("compass-lifted");
+  }
+
+  function endDrag() {
+    root.classList.remove("compass-dragging");
+    ghost.hidden = true;
+    for (const hint of Object.values(hints)) hint.classList.remove("compass-hint-hot");
+    for (const element of nodeEls.values()) element.classList.remove("compass-lifted");
   }
 
   function onPointerDown(event) {
     if (root.hidden || event.button !== 0 || pointer) return;
     const target = event.target;
-    if (target?.closest?.(".compass-open")) return;
-    const node = target?.closest?.(".compass-node");
-    if (node && root.contains(node)) {
-      if (!event.shiftKey) {
-        const edge = writableEdge(node.dataset.uid);
-        if (edge) {
-          pointer = {
-            type: "node",
-            uid: node.dataset.uid,
-            edge,
-            x: event.clientX,
-            y: event.clientY,
-            title: node.textContent || "",
-            moved: false,
-          };
-        }
-      }
+    if (!menu.hidden && !menu.contains(target)) hideFloating();
+    if (!details.hidden && !details.contains(target)) {
+      details.hidden = true;
+      details.replaceChildren();
+    }
+    if (!stage.contains(target) || target.closest?.(".compass-chip, .compass-caret, .compass-row")) return;
+    const element = target.closest?.(".compass-node");
+    if (element && !element.classList.contains("compass-node-center")) {
+      pointer = { type: "node", uid: element.dataset.uid, x: event.clientX, y: event.clientY, dragging: false };
       return;
     }
-    if (target?.closest?.(".compass-bar, .compass-side, .compass-popover, .compass-results, .compass-gutter")) return;
-    if (target !== stage && !stage.contains(target)) return;
-    pointer = { type: "pan", x: event.clientX, y: event.clientY, panX, panY, moved: false };
+    if (element || target.closest?.(".compass-edge")) return;
+    pointer = { type: "pan", x: event.clientX, y: event.clientY, panX, panY, dragging: false };
   }
 
   function onPointerMove(event) {
     if (!pointer) return;
     const dx = event.clientX - pointer.x;
     const dy = event.clientY - pointer.y;
-    if (!pointer.moved && Math.hypot(dx, dy) < 4) return;
-    pointer.moved = true;
+    if (!pointer.dragging && Math.hypot(dx, dy) < 5) return;
     if (pointer.type === "pan") {
+      pointer.dragging = true;
       panX = pointer.panX + dx;
       panY = pointer.panY + dy;
-      applyTransform();
+      applyCamera(false);
       return;
     }
-    showGhost(pointer.title, event.clientX, event.clientY);
-    setHotGutter(gutterAt(event.clientX, event.clientY));
+    if (!pointer.dragging) startDrag(pointer);
+    const rect = root.getBoundingClientRect();
+    ghost.style.left = `${event.clientX - rect.left + 10}px`;
+    ghost.style.top = `${event.clientY - rect.top + 10}px`;
+    const side = geometry ? sideAt(clientToWorld(event.clientX, event.clientY), geometry.center) : null;
+    for (const [name, hint] of Object.entries(hints)) hint.classList.toggle("compass-hint-hot", name === side);
   }
 
   function onPointerUp(event) {
     if (!pointer) return;
-    const active = pointer;
+    const state = pointer;
     pointer = null;
-    const zone = active.type === "node" && active.moved ? gutterAt(event.clientX, event.clientY) : null;
-    setHotGutter(null);
-    hideGhost();
-    if (active.type !== "node" || !active.moved) return;
+    if (!state.dragging) return;
     suppressClick = true;
-    delay(() => { suppressClick = false; }, 0);
-    if (zone) void relink(active.edge, active.uid, zone);
+    later(() => { suppressClick = false; }, 0);
+    if (state.type !== "node") return;
+    endDrag();
+    if (event.type === "pointercancel" || !geometry) return;
+    handleDrop(state.uid, sideAt(clientToWorld(event.clientX, event.clientY), geometry.center));
   }
 
-  function relink(edge, uid, zone) {
-    const node = (lastModel?.classified?.nodes ?? []).find((item) => item.uid === uid);
-    return commitAction({
-      type: "relink",
-      sourceUid: edge.sourceUid,
-      valueUid: uid,
-      toZone: zone,
-      title: node?.title ?? "",
-    });
+  function onWheel(event) {
+    if (root.hidden) return;
+    event.preventDefault();
+    const rect = stage.getBoundingClientRect();
+    const ox = event.clientX - rect.left - rect.width / 2;
+    const oy = event.clientY - rect.top - rect.height / 2;
+    const wx = (ox - panX) / zoom;
+    const wy = (oy - panY) / zoom;
+    const step = event.ctrlKey ? 1.04 : 1.12;
+    zoom = clamp(zoom * (event.deltaY < 0 ? step : 1 / step), 0.25, 2.5);
+    panX = ox - wx * zoom;
+    panY = oy - wy * zoom;
+    applyCamera(false);
   }
 
-  function renderPins(pins) {
-    pinList.replaceChildren();
-    for (const pin of pins ?? []) {
-      const row = el("div", "compass-pin-row");
-      const jump = el("button", "compass-pin-jump");
-      jump.type = "button";
-      jump.textContent = pin.title || pin.uid;
-      jump.addEventListener("click", () => { void showUid(pin.uid, true); });
-      const remove = el("button", "compass-pin-remove");
-      remove.type = "button";
-      remove.textContent = "Remove";
-      remove.addEventListener("click", () => { void unpin(pin.uid); });
-      row.append(jump, remove);
-      pinList.append(row);
-    }
-  }
+  // ---- clicks ----
 
-  async function pinCurrent() {
-    if (!current || !lastModel) return;
-    const settings = readCompassSettings(extensionAPI);
-    if (settings.pins.some((pin) => pin.uid === current)) return;
-    const pins = settings.pins.concat([{ uid: current, title: centerLabel(lastModel.fixture?.center) }]);
-    if (extensionAPI.settings.canSet !== false) await extensionAPI.settings.set(SETTING_IDS.pins, pins);
-    renderPins(pins);
-  }
-
-  async function unpin(uid) {
-    const settings = readCompassSettings(extensionAPI);
-    const pins = settings.pins.filter((pin) => pin.uid !== uid);
-    if (extensionAPI.settings.canSet !== false) await extensionAPI.settings.set(SETTING_IDS.pins, pins);
-    renderPins(pins);
-  }
-
-  function renderLensList(lenses) {
-    lensList.replaceChildren();
-    for (const lens of lenses ?? []) {
-      const row = el("div", "compass-lens-row");
-      const apply = el("button", "compass-lens-apply");
-      apply.type = "button";
-      apply.textContent = lens.name;
-      apply.addEventListener("click", () => {
-        keywordInput.value = lens.keyword ?? "";
-        includeInput.value = (lens.attributes?.include ?? []).join(", ");
-        excludeInput.value = (lens.attributes?.exclude ?? []).join(", ");
-        kindsInput.value = (lens.kinds?.include ?? []).join(", ");
-        lensNameInput.value = lens.name;
-        lensMode = "reflow";
-        activeLens = readLensForm();
-        if (lastModel) paint(lastModel);
-      });
-      const remove = el("button", "compass-lens-delete");
-      remove.type = "button";
-      remove.textContent = "Delete";
-      remove.addEventListener("click", () => { void deleteLens(lens.name); });
-      row.append(apply, remove);
-      lensList.append(row);
-    }
-  }
-
-  async function saveLens() {
-    const name = lensNameInput.value.trim();
-    if (!name) {
-      setStatus("Name the lens");
+  function onStageClick(event) {
+    if (suppressClick) return;
+    const target = event.target;
+    const chip = target.closest?.(".compass-chip");
+    if (chip) {
+      const zones = expandedFor(current);
+      if (zones.has(chip.dataset.zone)) zones.delete(chip.dataset.zone);
+      else zones.add(chip.dataset.zone);
+      rebuild();
+      render();
       return;
     }
-    const settings = readCompassSettings(extensionAPI);
-    const lenses = settings.lenses.filter((item) => item.name !== name);
-    lenses.push({ name, ...readLensForm() });
-    if (extensionAPI.settings.canSet !== false) await extensionAPI.settings.set(SETTING_IDS.lenses, lenses);
-    renderLensList(lenses);
-    setStatus("");
+    if (target.closest?.(".compass-row-more")) {
+      void openSidebar(current);
+      return;
+    }
+    const caret = target.closest?.(".compass-caret");
+    if (caret) {
+      const open = rowsFor(current);
+      if (open.has(caret.dataset.uid)) open.delete(caret.dataset.uid);
+      else open.add(caret.dataset.uid);
+      render();
+      return;
+    }
+    const row = target.closest?.(".compass-row[data-uid]");
+    const element = target.closest?.(".compass-node");
+    const edge = target.closest?.(".compass-edge");
+    if (edge) {
+      showDetails(edge.dataset.uid, event.clientX, event.clientY);
+      return;
+    }
+    if (!row && !element) {
+      hideFloating();
+      return;
+    }
+    const uid = row ? row.dataset.uid : element.dataset.uid;
+    if (!row && element.classList.contains("compass-node-center")) return;
+    if (event.shiftKey) {
+      void openSidebar(uid, row ? "block" : nodeKind(uid));
+      return;
+    }
+    clickTimer = cancel(clickTimer);
+    clickTimer = later(() => {
+      clickTimer = null;
+      focusUid(uid);
+    }, CLICK_DELAY);
   }
 
-  async function deleteLens(name) {
-    const settings = readCompassSettings(extensionAPI);
-    const lenses = settings.lenses.filter((item) => item.name !== name);
-    if (extensionAPI.settings.canSet !== false) await extensionAPI.settings.set(SETTING_IDS.lenses, lenses);
-    renderLensList(lenses);
+  function onStageDoubleClick(event) {
+    clickTimer = cancel(clickTimer);
+    const target = event.target;
+    if (target.closest?.(".compass-caret, .compass-chip")) return;
+    const row = target.closest?.(".compass-row[data-uid]");
+    const element = target.closest?.(".compass-node");
+    if (!row && !element) return;
+    event.preventDefault();
+    if (row) void openSidebar(row.dataset.uid, "block");
+    else void openSidebar(element.dataset.uid);
   }
 
-  function applyLensMode(mode) {
-    lensMode = mode;
-    activeLens = readLensForm();
-    if (lastModel) paint(lastModel);
+  function onContextMenu(event) {
+    const element = event.target.closest?.(".compass-node, .compass-edge, .compass-row[data-uid]");
+    if (!element) return;
+    event.preventDefault();
+    if (element.classList.contains("compass-row")) {
+      hideFloating();
+      menuItem("Focus here", () => focusUid(element.dataset.uid));
+      menuItem("Open in sidebar", () => openSidebar(element.dataset.uid, "block"));
+      placeFloating(menu, event.clientX, event.clientY);
+      return;
+    }
+    if (element.classList.contains("compass-edge")) showDetails(element.dataset.uid, event.clientX, event.clientY);
+    else showMenu(element.dataset.uid, event.clientX, event.clientY);
   }
 
-  function renderResults(rows) {
+  // ---- search ----
+
+  function hideResults() {
+    results.hidden = true;
     results.replaceChildren();
-    if (!rows.length) {
-      const empty = el("div", "compass-result");
-      empty.textContent = "No pages";
-      results.append(empty);
-      results.hidden = false;
-      activeResult = -1;
-      return;
-    }
     activeResult = 0;
-    rows.forEach((row, index) => {
-      const button = el("button", "compass-result");
-      button.type = "button";
-      button.dataset.uid = row.uid;
-      button.textContent = row.title;
-      if (index === 0) button.classList.add("compass-result-active");
-      button.addEventListener("mousedown", (event) => event.preventDefault());
-      button.addEventListener("click", () => {
-        hideResults();
-        void showUid(row.uid, true);
-      });
-      results.append(button);
-    });
-    results.hidden = false;
   }
 
-  function markResults() {
+  function markResult() {
     const items = [...results.querySelectorAll(".compass-result")];
-    items.forEach((item, index) => {
-      item.classList.toggle("compass-result-active", index === activeResult);
-    });
+    items.forEach((item, index) => item.classList.toggle("compass-result-active", index === activeResult));
     items[activeResult]?.scrollIntoView?.({ block: "nearest" });
   }
 
@@ -1036,111 +1103,136 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       hideResults();
       return;
     }
-    try {
-      renderResults(host.search(text));
-    } catch (error) {
-      console.error("[compass] search failed", error);
-      setStatus("Page search failed");
-      hideResults();
+    if (!titleCache) titleCache = host.titles();
+    const found = rankTitles(titleCache, text, 20);
+    results.replaceChildren();
+    activeResult = 0;
+    if (!found.length) results.append(el("div", "compass-result-none", "No page by that name"));
+    for (const [index, row] of found.entries()) {
+      const item = button(`compass-result${index === 0 ? " compass-result-active" : ""}`, row.title);
+      item.dataset.uid = row.uid;
+      item.setAttribute("role", "option");
+      results.append(item);
     }
+    results.hidden = false;
+  }
+
+  function chooseResult(uid) {
+    if (!uid) return;
+    hideResults();
+    searchInput.value = "";
+    focusUid(uid);
+    stage.focus({ preventScroll: true });
   }
 
   function onSearchKey(event) {
-    const items = [...results.querySelectorAll(".compass-result[data-uid]")];
-    if (event.key === "ArrowDown") {
+    const items = [...results.querySelectorAll(".compass-result")];
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       if (!items.length) return;
-      activeResult = Math.min(items.length - 1, activeResult + 1);
-      markResults();
-    } else if (event.key === "ArrowUp") {
-      event.preventDefault();
-      if (!items.length) return;
-      activeResult = Math.max(0, activeResult - 1);
-      markResults();
+      activeResult = clamp(activeResult + (event.key === "ArrowDown" ? 1 : -1), 0, items.length - 1);
+      markResult();
     } else if (event.key === "Enter") {
       event.preventDefault();
-      const item = items[activeResult] || items[0];
-      if (!item?.dataset?.uid) return;
-      hideResults();
-      void showUid(item.dataset.uid, true);
-    } else if (event.key === "Escape" && !results.hidden) {
+      chooseResult((items[activeResult] ?? items[0])?.dataset.uid);
+    } else if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
-      hideResults();
+      if (!results.hidden) hideResults();
+      else stage.focus({ preventScroll: true });
     }
+  }
+
+  // ---- keyboard ----
+
+  function firstIn(zone) {
+    return hood?.nodes.find((node) => node.zone === zone)?.uid ?? null;
   }
 
   function onKey(event) {
-    if (root.hidden || event.key !== "Escape") return;
-    if (!results.hidden) {
-      hideResults();
-      event.preventDefault();
-      return;
-    }
-    if (!popover.hidden) {
-      hidePopover();
-      event.preventDefault();
-      return;
-    }
-    close();
-    event.preventDefault();
-  }
-
-  function onWheel(event) {
     if (root.hidden) return;
-    event.preventDefault();
-    const rect = stage.getBoundingClientRect();
-    const originX = rect.left + rect.width / 2;
-    const originY = rect.top + rect.height / 2;
-    const modelX = (event.clientX - originX - panX) / zoom;
-    const modelY = (event.clientY - originY - panY) / zoom;
-    const next = Math.min(2.5, Math.max(0.4, zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1)));
-    panX = event.clientX - originX - modelX * next;
-    panY = event.clientY - originY - modelY * next;
-    zoom = next;
-    applyTransform();
+    // Keys typed in Roam itself (the sidecar, a block) belong to Roam.
+    if (!root.contains(event.target) && event.target !== document.body) return;
+    const typing = event.target === searchInput;
+    if (event.key === "Escape") {
+      if (!menu.hidden || !details.hidden || !results.hidden) hideFloating();
+      else close();
+      event.preventDefault();
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      searchInput.focus();
+      searchInput.select();
+      return;
+    }
+    if (typing) return;
+    if (event.altKey && event.key === "ArrowLeft") {
+      event.preventDefault();
+      goBack();
+      return;
+    }
+    if (event.altKey && event.key === "ArrowRight") {
+      event.preventDefault();
+      goForward();
+      return;
+    }
+    const element = event.target.closest?.(".compass-node");
+    if (element && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      if (event.shiftKey) void openSidebar(element.dataset.uid);
+      else if (!element.classList.contains("compass-node-center")) focusUid(element.dataset.uid);
+      return;
+    }
+    if (element && (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) {
+      event.preventDefault();
+      const rect = element.getBoundingClientRect();
+      showMenu(element.dataset.uid, rect.left + 8, rect.bottom);
+      return;
+    }
+    const arrows = { ArrowUp: "north", ArrowDown: "south", ArrowLeft: "west", ArrowRight: "east" };
+    if (arrows[event.key] && !event.altKey && (event.target === stage || element?.classList.contains("compass-node-center"))) {
+      const uid = firstIn(arrows[event.key]);
+      if (uid) {
+        event.preventDefault();
+        nodeEls.get(uid)?.focus({ preventScroll: true });
+      }
+    }
   }
 
-  async function toggleOutline() {
-    const settings = readCompassSettings(extensionAPI);
-    const next = !settings.outline;
-    if (extensionAPI.settings.canSet !== false) await extensionAPI.settings.set(SETTING_IDS.outline, next);
-    outlineButton.setAttribute("aria-pressed", next ? "true" : "false");
-    if (!root.hidden && current) await reload();
-  }
+  // ---- wiring ----
 
   lifecycle.node(root, document.body);
   lifecycle.event(closeButton, "click", () => close());
-  lifecycle.event(backButton, "click", () => { void goBack(); });
-  lifecycle.event(forwardButton, "click", () => { void goForward(); });
-  lifecycle.event(pinButton, "click", () => {
-    void pinCurrent().catch((error) => console.error("[compass]", error));
-  });
-  lifecycle.event(outlineButton, "click", () => {
-    void toggleOutline().catch((error) => console.error("[compass]", error));
-  });
-  lifecycle.event(keepButton, "click", () => applyLensMode("keep"));
-  lifecycle.event(reflowButton, "click", () => applyLensMode("reflow"));
-  lifecycle.event(saveButton, "click", () => {
-    void saveLens().catch((error) => console.error("[compass]", error));
-  });
-  lifecycle.event(searchInput, "input", () => {
-    cancelDelay(searchTimer);
-    searchTimer = delay(() => {
-      searchTimer = null;
-      runSearch();
-    }, 80);
-  });
-  lifecycle.event(searchInput, "keydown", onSearchKey);
-  lifecycle.event(stage, "click", (event) => {
-    const target = event.target;
-    if (target?.closest?.(".compass-node, .compass-open, .compass-gutter, .compass-center, .compass-overflow, .compass-slot")) {
+  lifecycle.event(backButton, "click", () => goBack());
+  lifecycle.event(forwardButton, "click", () => goForward());
+  lifecycle.event(pinButton, "click", guard(() => togglePin()));
+  lifecycle.event(outlineButton, "click", guard(() => toggleOutline()));
+  lifecycle.event(fitButton, "click", () => fit(true));
+  lifecycle.event(refreshButton, "click", () => load());
+  lifecycle.event(pinRow, "click", (event) => {
+    const remove = event.target.closest?.(".compass-pin-remove");
+    if (remove) {
+      void savePins((settings?.pins ?? []).filter((pin) => pin.uid !== remove.dataset.uid))
+        .catch((error) => console.error("[compass]", error));
       return;
     }
-    const hit = hitEdge(event);
-    if (hit) showPopover(hit, event);
-    else hidePopover();
+    const jump = event.target.closest?.(".compass-pin-jump");
+    if (jump) focusUid(jump.dataset.uid);
   });
+  lifecycle.event(searchInput, "input", () => {
+    searchTimer = cancel(searchTimer);
+    searchTimer = later(() => {
+      searchTimer = null;
+      runSearch();
+    }, 60);
+  });
+  lifecycle.event(searchInput, "keydown", onSearchKey);
+  lifecycle.event(results, "mousedown", (event) => event.preventDefault());
+  lifecycle.event(results, "click", (event) => chooseResult(event.target.closest?.(".compass-result")?.dataset.uid));
+  lifecycle.event(stage, "click", onStageClick);
+  lifecycle.event(stage, "dblclick", onStageDoubleClick);
+  lifecycle.event(stage, "contextmenu", onContextMenu);
   lifecycle.event(stage, "wheel", onWheel, { passive: false });
   lifecycle.event(root, "pointerdown", onPointerDown);
   lifecycle.event(globalThis, "pointermove", onPointerMove);
@@ -1151,18 +1243,11 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   lifecycle.add(() => {
     for (const id of timers) globalThis.clearTimeout(id);
     timers.clear();
-    if (watchTimer != null) globalThis.clearTimeout(watchTimer);
     root.hidden = true;
   });
-  host.setScheduler(scheduleReload);
-  applyTransform();
-  updateHistory();
+  applyCamera(false);
+  updateButtons();
 
   const view = { repullIfOpen, toggle, focusPage, focusBlock };
-  return {
-    ...view,
-    installCommands() {
-      return registerCommands({ extensionAPI, lifecycle, host, view });
-    },
-  };
+  return { ...view, installCommands: () => registerCommands({ extensionAPI, lifecycle, host, view }) };
 }

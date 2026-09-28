@@ -1,5 +1,7 @@
 # Compass
 
+> **Superseded 2026-09-28.** This spec is the rejected first design (hard-wired directions, no outline links, hidden BT_attr*). The current behavior is in README.md and `src/model/neighborhood.js`. Do not rebuild from this file.
+
 Roam Depot extension. Display name **Compass**. Package name `roam-compass`. Log prefix `[compass]`. Runtime flag `window.__ROAM_COMPASS_VERSION`. CSS root `.compass-root`.
 
 This is a clean-room rewrite of the *behavior* of a spatial neighborhood navigator (one center, stable directions, typed relations). It is not a source port.

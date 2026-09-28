@@ -1,62 +1,50 @@
-import { classify } from "./model/classify.js";
-import { layout } from "./model/layout.js";
-import { planWrite } from "./model/writes.js";
+import { typedParentUids } from "./model/neighborhood.js";
+import { planMove } from "./model/rewrite.js";
 
-// Neighborhood pull. :db/id is included so the inbound query can take an entity id.
-export const CENTER_PULL = `[
-  :db/id
-  :block/uid
-  :node/title
-  :block/string
-  {:block/children [:block/uid :block/string :block/order]}
-  {:block/refs [:block/uid :node/title]}
-  {:harc/_e [
-    :block/uid
-    {:harc/a [:block/uid :node/title]}
-    {:harc/v [:block/uid :node/title :block/string :harc/v-string]}
-    {:harc/a-source [:block/uid :block/string]}
-    {:harc/v-source [:block/uid]}
-    {:harc/_e [
-      :block/uid
-      {:harc/a [:block/uid :node/title]}
-      {:harc/v [:block/uid :node/title :block/string :harc/v-string]}
-    ]}
-  ]}
-  {:harc/_v [
-    :block/uid
-    {:harc/e [:block/uid :node/title :block/string]}
-    {:harc/a [:block/uid :node/title]}
-    {:harc/v [:block/uid :node/title :block/string :harc/v-string]}
-    {:harc/a-source [:block/uid :block/string]}
-    {:harc/v-source [:block/uid]}
-  ]}
-]`;
+// Harc labels: attributes nested under a relation block (Role:: Lead under Owner::).
+const LABELS = "{:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string]}]}";
+const SOURCE = "[:block/uid :block/string :block/order {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order]}]";
 
-export const INBOUND_QUERY = `[:find ?uid ?title
- :in $ ?center
- :where
-  [?b :block/refs ?center]
-  [?b :block/page ?page]
-  [(not= ?page ?center)]
-  [?page :block/uid ?uid]
-  [?page :node/title ?title]]`;
+export const CENTER_PULL = `[:block/uid :node/title :block/string :block/order
+ {:block/page [:block/uid :node/title]}
+ {:block/_children [:block/uid :node/title :block/string {:block/children [:block/uid :block/string :block/order]}]}
+ {:harc/_e [:block/uid
+   {:harc/a [:node/title]}
+   {:harc/v [:block/uid :node/title :block/string :harc/v-string]}
+   {:harc/a-source ${SOURCE}}
+   ${LABELS}]}
+ {:harc/_v [:block/uid
+   {:harc/e [:block/uid :node/title :block/string]}
+   {:harc/a [:node/title]}
+   {:harc/a-source ${SOURCE}}
+   {:harc/v-source [:block/uid]}
+   ${LABELS}]}
+ {:block/_refs [:block/uid :block/string
+   {:block/page [:block/uid :node/title]}
+   {:block/refs [:block/uid :node/title :block/string]}]}]`;
 
-const SEARCH_RE = `[:find ?uid ?title
- :in $ ?pattern
+export const OUTLINE_PULL = "[:block/uid :block/string :block/order {:block/refs [:block/uid :node/title :block/string]} {:block/children ...}]";
+
+export const PEER_PULL = `[:block/uid
+ {:harc/_v [{:harc/a [:node/title]} {:harc/e [:block/uid :node/title :block/string]}]}
+ {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string]}]}]`;
+
+const WATCHES = [
+  "[:block/string :node/title {:block/_refs [:block/uid :block/string]} {:harc/_e [:block/uid]} {:harc/_v [:block/uid]}]",
+  "[:block/uid :block/string {:block/children ...}]",
+];
+
+const TITLES_QUERY = "[:find ?uid ?title :where [?page :node/title ?title] [?page :block/uid ?uid]]";
+const PREFIX_QUERY = `[:find ?uid ?title
+ :in $ ?prefix
  :where
   [?page :node/title ?title]
-  [(re-pattern ?pattern) ?re]
-  [(re-find ?re ?title)]
+  [(clojure.string/starts-with? ?title ?prefix)]
   [?page :block/uid ?uid]]`;
 
-const SEARCH_INCLUDES = `[:find ?uid ?title
- :in $ ?needle
- :where
-  [?page :node/title ?title]
-  [(clojure.string/includes? ?title ?needle)]
-  [?page :block/uid ?uid]]`;
-
-const PROTECTED = [":harc", ":entity/attrs", ":attr/proxy"];
+const MENTION_CAP = 500;
+const NAMESPACE_CAP = 200;
+const DAILY_UID = /^(\d{2})-(\d{2})-(\d{4})$/;
 
 function roamApi() {
   const host = globalThis.window ?? globalThis;
@@ -68,212 +56,243 @@ function asList(value) {
   return Array.isArray(value) ? value : [value];
 }
 
-function entityString(uid) {
-  const escaped = String(uid).replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
-  return `[:block/uid "${escaped}"]`;
+export function entityString(uid) {
+  return `[:block/uid "${String(uid).replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"]`;
 }
 
-function maxPerZone(settings) {
-  const value = settings?.maxPerZone;
-  if (value == null || value === "") return 24;
-  const number = Number(value);
-  if (!Number.isFinite(number) || number < 0) return 24;
-  return Math.floor(number);
+function byOrder(a, b) {
+  return (a.order ?? 0) - (b.order ?? 0) || (a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0);
 }
 
-function namespacePrefix(title) {
-  if (typeof title !== "string") return null;
-  const mark = title.lastIndexOf("/");
-  if (mark <= 0) return null;
-  const prefix = title.slice(0, mark).trim();
-  return prefix || null;
+export function entityOf(node) {
+  const uid = node?.[":block/uid"];
+  if (typeof uid !== "string" || !uid) return null;
+  if (typeof node[":node/title"] === "string") return { uid, title: node[":node/title"] };
+  if (typeof node[":block/string"] === "string") {
+    const entity = { uid, string: node[":block/string"] };
+    if (Number.isFinite(node[":block/order"])) entity.order = node[":block/order"];
+    return entity;
+  }
+  if (node[":harc/v-string"] != null) return { uid, text: String(node[":harc/v-string"]) };
+  return { uid };
 }
 
-function compareText(a, b) {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
-}
-
-function labelText(node) {
-  if (!node || typeof node !== "object") return "";
-  if (node[":harc/v-string"] != null) return String(node[":harc/v-string"]);
-  if (typeof node[":node/title"] === "string") return node[":node/title"];
-  if (typeof node[":block/string"] === "string") return node[":block/string"];
+function displayText(node) {
+  if (node?.[":harc/v-string"] != null) return String(node[":harc/v-string"]);
+  if (typeof node?.[":node/title"] === "string") return node[":node/title"];
+  if (typeof node?.[":block/string"] === "string") return node[":block/string"];
   return "";
 }
 
-function annotationLabels(node) {
+export function labelsOf(harc) {
   const labels = [];
-  for (const nested of asList(node?.[":harc/_e"])) {
+  for (const nested of asList(harc?.[":harc/_e"])) {
     const attribute = asList(nested?.[":harc/a"])[0]?.[":node/title"];
     if (typeof attribute !== "string" || !attribute.trim()) continue;
-    const name = attribute.trim();
-    for (const value of asList(nested?.[":harc/v"])) {
-      labels.push({ attribute: name, text: labelText(value) });
-    }
+    const text = asList(nested[":harc/v"]).map(displayText).filter(Boolean).join(", ");
+    labels.push({ attribute: attribute.trim(), text });
   }
   return labels;
 }
 
-function valueRecord(node) {
+export function sourceOf(node) {
   const uid = node?.[":block/uid"];
-  if (typeof uid !== "string" || !uid) return null;
-  if (typeof node[":node/title"] === "string" && node[":node/title"]) {
-    return { uid, title: node[":node/title"] };
-  }
-  if (node[":harc/v-string"] != null && node[":block/string"] == null) {
-    return { uid, vString: node[":harc/v-string"] };
-  }
-  if (typeof node[":block/string"] === "string") return { uid, string: node[":block/string"] };
-  if (node[":harc/v-string"] != null) return { uid, vString: node[":harc/v-string"] };
-  return { uid };
-}
-
-function remember(node, pages, blocks) {
-  const uid = node?.[":block/uid"];
-  if (typeof uid !== "string" || !uid) return null;
-  if (typeof node[":node/title"] === "string") {
-    pages.add(uid);
-    return { uid, title: node[":node/title"] };
-  }
-  blocks.add(uid);
-  const title = typeof node[":block/string"] === "string" ? node[":block/string"] : "";
-  return { uid, title };
-}
-
-function trackValue(value, pages, blocks) {
-  if (!value?.uid) return;
-  if (value.title) pages.add(value.uid);
-  else if (value.string != null) blocks.add(value.uid);
-}
-
-function harcRecord(node, entities, withLabels) {
-  const uid = node?.[":block/uid"];
-  const attributeNode = asList(node?.[":harc/a"])[0];
-  const title = attributeNode?.[":node/title"];
-  if (typeof uid !== "string" || !uid || typeof title !== "string" || !title.trim()) return null;
-  const source = asList(node[":harc/a-source"])[0];
-  const values = [];
-  for (const value of asList(node[":harc/v"])) {
-    const record = valueRecord(value);
-    if (record) values.push(record);
-  }
-  const valueSourceUids = [];
-  for (const item of asList(node[":harc/v-source"])) {
-    if (typeof item?.[":block/uid"] === "string") valueSourceUids.push(item[":block/uid"]);
-  }
-  const entityUids = [];
-  const entityRecords = [];
-  for (const entity of entities) {
-    if (!entity?.uid || entityUids.includes(entity.uid)) continue;
-    entityUids.push(entity.uid);
-    entityRecords.push({ uid: entity.uid, title: entity.title || "" });
-  }
+  if (typeof uid !== "string" || !uid || typeof node[":block/string"] !== "string") return null;
+  const parentUid = asList(node[":block/_children"])[0]?.[":block/uid"];
   return {
     uid,
-    entityUids,
-    entities: entityRecords,
-    attribute: {
-      uid: typeof attributeNode?.[":block/uid"] === "string" ? attributeNode[":block/uid"] : "",
-      title: title.trim(),
-    },
-    values,
-    sourceUid: typeof source?.[":block/uid"] === "string" ? source[":block/uid"] : null,
-    sourceString: typeof source?.[":block/string"] === "string" ? source[":block/string"] : "",
-    valueSourceUids,
-    labels: withLabels ? annotationLabels(node) : [],
+    string: node[":block/string"],
+    order: Number.isFinite(node[":block/order"]) ? node[":block/order"] : null,
+    parentUid: typeof parentUid === "string" ? parentUid : null,
+    children: asList(node[":block/children"])
+      .map((child) => entityOf(child))
+      .filter((child) => child?.string != null)
+      .sort(byOrder),
   };
 }
 
-function pageRows(rows, limit) {
-  const found = [];
-  const seen = new Set();
-  for (const row of Array.isArray(rows) ? rows : []) {
-    if (!Array.isArray(row)) continue;
-    const uid = row[0];
-    const title = row[1];
-    if (typeof uid !== "string" || typeof title !== "string" || !uid || !title || seen.has(uid)) continue;
-    seen.add(uid);
-    found.push({ uid, title });
-  }
-  found.sort((a, b) => compareText(a.title, b.title) || compareText(a.uid, b.uid));
-  return found.slice(0, limit == null ? found.length : limit);
+function attributeOf(harc) {
+  const title = asList(harc?.[":harc/a"])[0]?.[":node/title"];
+  return typeof title === "string" && title.trim() ? title.trim() : null;
 }
 
-export function normalizePull(pulled, context = {}) {
-  const uid = context.uid;
-  const pages = context.pages instanceof Set ? context.pages : new Set();
-  const blocks = context.blocks instanceof Set ? context.blocks : new Set();
-  const center = { uid };
-  if (typeof pulled?.[":node/title"] === "string" && uid) {
-    center.title = pulled[":node/title"];
-    pages.add(uid);
-  } else if (pulled && uid) {
-    blocks.add(uid);
-  }
-  if (typeof pulled?.[":block/string"] === "string") center.string = pulled[":block/string"];
-  const centerEntity = [{ uid, title: center.title || center.string || "" }];
+export function normalizeOut(list) {
   const harcs = [];
-  for (const node of asList(pulled?.[":harc/_e"])) {
-    const record = harcRecord(node, centerEntity, true);
-    if (!record) continue;
-    for (const value of record.values) trackValue(value, pages, blocks);
-    harcs.push(record);
+  for (const harc of asList(list)) {
+    const attribute = attributeOf(harc);
+    if (!attribute) continue;
+    harcs.push({
+      uid: harc[":block/uid"] ?? null,
+      attribute,
+      source: sourceOf(asList(harc[":harc/a-source"])[0]),
+      values: asList(harc[":harc/v"]).map(entityOf).filter(Boolean),
+      labels: labelsOf(harc),
+    });
   }
-  for (const node of asList(pulled?.[":harc/_v"])) {
-    const entities = [];
-    for (const entityNode of asList(node?.[":harc/e"])) {
-      const entity = remember(entityNode, pages, blocks);
-      if (entity) entities.push(entity);
-    }
-    const record = harcRecord(node, entities, false);
-    if (!record) continue;
-    for (const value of record.values) trackValue(value, pages, blocks);
-    harcs.push(record);
+  return harcs;
+}
+
+export function normalizeIn(list) {
+  const harcs = [];
+  for (const harc of asList(list)) {
+    const attribute = attributeOf(harc);
+    const entity = entityOf(asList(harc?.[":harc/e"])[0]);
+    if (!attribute || !entity) continue;
+    harcs.push({
+      uid: harc[":block/uid"] ?? null,
+      attribute,
+      entity,
+      source: sourceOf(asList(harc[":harc/a-source"])[0]),
+      valueSourceUids: asList(harc[":harc/v-source"]).map((item) => item?.[":block/uid"]).filter(Boolean),
+      labels: labelsOf(harc),
+    });
   }
-  const outbound = [];
-  const seenOut = new Set();
-  for (const ref of asList(pulled?.[":block/refs"])) {
-    const refUid = ref?.[":block/uid"];
-    const title = ref?.[":node/title"];
-    if (typeof refUid !== "string" || refUid === uid || typeof title !== "string" || !title || seenOut.has(refUid)) {
-      continue;
-    }
-    seenOut.add(refUid);
-    pages.add(refUid);
-    outbound.push({ uid: refUid, title });
+  return harcs;
+}
+
+export function normalizeMentions(list, cap = MENTION_CAP) {
+  const mentions = [];
+  for (const block of asList(list)) {
+    const uid = block?.[":block/uid"];
+    const page = entityOf(block?.[":block/page"]);
+    if (typeof uid !== "string" || typeof block[":block/string"] !== "string" || !page?.title) continue;
+    mentions.push({
+      uid,
+      string: block[":block/string"],
+      page,
+      refs: asList(block[":block/refs"]).map(entityOf).filter(Boolean),
+    });
   }
-  const children = asList(pulled?.[":block/children"]).filter((child) => typeof child?.[":block/uid"] === "string");
-  children.sort((a, b) => {
-    const ao = Number.isFinite(a[":block/order"]) ? a[":block/order"] : Number.MAX_SAFE_INTEGER;
-    const bo = Number.isFinite(b[":block/order"]) ? b[":block/order"] : Number.MAX_SAFE_INTEGER;
-    if (ao !== bo) return ao - bo;
-    return compareText(a[":block/uid"], b[":block/uid"]);
-  });
-  const outline = children.map((child) => {
-    blocks.add(child[":block/uid"]);
-    return {
-      uid: child[":block/uid"],
-      string: typeof child[":block/string"] === "string" ? child[":block/string"] : "",
-      order: Number.isFinite(child[":block/order"]) ? child[":block/order"] : 0,
-    };
-  });
-  for (const page of context.inbound ?? []) if (page?.uid) pages.add(page.uid);
-  if (context.namespaceParent?.uid) pages.add(context.namespaceParent.uid);
+  mentions.sort((a, b) => (a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0));
+  return mentions.slice(0, cap);
+}
+
+export function normalizeOutline(root) {
+  const blocks = (node) => asList(node?.[":block/children"])
+    .map((child) => {
+      const entity = entityOf(child);
+      if (!entity || entity.string == null) return null;
+      return {
+        uid: entity.uid,
+        string: entity.string,
+        order: entity.order ?? 0,
+        refs: asList(child[":block/refs"]).map(entityOf).filter(Boolean),
+        children: blocks(child),
+      };
+    })
+    .filter(Boolean)
+    .sort(byOrder);
+  return blocks(root);
+}
+
+export function normalizeCenter(pulled, uid) {
+  const title = pulled?.[":node/title"];
+  if (typeof title === "string") return { uid, kind: "page", title };
+  const parentNode = asList(pulled?.[":block/_children"])[0];
+  const parent = entityOf(parentNode);
   return {
-    fixture: {
-      center,
-      harcs,
-      outbound,
-      inbound: context.inbound ?? [],
-      outline,
-      namespaceParent: context.namespaceParent ?? null,
-      settings: context.settings ?? {},
-    },
-    pageUids: pages,
-    blockUids: blocks,
+    uid,
+    kind: "block",
+    string: typeof pulled?.[":block/string"] === "string" ? pulled[":block/string"] : "",
+    page: entityOf(pulled?.[":block/page"]),
+    parent,
+    siblings: asList(parentNode?.[":block/children"])
+      .map(entityOf)
+      .filter((item) => item?.string != null && item.uid !== uid)
+      .sort(byOrder),
   };
+}
+
+export function normalizePeer(parentUid, pulled) {
+  return {
+    parentUid,
+    incoming: asList(pulled?.[":harc/_v"]).flatMap((harc) => {
+      const attribute = attributeOf(harc);
+      const entity = entityOf(asList(harc?.[":harc/e"])[0]);
+      return attribute && entity ? [{ attribute, entity }] : [];
+    }),
+    outgoing: asList(pulled?.[":harc/_e"]).flatMap((harc) => {
+      const attribute = attributeOf(harc);
+      if (!attribute) return [];
+      return asList(harc[":harc/v"]).map(entityOf).filter(Boolean).map((value) => ({ attribute, value }));
+    }),
+  };
+}
+
+function pad(number) {
+  return String(number).padStart(2, "0");
+}
+
+export function adjacentDayUids(uid) {
+  const match = DAILY_UID.exec(String(uid ?? ""));
+  if (!match) return null;
+  const date = new Date(Number(match[3]), Number(match[1]) - 1, Number(match[2]));
+  if (Number.isNaN(date.getTime())) return null;
+  const shift = (days) => {
+    const next = new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
+    return `${pad(next.getMonth() + 1)}-${pad(next.getDate())}-${next.getFullYear()}`;
+  };
+  return { previous: shift(-1), next: shift(1) };
+}
+
+function pull(data, pattern, uid) {
+  try {
+    return data.pull(pattern, entityString(uid)) ?? null;
+  } catch (error) {
+    console.error("[compass] pull failed", error);
+    return null;
+  }
+}
+
+function prefixPages(data, prefix) {
+  if (!data.q || !prefix) return [];
+  let rows = [];
+  try {
+    rows = data.q(PREFIX_QUERY, prefix) ?? [];
+  } catch (error) {
+    console.error("[compass] namespace query failed", error);
+    return [];
+  }
+  const pages = [];
+  for (const [uid, title] of rows) {
+    if (typeof uid !== "string" || typeof title !== "string") continue;
+    const rest = title.slice(prefix.length);
+    if (!rest || rest.includes("/")) continue;
+    pages.push({ uid, title });
+  }
+  pages.sort((a, b) => (a.title < b.title ? -1 : a.title > b.title ? 1 : 0));
+  return pages.slice(0, NAMESPACE_CAP);
+}
+
+function pageByTitle(data, title) {
+  try {
+    const found = data.pull("[:block/uid :node/title]", `[:node/title "${title.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"]`);
+    return entityOf(found);
+  } catch {
+    return null;
+  }
+}
+
+function namespaceOf(data, center) {
+  const title = center.title ?? "";
+  const mark = title.lastIndexOf("/");
+  const prefix = mark > 0 ? title.slice(0, mark) : "";
+  const parent = prefix ? pageByTitle(data, prefix) : null;
+  return {
+    parent: parent?.title ? parent : null,
+    children: prefixPages(data, `${title}/`),
+    siblings: parent?.title ? prefixPages(data, `${prefix}/`).filter((page) => page.uid !== center.uid) : [],
+  };
+}
+
+function daysOf(data, uid) {
+  const around = adjacentDayUids(uid);
+  if (!around) return null;
+  const page = (dayUid) => {
+    const found = entityOf(pull(data, "[:block/uid :node/title]", dayUid));
+    return found?.title ? found : null;
+  };
+  return { previous: page(around.previous), next: page(around.next) };
 }
 
 function graphName() {
@@ -281,291 +300,119 @@ function graphName() {
   return typeof name === "string" && name ? name : "graph";
 }
 
-function dataApi() {
-  const data = roamApi()?.data;
-  if (!data?.pull) throw new Error("roamAlphaAPI.data is unavailable");
-  return data;
+function withLock(name, task) {
+  const locks = globalThis.navigator?.locks;
+  if (!locks?.request) return task();
+  let result = { ok: false, reason: "locked" };
+  return locks.request(name, { ifAvailable: true }, async (lock) => {
+    if (!lock) return;
+    result = await task();
+  }).then(() => result);
 }
 
-function lookupNamespace(data, title, centerUid, pages) {
-  const prefix = namespacePrefix(title);
-  if (!prefix) return null;
-  try {
-    const found = data.pull("[:block/uid :node/title]", [":node/title", prefix]);
-    const foundUid = found?.[":block/uid"];
-    const name = found?.[":node/title"];
-    if (typeof foundUid !== "string" || !foundUid || foundUid === centerUid || typeof name !== "string" || !name) {
-      return null;
-    }
-    pages.add(foundUid);
-    return { uid: foundUid, title: name };
-  } catch (error) {
-    console.error("[compass] namespace lookup failed", error);
-    return null;
-  }
-}
-
-function lookupInbound(data, uid, pulled, limit, pages) {
-  if (!data?.q) return [];
-  let eid = pulled?.[":db/id"];
-  if (typeof eid !== "number") {
-    try {
-      eid = data.pull("[:db/id]", [":block/uid", uid])?.[":db/id"];
-    } catch (error) {
-      console.error("[compass] inbound failed", error);
-      return [];
-    }
-  }
-  if (typeof eid !== "number") return [];
-  try {
-    const rows = data.q(INBOUND_QUERY, eid);
-    const found = pageRows(rows, limit);
-    for (const page of found) pages.add(page.uid);
-    return found;
-  } catch (error) {
-    console.error("[compass] inbound failed", error);
-    return [];
-  }
-}
-
-async function pullFixture(uid, settings) {
-  const data = dataApi();
-  let pulled = null;
-  try {
-    pulled = data.pull(CENTER_PULL, [":block/uid", uid]);
-  } catch (error) {
-    console.error("[compass] pull failed", error);
-    pulled = null;
-  }
-  const pages = new Set();
-  const blocks = new Set();
-  const inbound = lookupInbound(data, uid, pulled, maxPerZone(settings), pages);
-  const title = typeof pulled?.[":node/title"] === "string" ? pulled[":node/title"] : null;
-  const namespaceParent = lookupNamespace(data, title, uid, pages);
-  const normalized = normalizePull(pulled, {
-    uid,
-    settings,
-    inbound,
-    namespaceParent,
-    pages,
-    blocks,
-  });
-  return { ...normalized, missing: pulled == null };
-}
-
-function present(fixture) {
-  const classified = classify(fixture);
-  const showOutline = classified.nodes.some((node) => node.zone === "outline");
-  return {
-    fixture,
-    classified,
-    placed: layout(classified.nodes, { showOutline }),
-    showOutline,
-  };
-}
-
-function isProtectedOp(op) {
-  const blob = `${op?.string ?? ""}\n${op?.title ?? ""}`;
-  return PROTECTED.some((token) => blob.includes(token));
-}
-
-function editedSourceIds(fixture, ops) {
-  const sources = new Set();
-  for (const harc of fixture?.harcs ?? []) if (harc?.sourceUid) sources.add(harc.sourceUid);
-  const ids = new Set();
-  for (const op of ops ?? []) {
-    if ((op.op === "update" || op.op === "delete") && sources.has(op.uid)) ids.add(op.uid);
-    if (op.op === "create" && sources.has(op.parentUid)) ids.add(op.parentUid);
-  }
-  return [...ids];
-}
-
-async function sourcesStale(fixture, ops) {
-  const data = dataApi();
-  for (const uid of editedSourceIds(fixture, ops)) {
-    const harc = (fixture.harcs ?? []).find((item) => item?.sourceUid === uid);
-    if (!harc) continue;
-    let pulled = null;
-    try {
-      pulled = data.pull("[:block/uid :block/string]", [":block/uid", uid]);
-    } catch (error) {
-      console.error("[compass] source pull failed", error);
-      return true;
-    }
-    if (pulled == null || pulled[":block/string"] !== harc.sourceString) return true;
-  }
-  return false;
-}
-
-async function applyOp(op) {
-  const api = roamApi();
-  const data = api?.data;
-  if (!data) throw new Error("roamAlphaAPI.data is unavailable");
-  if (op.op === "create") {
-    await data.block.create({
-      location: { "parent-uid": op.parentUid, order: op.order || "last" },
-      block: { string: op.string },
-    });
-    return;
-  }
+async function applyOp(data, op) {
   if (op.op === "update") {
     await data.block.update({ block: { uid: op.uid, string: op.string } });
-    return;
-  }
-  if (op.op === "delete") {
+  } else if (op.op === "create") {
+    const block = { string: op.string };
+    if (op.uid) block.uid = op.uid;
+    await data.block.create({ location: { "parent-uid": op.parentUid, order: op.order }, block });
+  } else if (op.op === "move") {
+    await data.block.move({ location: { "parent-uid": op.parentUid, order: op.order }, block: { uid: op.uid } });
+  } else if (op.op === "delete") {
     await data.block.delete({ block: { uid: op.uid } });
-    return;
+  } else {
+    throw new Error(`Unknown write ${op.op}`);
   }
-  if (op.op === "create-page") {
-    await data.page.create({ page: { title: op.title } });
-    return;
-  }
-  if (op.op === "open") {
-    await api.ui.mainWindow.openBlock({ block: { uid: op.uid } });
-  }
-}
-
-function escapeReg(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export function createHost({ lifecycle }) {
   if (!lifecycle?.add) throw new TypeError("A lifecycle is required");
-  let displayed = null;
-  let latest = null;
-  let currentWatch = null;
-  let schedule = () => {};
-  let sidecarUid = null;
+  let watches = [];
+  let sidecar = null;
   let alive = true;
-  let chain = Promise.resolve();
+  let queue = Promise.resolve();
 
-  function clearWatch() {
-    if (!currentWatch) return;
-    const watch = currentWatch;
-    currentWatch = null;
-    try {
-      roamApi()?.data?.removePullWatch?.(watch.pattern, watch.entity, watch.callback);
-    } catch (error) {
-      console.error("[compass] unwatch failed", error);
-    }
+  function data() {
+    const api = roamApi()?.data;
+    if (!api?.pull) throw new Error("roamAlphaAPI.data is unavailable");
+    return api;
   }
 
-  async function removeSidecar(uid) {
-    if (!uid) return;
-    try {
-      await roamApi()?.ui?.rightSidebar?.removeWindow?.({
-        window: { type: "outline", "block-uid": uid },
-      });
-    } catch (error) {
-      console.error("[compass] sidecar", error);
-    }
-  }
-
-  async function closeSidecar() {
-    const uid = sidecarUid;
-    sidecarUid = null;
-    await removeSidecar(uid);
-  }
-
-  lifecycle.add(() => closeSidecar());
-  lifecycle.add(() => { clearWatch(); });
-  lifecycle.add(() => { alive = false; });
-
-  function enqueue(task) {
-    const run = chain.then(task, task);
-    chain = run.then(() => undefined, () => undefined);
-    return run;
-  }
-
-  async function load(uid, settings) {
-    const bundle = await pullFixture(uid, settings);
-    const view = present(bundle.fixture);
-    if (displayed === uid) latest = { fixture: bundle.fixture, settings };
-    return {
-      ...view,
-      pageUids: bundle.pageUids,
-      blockUids: bundle.blockUids,
-      missing: bundle.missing,
-    };
-  }
-
-  function watch(uid) {
-    if (!uid) return;
-    const data = roamApi()?.data;
-    if (!data?.addPullWatch || !data?.removePullWatch) return;
-    const entity = entityString(uid);
-    if (currentWatch && currentWatch.entity === entity && currentWatch.pattern === CENTER_PULL) return;
-    clearWatch();
-    // Own writes echo back through the watch. Schedule a repull; do not apply the delta.
-    const callback = () => { schedule(); };
-    try {
-      data.addPullWatch(CENTER_PULL, entity, callback);
-      currentWatch = { pattern: CENTER_PULL, entity, callback };
-    } catch (error) {
-      console.error("[compass] watch failed", error);
-    }
-  }
-
-  async function runCommit(snapshot, action) {
-    if (!snapshot?.center?.uid) return { ok: false, reason: "empty" };
-    let fixture = snapshot;
-    let ops = planWrite(fixture, action).ops ?? [];
-    if (ops.some(isProtectedOp)) throw new Error("Refusing a protected write");
-    if (await sourcesStale(fixture, ops)) {
-      const rebuilt = await pullFixture(fixture.center.uid, fixture.settings);
-      fixture = rebuilt.fixture;
-      if (displayed === fixture.center.uid) latest = { fixture, settings: fixture.settings };
-      ops = planWrite(fixture, action).ops ?? [];
-      if (ops.some(isProtectedOp)) throw new Error("Refusing a protected write");
-    }
-    if (!ops.length) return { ok: true, empty: true };
-    for (const op of ops) await applyOp(op);
-    if (displayed !== fixture.center.uid) return { ok: true };
-    const model = await load(fixture.center.uid, fixture.settings);
-    return { ok: true, model };
-  }
-
-  function withLock(snapshot, action) {
-    const uid = snapshot?.center?.uid;
-    if (!uid) return Promise.resolve({ ok: false, reason: "empty" });
-    const locks = globalThis.navigator?.locks;
-    if (!locks?.request) return runCommit(snapshot, action);
-    const name = `compass:${graphName()}:${uid}`;
-    let result = { ok: false, reason: "lock" };
-    return locks.request(name, { ifAvailable: true }, async (lock) => {
-      if (!lock) return;
-      result = await runCommit(snapshot, action);
-    }).then(() => result);
-  }
-
-  function commit(action) {
-    const snapshot = latest?.fixture ?? null;
-    return enqueue(() => withLock(snapshot, action));
-  }
-
-  function search(text) {
-    const needle = String(text ?? "").trim();
-    if (!needle) return [];
-    const data = roamApi()?.data;
-    if (!data?.q) return [];
-    try {
-      return pageRows(data.q(SEARCH_RE, `(?i)${escapeReg(needle)}`), 20);
-    } catch {
+  function unwatch() {
+    const api = roamApi()?.data;
+    for (const watch of watches.splice(0)) {
       try {
-        return pageRows(data.q(SEARCH_INCLUDES, needle), 20);
+        api?.removePullWatch?.(watch.pattern, watch.entity, watch.callback);
       } catch (error) {
-        console.error("[compass] search failed", error);
-        return [];
+        console.error("[compass] unwatch failed", error);
       }
+    }
+  }
+
+  function watch(uid, onChange) {
+    unwatch();
+    const api = roamApi()?.data;
+    if (!uid || !api?.addPullWatch || !api?.removePullWatch) return;
+    const entity = entityString(uid);
+    // Our own writes come back through these too; the view repulls and the keyed DOM absorbs them.
+    const callback = () => onChange();
+    for (const pattern of WATCHES) {
+      try {
+        api.addPullWatch(pattern, entity, callback);
+        watches.push({ pattern, entity, callback });
+      } catch (error) {
+        console.error("[compass] watch failed", error);
+      }
+    }
+  }
+
+  function snapshot(uid, modelSettings) {
+    const api = data();
+    const pulled = pull(api, CENTER_PULL, uid);
+    if (!pulled || (pulled[":node/title"] == null && pulled[":block/string"] == null)) {
+      return { center: { uid, kind: "page", title: uid }, missing: true };
+    }
+    const center = normalizeCenter(pulled, uid);
+    const snap = {
+      center,
+      outline: normalizeOutline(pull(api, OUTLINE_PULL, uid)),
+      out: normalizeOut(pulled[":harc/_e"]),
+      in: normalizeIn(pulled[":harc/_v"]),
+      mentions: normalizeMentions(pulled[":block/_refs"]),
+      namespace: center.kind === "page" ? namespaceOf(api, center) : null,
+      days: center.kind === "page" ? daysOf(api, uid) : null,
+      peers: [],
+    };
+    snap.peers = typedParentUids(snap, modelSettings).map((parentUid) => normalizePeer(parentUid, pull(api, PEER_PULL, parentUid)));
+    return snap;
+  }
+
+  function titles() {
+    const api = roamApi()?.data;
+    if (!api?.q) return [];
+    try {
+      return (api.q(TITLES_QUERY) ?? []).flatMap(([uid, title]) => (
+        typeof uid === "string" && typeof title === "string" ? [{ uid, title }] : []
+      ));
+    } catch (error) {
+      console.error("[compass] titles failed", error);
+      return [];
     }
   }
 
   async function openPageUid() {
     try {
       const uid = await roamApi()?.ui?.mainWindow?.getOpenPageOrBlockUid?.();
-      return typeof uid === "string" && uid ? uid : null;
+      if (typeof uid === "string" && uid) return uid;
     } catch (error) {
       console.error("[compass] open page", error);
+    }
+    // The daily notes log has no single open page; today's note stands in.
+    try {
+      const today = roamApi()?.util?.dateToPageUid?.(new Date());
+      return typeof today === "string" && today ? today : null;
+    } catch {
       return null;
     }
   }
@@ -580,53 +427,108 @@ export function createHost({ lifecycle }) {
     }
   }
 
-  async function openNode(uid, page) {
-    const main = roamApi()?.ui?.mainWindow;
-    if (!main || !uid) return;
-    if (page) await main.openPage({ page: { uid } });
-    else await main.openBlock({ block: { uid } });
+  async function openInSidebar(uid, kind) {
+    if (!uid) return;
+    await roamApi()?.ui?.rightSidebar?.addWindow?.({
+      window: { type: kind === "block" ? "block" : "outline", "block-uid": uid },
+    });
   }
 
+  async function openInMain(uid, kind) {
+    const main = roamApi()?.ui?.mainWindow;
+    if (!main || !uid) return;
+    if (kind === "block") await main.openBlock({ block: { uid } });
+    else await main.openPage({ page: { uid } });
+  }
+
+  function sidebarHas(uid) {
+    try {
+      return (roamApi()?.ui?.rightSidebar?.getWindows?.() ?? []).some((item) => (
+        item?.["block-uid"] === uid || item?.["page-uid"] === uid
+      ));
+    } catch {
+      return false;
+    }
+  }
+
+  async function removeWindow(uid) {
+    try {
+      await roamApi()?.ui?.rightSidebar?.removeWindow?.({ window: { type: "outline", "block-uid": uid } });
+    } catch (error) {
+      console.error("[compass] sidecar", error);
+    }
+  }
+
+  async function closeSidecar() {
+    const current = sidecar;
+    sidecar = null;
+    if (current?.owned) await removeWindow(current.uid);
+  }
+
+  // Compass only removes a sidebar window it opened itself.
   async function syncSidecar(uid, enabled) {
     if (!alive) return;
     if (!enabled || !uid) {
       await closeSidecar();
       return;
     }
-    if (sidecarUid === uid) return;
-    const previous = sidecarUid;
-    sidecarUid = null;
-    if (previous && previous !== uid) await removeSidecar(previous);
-    if (!alive) return;
+    if (sidecar?.uid === uid) return;
+    await closeSidecar();
+    if (sidebarHas(uid)) {
+      sidecar = { uid, owned: false };
+      return;
+    }
     try {
-      await roamApi()?.ui?.rightSidebar?.addWindow?.({
-        window: { type: "outline", "block-uid": uid },
-      });
-      if (!alive) {
-        await removeSidecar(uid);
-        return;
-      }
-      sidecarUid = uid;
+      await roamApi()?.ui?.rightSidebar?.addWindow?.({ window: { type: "outline", "block-uid": uid } });
+      sidecar = { uid, owned: true };
+      if (!alive) await closeSidecar();
     } catch (error) {
       console.error("[compass] sidecar", error);
     }
   }
 
+  function releaseSidecar() {
+    sidecar = null;
+  }
+
+  // Rewrites the Name:: block behind one typed edge. Plans against a fresh pull of that block.
+  function move({ sourceUid, fromAttribute, toAttribute, value, expectedString }) {
+    const task = () => withLock(`compass:${graphName()}:${sourceUid}`, async () => {
+      const api = data();
+      const source = sourceOf(pull(api, SOURCE, sourceUid));
+      if (!source) return { ok: false, reason: "missing" };
+      if (expectedString != null && source.string !== expectedString) return { ok: false, reason: "changed" };
+      const newUid = roamApi()?.util?.generateUID?.();
+      const plan = planMove({ source, fromAttribute, toAttribute, value, newUid });
+      if (!plan.ops.length) return { ok: false, reason: plan.reason };
+      if (plan.ops.some((op) => op.op === "create" && !op.uid)) return { ok: false, reason: "no-uid" };
+      for (const op of plan.ops) await applyOp(api, op);
+      return { ok: true, ops: plan.ops };
+    });
+    const run = queue.then(task, task);
+    queue = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  lifecycle.add(() => closeSidecar());
+  lifecycle.add(() => unwatch());
+  lifecycle.add(() => { alive = false; });
+
   return {
-    load,
-    commit,
+    snapshot,
     watch,
-    unwatch: clearWatch,
-    search,
+    unwatch,
+    titles,
     openPageUid,
     focusedBlock,
-    openNode,
+    openInSidebar,
+    openInMain,
     syncSidecar,
+    releaseSidecar,
     closeSidecar,
+    move,
     blockContextMenu() {
       return roamApi()?.ui?.blockContextMenu ?? null;
     },
-    setDisplayed(uid) { displayed = uid; },
-    setScheduler(fn) { schedule = typeof fn === "function" ? fn : () => {}; },
   };
 }

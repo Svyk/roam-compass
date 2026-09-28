@@ -1,5 +1,11 @@
-/* Roam injects this stylesheet on load and removes it on unload. */
+/* Roam injects this stylesheet on load and removes it on unload. Every rule stays under .compass-root. */
 .compass-root {
+  --compass-ink: CanvasText;
+  --compass-paper: Canvas;
+  --compass-accent: #106ba3;
+  --compass-line: color-mix(in srgb, var(--compass-ink) 40%, transparent);
+  --compass-faint: color-mix(in srgb, var(--compass-ink) 22%, transparent);
+  --compass-hover: color-mix(in srgb, var(--compass-ink) 7%, var(--compass-paper));
   position: fixed;
   z-index: 20;
   top: 0;
@@ -9,17 +15,44 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  color: var(--compass-ink, CanvasText);
-  background-color: var(--compass-paper, Canvas);
+  color: var(--compass-ink);
+  background-color: var(--compass-paper);
   font: inherit;
+  font-size: 14px;
+}
+
+.compass-root[data-tone="dark"] {
+  --compass-accent: #48aff0;
 }
 
 .compass-root[hidden] {
   display: none;
 }
 
-.compass-root.compass-dragging {
-  cursor: grabbing;
+.compass-root button {
+  border: 1px solid var(--compass-line);
+  border-radius: 4px;
+  padding: 2px 8px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.compass-root button:hover {
+  background: var(--compass-hover);
+}
+
+.compass-root button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.compass-root button:focus-visible,
+.compass-root .compass-node:focus-visible,
+.compass-root .compass-stage:focus-visible {
+  outline: 2px solid var(--compass-accent);
+  outline-offset: 2px;
 }
 
 .compass-root .compass-bar {
@@ -31,38 +64,24 @@
   align-items: center;
   gap: 6px;
   padding: 8px;
-  border-bottom: 1px solid currentColor;
+  border-bottom: 1px solid var(--compass-line);
 }
 
-.compass-root button {
-  border: 1px solid currentColor;
-  border-radius: 4px;
-  padding: 2px 8px;
-  color: inherit;
-  background: transparent;
-  font: inherit;
-  cursor: pointer;
+.compass-root .compass-bar button[aria-pressed="true"] {
+  border-color: var(--compass-accent);
+  font-weight: 600;
 }
 
-.compass-root button:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.compass-root .compass-outline[aria-pressed="true"] {
-  font-weight: 700;
+.compass-root .compass-find {
+  position: relative;
 }
 
 .compass-root .compass-search {
-  width: 180px;
+  width: 220px;
   box-sizing: border-box;
-}
-
-.compass-root input {
-  box-sizing: border-box;
-  border: 1px solid currentColor;
+  border: 1px solid var(--compass-line);
   border-radius: 4px;
-  padding: 2px 6px;
+  padding: 3px 8px;
   color: inherit;
   background: transparent;
   font: inherit;
@@ -70,15 +89,17 @@
 
 .compass-root .compass-results {
   position: absolute;
-  z-index: 6;
-  top: 100%;
-  left: 8px;
-  max-height: 240px;
-  margin: 0;
-  padding: 4px;
+  z-index: 8;
+  top: calc(100% + 4px);
+  left: 0;
+  width: 320px;
+  max-height: 320px;
   overflow: auto;
-  border: 1px solid currentColor;
-  background-color: var(--compass-paper, Canvas);
+  padding: 4px;
+  border: 1px solid var(--compass-line);
+  border-radius: 6px;
+  background: var(--compass-paper);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
 }
 
 .compass-root .compass-results[hidden] {
@@ -88,31 +109,69 @@
 .compass-root .compass-result {
   display: block;
   width: 100%;
-  border: 0;
+  margin: 0 0 2px;
+  border-color: transparent;
   text-align: left;
-  background: transparent;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .compass-root .compass-result-active {
-  font-weight: 700;
+  border-color: var(--compass-accent);
+}
+
+.compass-root .compass-result-none {
+  padding: 4px 8px;
+  opacity: 0.7;
 }
 
 .compass-root .compass-status {
-  margin-left: auto;
+  flex: 1 1 160px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: 0.85;
 }
 
-.compass-root .compass-body {
+.compass-root .compass-pins {
   display: flex;
-  flex: 1;
-  min-height: 0;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--compass-faint);
+}
+
+.compass-root .compass-pins[hidden] {
+  display: none;
+}
+
+.compass-root .compass-pin-chip {
+  display: inline-flex;
+}
+
+.compass-root .compass-pin-jump {
+  max-width: 220px;
+  overflow: hidden;
+  border-radius: 12px 0 0 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.compass-root .compass-pin-remove {
+  border-left: 0;
+  border-radius: 0 12px 12px 0;
 }
 
 .compass-root .compass-stage {
   position: relative;
   flex: 1;
-  min-width: 0;
   overflow: hidden;
-  user-select: none;
+  outline: none;
+  cursor: grab;
   touch-action: none;
 }
 
@@ -125,235 +184,399 @@
   transform-origin: 0 0;
 }
 
+.compass-root .compass-world.compass-glide {
+  transition: transform 280ms ease;
+}
+
 .compass-root .compass-edges {
   position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
   pointer-events: none;
 }
 
-.compass-root .compass-center {
-  position: absolute;
-  z-index: 2;
-  top: -32px;
-  left: -100px;
-  box-sizing: border-box;
-  width: 200px;
-  height: 64px;
-  padding: 4px 6px;
-  overflow: auto;
-  border: 2px solid currentColor;
-  border-radius: 6px;
-  background-color: var(--compass-paper, Canvas);
+.compass-root .compass-edge-line {
+  fill: none;
+  stroke: var(--compass-line);
+  stroke-width: 1.25;
 }
 
-.compass-root .compass-center-title {
-  overflow: hidden;
-  font-weight: 700;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+.compass-root .compass-edge[data-style="typed"] .compass-edge-line {
+  stroke: var(--compass-accent);
+  stroke-width: 1.75;
 }
 
-.compass-root .compass-badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+.compass-root .compass-edge[data-style="link"] .compass-edge-line,
+.compass-root .compass-edge[data-style="mention"] .compass-edge-line {
+  stroke-dasharray: 5 4;
 }
 
-.compass-root .compass-badge {
-  max-width: 100%;
-  overflow: hidden;
+.compass-root .compass-edge[data-style="sibling"] .compass-edge-line {
+  stroke: var(--compass-faint);
+  stroke-dasharray: 2 4;
+}
+
+.compass-root .compass-edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 12;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.compass-root .compass-edge:hover .compass-edge-line {
+  stroke-width: 2.5;
+}
+
+.compass-root .compass-edge-label {
   font-size: 11px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.compass-root .compass-slot {
-  position: absolute;
-}
-
-.compass-root .compass-slot[hidden] {
-  display: none;
+  fill: var(--compass-ink);
+  text-anchor: middle;
+  paint-order: stroke;
+  stroke: var(--compass-paper);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  pointer-events: none;
 }
 
 .compass-root .compass-node {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
   box-sizing: border-box;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  padding: 0 44px 0 8px;
-  border: 1px solid currentColor;
-  border-radius: 4px;
-  text-align: left;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  background-color: var(--compass-paper, Canvas);
+  padding: 0 10px;
+  border: 1px solid var(--compass-line);
+  border-radius: 6px;
+  background: var(--compass-paper);
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+  transition: transform 260ms ease, width 260ms ease, height 260ms ease, opacity 200ms ease;
 }
 
-.compass-root .compass-node[data-kind="typed"] {
-  border-width: 2px;
+.compass-root .compass-node:hover {
+  background: var(--compass-hover);
 }
 
-.compass-root .compass-node[data-kind="inverse"] {
-  border-width: 1px;
+.compass-root .compass-node[data-style="typed"] {
+  border: 1.5px solid var(--compass-accent);
 }
 
-.compass-root .compass-node[data-kind="link"],
-.compass-root .compass-node[data-kind="mention"],
-.compass-root .compass-node[data-kind="namespace"] {
+.compass-root .compass-node[data-style="link"],
+.compass-root .compass-node[data-style="mention"] {
   border-style: dashed;
 }
 
-.compass-root .compass-node-writable {
+.compass-root .compass-node[data-style="structural"] {
+  border-style: dotted;
+}
+
+.compass-root .compass-node[data-style="sibling"] {
+  border-style: dashed;
+  border-color: var(--compass-faint);
+  font-size: 12px;
+}
+
+.compass-root .compass-node[data-kind="block"] {
+  border-radius: 2px;
+  font-style: italic;
+}
+
+.compass-root .compass-node.compass-writable {
   cursor: grab;
 }
 
-.compass-root .compass-open {
-  position: absolute;
-  z-index: 1;
-  top: 2px;
-  right: 2px;
-  padding: 0 4px;
-  font-size: 11px;
+.compass-root .compass-node.compass-lifted {
+  opacity: 0.35;
 }
 
-.compass-root .compass-gutter {
-  position: absolute;
-  z-index: 3;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px dashed currentColor;
-  opacity: 0.8;
-  pointer-events: none;
-}
-
-.compass-root .compass-gutter-north {
-  top: 0;
-  right: 18%;
-  left: 18%;
-  height: 52px;
-}
-
-.compass-root .compass-gutter-south {
-  right: 18%;
-  bottom: 0;
-  left: 18%;
-  height: 52px;
-}
-
-.compass-root .compass-gutter-west {
-  top: 18%;
-  bottom: 18%;
-  left: 0;
-  width: 52px;
-  writing-mode: vertical-rl;
-}
-
-.compass-root .compass-gutter-east {
-  top: 18%;
-  right: 0;
-  bottom: 18%;
-  width: 52px;
-  writing-mode: vertical-rl;
-}
-
-.compass-root.compass-dragging .compass-gutter {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.compass-root .compass-gutter-hot {
-  border-width: 2px;
-}
-
-.compass-root .compass-overflow {
-  position: absolute;
-  z-index: 2;
-  font-size: 11px;
-  pointer-events: none;
-}
-
-.compass-root .compass-side {
-  box-sizing: border-box;
-  flex: none;
-  width: 240px;
-  padding: 8px;
-  overflow: auto;
-  border-left: 1px solid currentColor;
-  background-color: var(--compass-paper, Canvas);
-}
-
-.compass-root .compass-field {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0 0 6px;
-}
-
-.compass-root .compass-side input,
-.compass-root .compass-popover input {
-  width: 100%;
-}
-
-.compass-root .compass-pin-row,
-.compass-root .compass-lens-row,
-.compass-root .compass-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-bottom: 4px;
-}
-
-.compass-root .compass-pin-jump,
-.compass-root .compass-lens-apply {
-  flex: 1;
+.compass-root .compass-node-title {
+  min-width: 0;
   overflow: hidden;
-  text-align: left;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.compass-root .compass-popover {
-  position: absolute;
-  z-index: 8;
-  box-sizing: border-box;
-  width: 220px;
-  padding: 8px;
-  border: 1px solid currentColor;
-  border-radius: 6px;
-  background-color: var(--compass-paper, Canvas);
+.compass-root .compass-node.compass-node-center {
+  z-index: 2;
+  display: block;
+  padding: 0;
+  border: 2px solid var(--compass-ink);
+  border-radius: 8px;
+  font-style: normal;
+  cursor: default;
 }
 
-.compass-root .compass-popover[hidden] {
+.compass-root .compass-node.compass-node-center:hover {
+  background: var(--compass-paper);
+}
+
+.compass-root .compass-center-head {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  box-sizing: border-box;
+  height: 56px;
+  padding: 6px 12px;
+}
+
+.compass-root .compass-kind {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.compass-root .compass-node-center .compass-node-title {
+  display: -webkit-box;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.compass-root .compass-badges {
+  position: absolute;
+  top: 56px;
+  right: 8px;
+  left: 8px;
+  display: flex;
+  gap: 4px;
+  height: 22px;
+  overflow: hidden;
+}
+
+.compass-root .compass-badge {
+  max-width: 150px;
+  overflow: hidden;
+  padding: 1px 7px;
+  border: 1px solid var(--compass-line);
+  border-radius: 10px;
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.compass-root .compass-row {
+  position: absolute;
+  right: 8px;
+  left: 8px;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 24px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.compass-root .compass-row:hover {
+  background: var(--compass-hover);
+}
+
+.compass-root .compass-row-more {
+  justify-content: center;
+  font-style: italic;
+  opacity: 0.7;
+}
+
+.compass-root .compass-caret {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-right: 4px;
+  padding: 0;
+  border-color: transparent;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.compass-root .compass-caret-space {
+  flex: none;
+  width: 22px;
+}
+
+.compass-root .compass-row-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.compass-root .compass-chip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  padding: 2px 10px;
+  border-radius: 12px;
+  background: var(--compass-paper);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.compass-root .compass-empty {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 340px;
+  margin: 0;
+  font-size: 13px;
+  text-align: center;
+  opacity: 0.75;
+}
+
+.compass-root .compass-empty[hidden] {
   display: none;
 }
 
-.compass-root .compass-popover-title,
-.compass-root .compass-popover-label,
-.compass-root .compass-section {
-  margin: 0 0 6px;
+.compass-root .compass-hint {
+  position: absolute;
+  z-index: 3;
+  display: none;
+  padding: 6px 14px;
+  border: 1px dashed var(--compass-line);
+  border-radius: 16px;
+  background: var(--compass-paper);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
-.compass-root .compass-annotate {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.compass-root.compass-dragging .compass-hint {
+  display: block;
+}
+
+.compass-root .compass-hint-north {
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.compass-root .compass-hint-south {
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.compass-root .compass-hint-west {
+  top: 50%;
+  left: 10px;
+  transform: translateY(-50%);
+}
+
+.compass-root .compass-hint-east {
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+}
+
+.compass-root .compass-hint.compass-hint-hot {
+  border: 2px solid var(--compass-accent);
+  font-weight: 600;
+}
+
+.compass-root.compass-dragging,
+.compass-root.compass-dragging .compass-stage {
+  cursor: grabbing;
 }
 
 .compass-root .compass-ghost {
   position: absolute;
-  z-index: 9;
-  max-width: 180px;
-  padding: 2px 6px;
+  z-index: 12;
+  max-width: 220px;
   overflow: hidden;
-  border: 1px solid currentColor;
+  padding: 4px 10px;
+  border: 1.5px solid var(--compass-accent);
+  border-radius: 6px;
+  background: var(--compass-paper);
+  font-size: 12px;
   white-space: nowrap;
   text-overflow: ellipsis;
   pointer-events: none;
-  background-color: var(--compass-paper, Canvas);
 }
 
 .compass-root .compass-ghost[hidden] {
   display: none;
+}
+
+.compass-root .compass-menu,
+.compass-root .compass-details {
+  position: absolute;
+  z-index: 10;
+  box-sizing: border-box;
+  min-width: 200px;
+  max-width: 380px;
+  padding: 6px;
+  border: 1px solid var(--compass-line);
+  border-radius: 6px;
+  background: var(--compass-paper);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  font-size: 13px;
+}
+
+.compass-root .compass-menu[hidden],
+.compass-root .compass-details[hidden] {
+  display: none;
+}
+
+.compass-root .compass-menu-item {
+  display: block;
+  width: 100%;
+  margin-bottom: 2px;
+  border-color: transparent;
+  text-align: left;
+}
+
+.compass-root .compass-details-title {
+  margin: 0 0 2px;
+  font-weight: 600;
+}
+
+.compass-root .compass-details-side {
+  margin: 0 0 6px;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.compass-root .compass-details-list {
+  margin: 0 0 6px;
+  padding: 0;
+  list-style: none;
+}
+
+.compass-root .compass-details-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 0;
+  border-top: 1px solid var(--compass-faint);
+  font-size: 12px;
+}
+
+.compass-root .compass-details-open {
+  flex: none;
+  font-size: 11px;
+}
+
+.compass-root .compass-details-actions {
+  display: flex;
+  gap: 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compass-root .compass-node,
+  .compass-root .compass-world.compass-glide {
+    transition: none;
+  }
 }
