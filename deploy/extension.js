@@ -418,7 +418,7 @@ function outlineIndex(outline) {
     index.set(block.uid, { parentUid, depth });
     rows.push({
       uid: block.uid,
-      text: plainText(block.string, 72) || " ",
+      text: (drawingTitle(block.string, 72) ?? plainText(block.string, 72)) || " ",
       depth,
       parentUid,
       childCount: (block.children ?? []).filter((child) => child?.uid).length
@@ -648,7 +648,7 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
     center: {
       uid: centerUid,
       kind: center.kind === "block" ? "block" : "page",
-      title: center.kind === "block" ? plainText(center.string, 120) || centerUid : center.title || centerUid,
+      title: center.kind === "block" ? (drawingTitle(center.string, 120) ?? plainText(center.string, 120)) || centerUid : center.title || centerUid,
       badges
     },
     nodes: kept,
