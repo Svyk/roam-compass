@@ -582,6 +582,7 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
         uid: entity.uid,
         kind: kindOf(entity),
         title: titleOf(entity) || entity.uid,
+        string: typeof entity.string === "string" ? entity.string : "",
         role: "sibling",
         zone: "siblings",
         strength: 0,
@@ -1721,7 +1722,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   let titleCache = null;
   let activeResult = 0;
   const thumbUrls = /* @__PURE__ */ new Map();
+  const thumbRenderTried = /* @__PURE__ */ new Set();
+  let thumbRenderChain = Promise.resolve();
   let plexusOff = null;
+  let plexusApi = null;
   let plexusFramePending = false;
   function later(fn, ms) {
     const id = globalThis.setTimeout(() => {
@@ -1977,38 +1981,57 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     element.style.transform = `translate(${box.x - box.w / 2}px, ${box.y - box.h / 2}px)`;
   }
   function dropThumb(uid) {
-    const url = thumbUrls.get(uid);
-    if (url == null) return;
+    const held = thumbUrls.get(uid);
+    if (held == null) return;
     thumbUrls.delete(uid);
     try {
-      globalThis.URL.revokeObjectURL(url);
+      globalThis.URL.revokeObjectURL(held.url);
     } catch {
     }
   }
-  function attachThumb(element, node) {
-    dropThumb(node.uid);
-    if (!settings?.drawings || !isDrawingLike(node)) return;
-    const api = plexus();
-    if (!api || typeof api.thumbnail !== "function") return;
-    let pending;
+  function dropAllThumbs() {
+    for (const uid of [...thumbUrls.keys()]) dropThumb(uid);
+  }
+  function showThumb(element, uid, string, url) {
+    const img = el("img", "compass-node-thumb");
+    img.alt = "";
+    img.draggable = false;
+    img.src = url;
+    thumbUrls.set(uid, { url, string });
+    element.prepend(img);
+  }
+  function requestThumb(api, uid, render2) {
     try {
-      pending = Promise.resolve(api.thumbnail(node.uid, { maxWidth: THUMB_WIDTH }));
+      return Promise.resolve(api.thumbnail(uid, render2 ? { maxWidth: THUMB_WIDTH, render: true } : { maxWidth: THUMB_WIDTH }));
     } catch (error) {
       console.error("[compass] thumbnail", error);
+      return Promise.resolve(null);
+    }
+  }
+  function attachThumb(element, node) {
+    const held = thumbUrls.get(node.uid);
+    const api = plexus();
+    if (!settings?.drawings || !isDrawingLike(node) || !api || typeof api.thumbnail !== "function") {
+      dropThumb(node.uid);
       return;
     }
-    pending.then((blob) => {
-      if (!blob || lifecycle.disposed || !element.isConnected || nodeEls.get(node.uid) !== element) return;
-      const url = globalThis.URL.createObjectURL(blob);
-      if (element.querySelector(".compass-node-thumb")) {
-        globalThis.URL.revokeObjectURL(url);
-        return;
-      }
-      const img = el("img", "compass-node-thumb");
-      img.alt = "";
-      img.src = url;
-      thumbUrls.set(node.uid, url);
-      element.prepend(img);
+    if (held && held.string === node.string) {
+      showThumb(element, node.uid, node.string, held.url);
+      return;
+    }
+    dropThumb(node.uid);
+    const accept = (blob) => {
+      if (!blob || lifecycle.disposed || !element.isConnected || nodeEls.get(node.uid) !== element) return false;
+      if (element.querySelector(".compass-node-thumb")) return true;
+      showThumb(element, node.uid, node.string, globalThis.URL.createObjectURL(blob));
+      return true;
+    };
+    requestThumb(api, node.uid, false).then((blob) => {
+      if (accept(blob)) return;
+      const key = `${node.uid}|${node.string}`;
+      if (blob || thumbRenderTried.has(key) || lifecycle.disposed) return;
+      thumbRenderTried.add(key);
+      thumbRenderChain = thumbRenderChain.then(() => lifecycle.disposed ? null : requestThumb(plexus() ?? api, node.uid, true)).then(accept).catch((error) => console.error("[compass] thumbnail", error));
     }).catch((error) => console.error("[compass] thumbnail", error));
   }
   function plexusChanged() {
@@ -2016,20 +2039,25 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     plexusFramePending = true;
     frame(() => {
       plexusFramePending = false;
+      dropAllThumbs();
+      thumbRenderTried.clear();
       repullIfOpen();
     });
   }
   function subscribePlexus() {
-    if (plexusOff) return;
     const api = plexus();
+    if (plexusOff && plexusApi === api) return;
+    if (plexusOff) plexusOff();
     if (!api || typeof api.addEventListener !== "function") return;
     api.addEventListener("change", plexusChanged);
+    plexusApi = api;
     plexusOff = () => {
       try {
         api.removeEventListener?.("change", plexusChanged);
       } catch {
       }
       plexusOff = null;
+      plexusApi = null;
     };
   }
   function onPlexusReady() {
@@ -2039,7 +2067,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   }
   function onPlexusUnload() {
     if (plexusOff) plexusOff();
-    for (const uid of [...thumbUrls.keys()]) dropThumb(uid);
+    subscribePlexus();
+    dropAllThumbs();
+    thumbRenderTried.clear();
     for (const img of root.querySelectorAll(".compass-node-thumb")) img.remove();
     repullIfOpen();
   }
@@ -2596,6 +2626,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     results.replaceChildren();
     activeResult = 0;
     const canDraw = Boolean(settings?.drawings ?? readSettings()?.drawings) && Boolean(plexus());
+    if (!found.length) activeResult = -1;
     if (!found.length && !canDraw) results.append(el("div", "compass-result-none", "No page by that name"));
     for (const [index, row] of found.entries()) {
       const item = button(`compass-result${index === 0 ? " compass-result-active" : ""}`, row.title);
@@ -2607,7 +2638,6 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       const item = button("compass-result compass-result-drawing", `New drawing: ${text}`);
       item.dataset.newDrawing = text;
       item.setAttribute("role", "option");
-      if (!found.length) item.classList.add("compass-result-active");
       results.append(item);
     }
     results.hidden = false;
@@ -2635,7 +2665,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     }
   }
   function chooseItem(item) {
-    if (item?.dataset.newDrawing) void newDrawing(item.dataset.newDrawing);
+    if (item?.dataset.newDrawing) void newDrawing(searchInput.value.trim() || item.dataset.newDrawing);
     else chooseResult(item?.dataset.uid);
   }
   function onSearchKey(event) {
@@ -2647,7 +2677,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       markResult();
     } else if (event.key === "Enter") {
       event.preventDefault();
-      chooseItem(items[activeResult] ?? items[0]);
+      chooseItem(items[activeResult]);
     } else if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
@@ -2751,7 +2781,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   subscribePlexus();
   lifecycle.add(() => {
     if (plexusOff) plexusOff();
-    for (const uid of [...thumbUrls.keys()]) dropThumb(uid);
+    dropAllThumbs();
     for (const id of timers) globalThis.clearTimeout(id);
     timers.clear();
     root.hidden = true;

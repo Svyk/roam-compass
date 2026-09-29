@@ -297,3 +297,24 @@ test("isDrawingLike matches Excalidraw and Plexus region macros only", () => {
   assert.equal(isDrawingLike({ title: "Page" }), false);
   assert.equal(isDrawingLike(null), false);
 });
+
+test("sibling nodes keep their block string so drawings and regions are drawing-like", () => {
+  const hood = buildNeighborhood(snap({
+    center: {
+      uid: "r1",
+      kind: "block",
+      string: "{{[[plexus-region]]: abc}}",
+      page: page("pg", "Drawing"),
+      parent: { uid: "par", string: "{{[[plexus-regions]]}}" },
+      siblings: [
+        { uid: "d1", string: "{{[[excalidraw]]}}", order: 1 },
+        { uid: "r2", string: "{{[[plexus-region]]: def}} Filler", order: 2 },
+      ],
+    },
+  }));
+  const d1 = hood.nodes.find((n) => n.uid === "d1");
+  const r2 = hood.nodes.find((n) => n.uid === "r2");
+  assert.equal(d1.zone, "siblings");
+  assert.equal(isDrawingLike(d1), true);
+  assert.equal(isDrawingLike(r2), true);
+});

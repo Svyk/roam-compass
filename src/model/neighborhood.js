@@ -351,6 +351,7 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
         uid: entity.uid,
         kind: kindOf(entity),
         title: titleOf(entity) || entity.uid,
+        string: typeof entity.string === "string" ? entity.string : "",
         role: "sibling",
         zone: "siblings",
         strength: 0,
