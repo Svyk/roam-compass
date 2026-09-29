@@ -4,6 +4,12 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-28
+
+### Fixed
+
+- Plexus region and drawing nodes show a readable title (the region caption or "Region"; "Drawing: <first text element>") instead of raw component text.
+
 ## [0.2.0] - 2026-09-28
 
 ### Added

@@ -1,4 +1,4 @@
-import { parseAttribute, plainText, scanRefs, splitNames, tailShape } from "./text.js";
+import { drawingTitle, parseAttribute, plainText, scanRefs, splitNames, tailShape } from "./text.js";
 
 // One center, six relationship roles, four directions. Siblings sit in their own band.
 export const ROLES = ["parent", "child", "friend", "challenger", "previous", "next"];
@@ -102,7 +102,7 @@ export function attributeForRole(role, settings) {
 function titleOf(entity) {
   if (!entity) return "";
   if (typeof entity.title === "string" && entity.title) return entity.title;
-  return plainText(entity.string ?? "");
+  return drawingTitle(entity.string) ?? plainText(entity.string ?? "");
 }
 
 export function isDrawingLike(node) {

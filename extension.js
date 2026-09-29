@@ -1,4 +1,4 @@
-/* Compass v0.2.0 | MIT | generated; edit src/ */
+/* Compass v0.2.1 | MIT | generated; edit src/ */
 
 // src/lifecycle.js
 function isPromiseLike(value) {
@@ -265,6 +265,17 @@ function plainText(input, max = 90) {
   if (text.length > max) text = `${text.slice(0, Math.max(1, max - 1)).trimEnd()}…`;
   return text;
 }
+function drawingTitle(input, max = 90) {
+  const text = String(input ?? "").trimStart();
+  const region = /^\{\{\s*\[\[plexus-region\]\][^}]*\}\}/.exec(text);
+  if (region) return plainText(text.slice(region[0].length), max) || "Region";
+  if (/^\{\{\s*(\[\[excalidraw\]\]|excalidraw)\s*\}\}/.test(text)) {
+    const info = /Text elements in drawing:\s*([^;}]*)/.exec(text);
+    const first = info ? plainText(info[1], max) : "";
+    return first ? `Drawing: ${first}` : "Drawing";
+  }
+  return null;
+}
 function splitNames(value) {
   const parts = Array.isArray(value) ? value : String(value ?? "").split(",");
   const names = [];
@@ -357,7 +368,7 @@ function attributeForRole(role, settings) {
 function titleOf(entity) {
   if (!entity) return "";
   if (typeof entity.title === "string" && entity.title) return entity.title;
-  return plainText(entity.string ?? "");
+  return drawingTitle(entity.string) ?? plainText(entity.string ?? "");
 }
 function isDrawingLike(node) {
   const text = typeof node?.string === "string" ? node.string.trimStart() : "";

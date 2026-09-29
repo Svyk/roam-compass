@@ -197,6 +197,19 @@ export function plainText(input, max = 90) {
   return text;
 }
 
+// Title for Plexus region and Excalidraw drawing blocks; null for any other block.
+export function drawingTitle(input, max = 90) {
+  const text = String(input ?? "").trimStart();
+  const region = /^\{\{\s*\[\[plexus-region\]\][^}]*\}\}/.exec(text);
+  if (region) return plainText(text.slice(region[0].length), max) || "Region";
+  if (/^\{\{\s*(\[\[excalidraw\]\]|excalidraw)\s*\}\}/.test(text)) {
+    const info = /Text elements in drawing:\s*([^;}]*)/.exec(text);
+    const first = info ? plainText(info[1], max) : "";
+    return first ? `Drawing: ${first}` : "Drawing";
+  }
+  return null;
+}
+
 export function splitNames(value) {
   const parts = Array.isArray(value) ? value : String(value ?? "").split(",");
   const names = [];

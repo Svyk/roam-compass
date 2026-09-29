@@ -1,6 +1,6 @@
 {
   "name": "roam-compass",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Spatial neighborhood navigator for a Roam graph",
   "type": "module",

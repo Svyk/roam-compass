@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseAttribute, plainText, removeToken, scanRefs, tailShape } from "../src/model/text.js";
+import { drawingTitle, parseAttribute, plainText, removeToken, scanRefs, tailShape } from "../src/model/text.js";
 
 const titles = (text) => scanRefs(text).map((token) => (token.type === "block" ? `((${token.uid}))` : token.title));
 
@@ -59,4 +59,12 @@ test("removeToken drops one ref and its spacing", () => {
   const text = "Owner:: [[Jane]] [[Bob]]";
   const token = scanRefs(text).find((item) => item.title === "Jane");
   assert.equal(removeToken(text, token), "Owner:: [[Bob]]");
+});
+
+test("drawingTitle strips plexus-region components and names drawings", () => {
+  assert.equal(drawingTitle("{{[[plexus-region]]: image rect 0.1 0.2}} Tail rotor"), "Tail rotor");
+  assert.equal(drawingTitle("{{[[plexus-region]]: image rect 0.1 0.2}}"), "Region");
+  assert.equal(drawingTitle("{{[[excalidraw]]}} {{-: Text elements in drawing: Flow ; Other }}"), "Drawing: Flow");
+  assert.equal(drawingTitle("{{[[excalidraw]]}}"), "Drawing");
+  assert.equal(drawingTitle("plain [[Jane]]"), null);
 });
