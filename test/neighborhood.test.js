@@ -318,3 +318,23 @@ test("sibling nodes keep their block string so drawings and regions are drawing-
   assert.equal(isDrawingLike(d1), true);
   assert.equal(isDrawingLike(r2), true);
 });
+
+test("region center and drawing/region outline rows show stripped titles", () => {
+  const hood = buildNeighborhood(snap({
+    center: {
+      uid: "r1",
+      kind: "block",
+      string: "{{[[plexus-region]]: k=imgrect d=abc i=0 f=0.1,0.2,0.3,0.4}} Image region",
+      page: page("pg", "Drawing"),
+      parent: null,
+      siblings: [],
+    },
+    outline: [
+      block("o1", "{{[[excalidraw]]}} {{-: Text elements in drawing: a ; b }}"),
+      block("o2", "{{[[plexus-region]]: k=area d=x ids=a}} Tail"),
+    ],
+  }));
+  assert.equal(hood.center.title, "Image region");
+  const texts = hood.outline.map((r) => r.text);
+  assert.deepEqual(texts, ["Drawing: a", "Tail"]);
+});
