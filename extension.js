@@ -1,4 +1,4 @@
-/* Compass v0.1.0 | MIT | generated; edit src/ */
+/* Compass v0.2.0 | MIT | generated; edit src/ */
 
 // src/lifecycle.js
 function isPromiseLike(value) {
@@ -359,6 +359,10 @@ function titleOf(entity) {
   if (typeof entity.title === "string" && entity.title) return entity.title;
   return plainText(entity.string ?? "");
 }
+function isDrawingLike(node) {
+  const text = typeof node?.string === "string" ? node.string.trimStart() : "";
+  return text.startsWith("{{[[excalidraw]]}}") || text.startsWith("{{excalidraw}}") || text.startsWith("{{[[plexus-region]]");
+}
 function kindOf(entity) {
   return typeof entity?.title === "string" && entity.title ? "page" : "block";
 }
@@ -552,6 +556,7 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
       uid,
       kind: kindOf(entity),
       title: titleOf(entity) || uid,
+      string: typeof entity?.string === "string" ? entity.string : "",
       role: picked.role,
       zone: ZONE_OF[picked.role],
       strength: picked.strength,
@@ -1370,7 +1375,8 @@ var SETTING_IDS = Object.freeze({
   sidecar: "compass-sidecar",
   outline: "compass-outline",
   maxZone: "compass-max-zone",
-  pins: "compass-pins"
+  pins: "compass-pins",
+  drawings: "compass-drawings"
 });
 var DEFAULTS = Object.freeze({
   "compass-north": MODEL_DEFAULTS.parent,
@@ -1386,14 +1392,16 @@ var DEFAULTS = Object.freeze({
   "compass-sidecar": true,
   "compass-outline": false,
   "compass-max-zone": "12",
-  "compass-pins": []
+  "compass-pins": [],
+  "compass-drawings": true
 });
 var SWITCHES = /* @__PURE__ */ new Set([
   SETTING_IDS.links,
   SETTING_IDS.siblings,
   SETTING_IDS.badges,
   SETTING_IDS.sidecar,
-  SETTING_IDS.outline
+  SETTING_IDS.outline,
+  SETTING_IDS.drawings
 ]);
 var ROWS = [
   [SETTING_IDS.north, "Parents (north)", "Attributes whose value sits above the center. The first one is written when you drag a node north."],
@@ -1408,6 +1416,7 @@ var ROWS = [
   [SETTING_IDS.badges, "Text values", "Show Name:: text values on the center card."],
   [SETTING_IDS.sidecar, "Sidecar", "Keep the center open in the right sidebar."],
   [SETTING_IDS.outline, "Outline", "Expand the center into its blocks."],
+  [SETTING_IDS.drawings, "Drawings", "Show drawing thumbnails on nodes and offer New drawing in search when the Plexus extension is installed."],
   [SETTING_IDS.maxZone, "Nodes per side", "How many nodes a side shows before it offers Show all."],
   [SETTING_IDS.pins, "Pins", "JSON list of {uid, title}. Use the Pin button instead of editing this."]
 ];
@@ -1457,6 +1466,7 @@ function readCompassSettings(extensionAPI) {
     },
     sidecar: flag2(read(SETTING_IDS.sidecar), true),
     outline: flag2(read(SETTING_IDS.outline), false),
+    drawings: flag2(read(SETTING_IDS.drawings), true),
     pins: readPins(read(SETTING_IDS.pins))
   };
 }
@@ -1505,6 +1515,11 @@ var SIDE_NAME = { north: "Parents", south: "Children", west: "Friends", east: "C
 var ENTER_FROM = { north: [0, -36], south: [0, 36], west: [-36, 0], east: [36, 0], siblings: [36, 0] };
 var CLICK_DELAY = 230;
 var HISTORY_CAP = 100;
+var THUMB_WIDTH = 160;
+function plexus() {
+  const api = globalThis.window?.RoamPlexus;
+  return api && api.apiVersion >= 1 ? api : null;
+}
 var REASONS = {
   changed: "That block changed in Roam. Compass reloaded it; try again.",
   "missing-value": "That value is no longer in its block. Compass reloaded.",
@@ -1705,6 +1720,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   let searchTimer = null;
   let titleCache = null;
   let activeResult = 0;
+  const thumbUrls = /* @__PURE__ */ new Map();
+  let plexusOff = null;
+  let plexusFramePending = false;
   function later(fn, ms) {
     const id = globalThis.setTimeout(() => {
       timers.delete(id);
@@ -1958,6 +1976,73 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     element.style.height = `${box.h}px`;
     element.style.transform = `translate(${box.x - box.w / 2}px, ${box.y - box.h / 2}px)`;
   }
+  function dropThumb(uid) {
+    const url = thumbUrls.get(uid);
+    if (url == null) return;
+    thumbUrls.delete(uid);
+    try {
+      globalThis.URL.revokeObjectURL(url);
+    } catch {
+    }
+  }
+  function attachThumb(element, node) {
+    dropThumb(node.uid);
+    if (!settings?.drawings || !isDrawingLike(node)) return;
+    const api = plexus();
+    if (!api || typeof api.thumbnail !== "function") return;
+    let pending;
+    try {
+      pending = Promise.resolve(api.thumbnail(node.uid, { maxWidth: THUMB_WIDTH }));
+    } catch (error) {
+      console.error("[compass] thumbnail", error);
+      return;
+    }
+    pending.then((blob) => {
+      if (!blob || lifecycle.disposed || !element.isConnected || nodeEls.get(node.uid) !== element) return;
+      const url = globalThis.URL.createObjectURL(blob);
+      if (element.querySelector(".compass-node-thumb")) {
+        globalThis.URL.revokeObjectURL(url);
+        return;
+      }
+      const img = el("img", "compass-node-thumb");
+      img.alt = "";
+      img.src = url;
+      thumbUrls.set(node.uid, url);
+      element.prepend(img);
+    }).catch((error) => console.error("[compass] thumbnail", error));
+  }
+  function plexusChanged() {
+    if (plexusFramePending || lifecycle.disposed) return;
+    plexusFramePending = true;
+    frame(() => {
+      plexusFramePending = false;
+      repullIfOpen();
+    });
+  }
+  function subscribePlexus() {
+    if (plexusOff) return;
+    const api = plexus();
+    if (!api || typeof api.addEventListener !== "function") return;
+    api.addEventListener("change", plexusChanged);
+    plexusOff = () => {
+      try {
+        api.removeEventListener?.("change", plexusChanged);
+      } catch {
+      }
+      plexusOff = null;
+    };
+  }
+  function onPlexusReady() {
+    subscribePlexus();
+    if (titleCache) titleCache = null;
+    repullIfOpen();
+  }
+  function onPlexusUnload() {
+    if (plexusOff) plexusOff();
+    for (const uid of [...thumbUrls.keys()]) dropThumb(uid);
+    for (const img of root.querySelectorAll(".compass-node-thumb")) img.remove();
+    repullIfOpen();
+  }
   function render({ navigate = false } = {}) {
     if (!hood) return;
     const open = rowsFor(current);
@@ -1969,6 +2054,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       if (keep.has(uid)) continue;
       element.remove();
       nodeEls.delete(uid);
+      dropThumb(uid);
     }
     const entering = [];
     const place = (uid, box, isCenter, node) => {
@@ -1998,6 +2084,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
         const why = node.label ? ` — ${node.label}` : "";
         element.setAttribute("aria-label", `${node.title}, ${SIDE_NAME[box.zone]}${why}`);
         element.title = `${node.title}${why}`;
+        attachThumb(element, node);
       }
       if (!entering.includes(element)) placeElement(element, box);
       else element.dataset.target = JSON.stringify(box);
@@ -2508,11 +2595,19 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const found = rankTitles(titleCache, text, 20);
     results.replaceChildren();
     activeResult = 0;
-    if (!found.length) results.append(el("div", "compass-result-none", "No page by that name"));
+    const canDraw = Boolean(settings?.drawings ?? readSettings()?.drawings) && Boolean(plexus());
+    if (!found.length && !canDraw) results.append(el("div", "compass-result-none", "No page by that name"));
     for (const [index, row] of found.entries()) {
       const item = button(`compass-result${index === 0 ? " compass-result-active" : ""}`, row.title);
       item.dataset.uid = row.uid;
       item.setAttribute("role", "option");
+      results.append(item);
+    }
+    if (canDraw) {
+      const item = button("compass-result compass-result-drawing", `New drawing: ${text}`);
+      item.dataset.newDrawing = text;
+      item.setAttribute("role", "option");
+      if (!found.length) item.classList.add("compass-result-active");
       results.append(item);
     }
     results.hidden = false;
@@ -2524,6 +2619,25 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     focusUid(uid);
     stage.focus({ preventScroll: true });
   }
+  async function newDrawing(title) {
+    const api = plexus();
+    if (!api || !title) return;
+    hideResults();
+    searchInput.value = "";
+    stage.focus({ preventScroll: true });
+    try {
+      const made = await api.create({ title });
+      titleCache = null;
+      if (made?.pageUid && !lifecycle.disposed) focusUid(made.pageUid);
+    } catch (error) {
+      console.error("[compass] new drawing", error);
+      setStatus("Plexus could not create the drawing.");
+    }
+  }
+  function chooseItem(item) {
+    if (item?.dataset.newDrawing) void newDrawing(item.dataset.newDrawing);
+    else chooseResult(item?.dataset.uid);
+  }
   function onSearchKey(event) {
     const items = [...results.querySelectorAll(".compass-result")];
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -2533,7 +2647,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       markResult();
     } else if (event.key === "Enter") {
       event.preventDefault();
-      chooseResult((items[activeResult] ?? items[0])?.dataset.uid);
+      chooseItem(items[activeResult] ?? items[0]);
     } else if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
@@ -2619,7 +2733,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   });
   lifecycle.event(searchInput, "keydown", onSearchKey);
   lifecycle.event(results, "mousedown", (event) => event.preventDefault());
-  lifecycle.event(results, "click", (event) => chooseResult(event.target.closest?.(".compass-result")?.dataset.uid));
+  lifecycle.event(results, "click", (event) => chooseItem(event.target.closest?.(".compass-result")));
   lifecycle.event(stage, "click", onStageClick);
   lifecycle.event(stage, "dblclick", onStageDoubleClick);
   lifecycle.event(stage, "contextmenu", onContextMenu);
@@ -2632,7 +2746,12 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (!root.hidden) placeFrame();
   });
   lifecycle.event(document, "keydown", onKey);
+  lifecycle.event(globalThis, "roam-plexus:ready", onPlexusReady);
+  lifecycle.event(globalThis, "roam-plexus:unload", onPlexusUnload);
+  subscribePlexus();
   lifecycle.add(() => {
+    if (plexusOff) plexusOff();
+    for (const uid of [...thumbUrls.keys()]) dropThumb(uid);
     for (const id of timers) globalThis.clearTimeout(id);
     timers.clear();
     root.hidden = true;

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildNeighborhood, roleOf, modelSettings, typedParentUids } from "../src/model/neighborhood.js";
+import { buildNeighborhood, isDrawingLike, roleOf, modelSettings, typedParentUids } from "../src/model/neighborhood.js";
 
 const page = (uid, title) => ({ uid, title });
 
@@ -286,4 +286,14 @@ test("the outline rows carry depth and child counts", () => {
     ["c2", 0, 0, null],
   ]);
   assert.equal(hood.outlineIndex.get("b").parentUid, "a");
+});
+
+test("isDrawingLike matches Excalidraw and Plexus region macros only", () => {
+  assert.equal(isDrawingLike({ string: "{{[[excalidraw]]}}" }), true);
+  assert.equal(isDrawingLike({ string: "{{excalidraw}}" }), true);
+  assert.equal(isDrawingLike({ string: "  {{[[plexus-region]]: abc}}" }), true);
+  assert.equal(isDrawingLike({ string: "see {{[[excalidraw]]}}" }), false);
+  assert.equal(isDrawingLike({ string: "plain" }), false);
+  assert.equal(isDrawingLike({ title: "Page" }), false);
+  assert.equal(isDrawingLike(null), false);
 });

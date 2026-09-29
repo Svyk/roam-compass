@@ -105,6 +105,11 @@ function titleOf(entity) {
   return plainText(entity.string ?? "");
 }
 
+export function isDrawingLike(node) {
+  const text = typeof node?.string === "string" ? node.string.trimStart() : "";
+  return text.startsWith("{{[[excalidraw]]}}") || text.startsWith("{{excalidraw}}") || text.startsWith("{{[[plexus-region]]");
+}
+
 function kindOf(entity) {
   return typeof entity?.title === "string" && entity.title ? "page" : "block";
 }
@@ -319,6 +324,7 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
       uid,
       kind: kindOf(entity),
       title: titleOf(entity) || uid,
+      string: typeof entity?.string === "string" ? entity.string : "",
       role: picked.role,
       zone: ZONE_OF[picked.role],
       strength: picked.strength,

@@ -15,6 +15,7 @@ export const SETTING_IDS = Object.freeze({
   outline: "compass-outline",
   maxZone: "compass-max-zone",
   pins: "compass-pins",
+  drawings: "compass-drawings",
 });
 
 export const DEFAULTS = Object.freeze({
@@ -32,6 +33,7 @@ export const DEFAULTS = Object.freeze({
   "compass-outline": false,
   "compass-max-zone": "12",
   "compass-pins": [],
+  "compass-drawings": true,
 });
 
 const SWITCHES = new Set([
@@ -40,6 +42,7 @@ const SWITCHES = new Set([
   SETTING_IDS.badges,
   SETTING_IDS.sidecar,
   SETTING_IDS.outline,
+  SETTING_IDS.drawings,
 ]);
 
 const ROWS = [
@@ -55,6 +58,7 @@ const ROWS = [
   [SETTING_IDS.badges, "Text values", "Show Name:: text values on the center card."],
   [SETTING_IDS.sidecar, "Sidecar", "Keep the center open in the right sidebar."],
   [SETTING_IDS.outline, "Outline", "Expand the center into its blocks."],
+  [SETTING_IDS.drawings, "Drawings", "Show drawing thumbnails on nodes and offer New drawing in search when the Plexus extension is installed."],
   [SETTING_IDS.maxZone, "Nodes per side", "How many nodes a side shows before it offers Show all."],
   [SETTING_IDS.pins, "Pins", "JSON list of {uid, title}. Use the Pin button instead of editing this."],
 ];
@@ -108,6 +112,7 @@ export function readCompassSettings(extensionAPI) {
     },
     sidecar: flag(read(SETTING_IDS.sidecar), true),
     outline: flag(read(SETTING_IDS.outline), false),
+    drawings: flag(read(SETTING_IDS.drawings), true),
     pins: readPins(read(SETTING_IDS.pins)),
   };
 }

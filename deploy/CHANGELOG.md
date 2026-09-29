@@ -2,6 +2,13 @@
 
 All notable changes to this project follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0]
+
+### Added
+
+- Drawings setting (`compass-drawings`, default on). When the Plexus extension is present (`window.RoamPlexus.apiVersion >= 1`), drawing blocks show a cached thumbnail on their node, and search ends with a `New drawing: <query>` row that calls `RoamPlexus.create` and focuses the new drawing's page.
+- Compass repulls (one per frame) when Plexus reports a change, and reacts to `roam-plexus:ready` and `roam-plexus:unload`. Without Plexus nothing changes.
+
 ## [Unreleased]
 
 ### Changed

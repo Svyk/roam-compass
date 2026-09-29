@@ -16,6 +16,7 @@ const SETTING_IDS = [
   "compass-badges",
   "compass-sidecar",
   "compass-outline",
+  "compass-drawings",
   "compass-max-zone",
   "compass-pins",
 ];
@@ -26,6 +27,7 @@ const SWITCH_IDS = [
   "compass-badges",
   "compass-sidecar",
   "compass-outline",
+  "compass-drawings",
 ];
 
 function versionHost() {

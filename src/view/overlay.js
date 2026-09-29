@@ -1,4 +1,4 @@
-import { attributeForRole, buildNeighborhood, DROP_ROLE, inverseRole } from "../model/neighborhood.js";
+import { attributeForRole, buildNeighborhood, DROP_ROLE, inverseRole, isDrawingLike } from "../model/neighborhood.js";
 import { layout, sideAt } from "../model/layout.js";
 import { rankTitles } from "../model/search.js";
 import { readCompassSettings, SETTING_IDS, writeSetting } from "../settings.js";
@@ -8,6 +8,12 @@ const SIDE_NAME = { north: "Parents", south: "Children", west: "Friends", east: 
 const ENTER_FROM = { north: [0, -36], south: [0, 36], west: [-36, 0], east: [36, 0], siblings: [36, 0] };
 const CLICK_DELAY = 230;
 const HISTORY_CAP = 100;
+const THUMB_WIDTH = 160;
+
+function plexus() {
+  const api = globalThis.window?.RoamPlexus;
+  return api && api.apiVersion >= 1 ? api : null;
+}
 
 const REASONS = {
   changed: "That block changed in Roam. Compass reloaded it; try again.",
@@ -221,6 +227,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   let searchTimer = null;
   let titleCache = null;
   let activeResult = 0;
+  const thumbUrls = new Map();
+  let plexusOff = null;
+  let plexusFramePending = false;
 
   function later(fn, ms) {
     const id = globalThis.setTimeout(() => {
@@ -510,6 +519,81 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     element.style.transform = `translate(${box.x - box.w / 2}px, ${box.y - box.h / 2}px)`;
   }
 
+  function dropThumb(uid) {
+    const url = thumbUrls.get(uid);
+    if (url == null) return;
+    thumbUrls.delete(uid);
+    try {
+      globalThis.URL.revokeObjectURL(url);
+    } catch {
+      // Best effort.
+    }
+  }
+
+  function attachThumb(element, node) {
+    dropThumb(node.uid);
+    if (!settings?.drawings || !isDrawingLike(node)) return;
+    const api = plexus();
+    if (!api || typeof api.thumbnail !== "function") return;
+    let pending;
+    try {
+      pending = Promise.resolve(api.thumbnail(node.uid, { maxWidth: THUMB_WIDTH }));
+    } catch (error) {
+      console.error("[compass] thumbnail", error);
+      return;
+    }
+    pending.then((blob) => {
+      if (!blob || lifecycle.disposed || !element.isConnected || nodeEls.get(node.uid) !== element) return;
+      const url = globalThis.URL.createObjectURL(blob);
+      if (element.querySelector(".compass-node-thumb")) {
+        globalThis.URL.revokeObjectURL(url);
+        return;
+      }
+      const img = el("img", "compass-node-thumb");
+      img.alt = "";
+      img.src = url;
+      thumbUrls.set(node.uid, url);
+      element.prepend(img);
+    }).catch((error) => console.error("[compass] thumbnail", error));
+  }
+
+  function plexusChanged() {
+    if (plexusFramePending || lifecycle.disposed) return;
+    plexusFramePending = true;
+    frame(() => {
+      plexusFramePending = false;
+      repullIfOpen();
+    });
+  }
+
+  function subscribePlexus() {
+    if (plexusOff) return;
+    const api = plexus();
+    if (!api || typeof api.addEventListener !== "function") return;
+    api.addEventListener("change", plexusChanged);
+    plexusOff = () => {
+      try {
+        api.removeEventListener?.("change", plexusChanged);
+      } catch {
+        // Plexus may already be gone.
+      }
+      plexusOff = null;
+    };
+  }
+
+  function onPlexusReady() {
+    subscribePlexus();
+    if (titleCache) titleCache = null;
+    repullIfOpen();
+  }
+
+  function onPlexusUnload() {
+    if (plexusOff) plexusOff();
+    for (const uid of [...thumbUrls.keys()]) dropThumb(uid);
+    for (const img of root.querySelectorAll(".compass-node-thumb")) img.remove();
+    repullIfOpen();
+  }
+
   function render({ navigate = false } = {}) {
     if (!hood) return;
     const open = rowsFor(current);
@@ -522,6 +606,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       if (keep.has(uid)) continue;
       element.remove();
       nodeEls.delete(uid);
+      dropThumb(uid);
     }
 
     const entering = [];
@@ -552,6 +637,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
         const why = node.label ? ` — ${node.label}` : "";
         element.setAttribute("aria-label", `${node.title}, ${SIDE_NAME[box.zone]}${why}`);
         element.title = `${node.title}${why}`;
+        attachThumb(element, node);
       }
       if (!entering.includes(element)) placeElement(element, box);
       else element.dataset.target = JSON.stringify(box);
@@ -1107,11 +1193,19 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const found = rankTitles(titleCache, text, 20);
     results.replaceChildren();
     activeResult = 0;
-    if (!found.length) results.append(el("div", "compass-result-none", "No page by that name"));
+    const canDraw = Boolean(settings?.drawings ?? readSettings()?.drawings) && Boolean(plexus());
+    if (!found.length && !canDraw) results.append(el("div", "compass-result-none", "No page by that name"));
     for (const [index, row] of found.entries()) {
       const item = button(`compass-result${index === 0 ? " compass-result-active" : ""}`, row.title);
       item.dataset.uid = row.uid;
       item.setAttribute("role", "option");
+      results.append(item);
+    }
+    if (canDraw) {
+      const item = button("compass-result compass-result-drawing", `New drawing: ${text}`);
+      item.dataset.newDrawing = text;
+      item.setAttribute("role", "option");
+      if (!found.length) item.classList.add("compass-result-active");
       results.append(item);
     }
     results.hidden = false;
@@ -1125,6 +1219,27 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     stage.focus({ preventScroll: true });
   }
 
+  async function newDrawing(title) {
+    const api = plexus();
+    if (!api || !title) return;
+    hideResults();
+    searchInput.value = "";
+    stage.focus({ preventScroll: true });
+    try {
+      const made = await api.create({ title });
+      titleCache = null;
+      if (made?.pageUid && !lifecycle.disposed) focusUid(made.pageUid);
+    } catch (error) {
+      console.error("[compass] new drawing", error);
+      setStatus("Plexus could not create the drawing.");
+    }
+  }
+
+  function chooseItem(item) {
+    if (item?.dataset.newDrawing) void newDrawing(item.dataset.newDrawing);
+    else chooseResult(item?.dataset.uid);
+  }
+
   function onSearchKey(event) {
     const items = [...results.querySelectorAll(".compass-result")];
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -1134,7 +1249,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       markResult();
     } else if (event.key === "Enter") {
       event.preventDefault();
-      chooseResult((items[activeResult] ?? items[0])?.dataset.uid);
+      chooseItem(items[activeResult] ?? items[0]);
     } else if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
@@ -1229,7 +1344,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   });
   lifecycle.event(searchInput, "keydown", onSearchKey);
   lifecycle.event(results, "mousedown", (event) => event.preventDefault());
-  lifecycle.event(results, "click", (event) => chooseResult(event.target.closest?.(".compass-result")?.dataset.uid));
+  lifecycle.event(results, "click", (event) => chooseItem(event.target.closest?.(".compass-result")));
   lifecycle.event(stage, "click", onStageClick);
   lifecycle.event(stage, "dblclick", onStageDoubleClick);
   lifecycle.event(stage, "contextmenu", onContextMenu);
@@ -1240,7 +1355,12 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   lifecycle.event(globalThis, "pointercancel", onPointerUp);
   lifecycle.event(globalThis, "resize", () => { if (!root.hidden) placeFrame(); });
   lifecycle.event(document, "keydown", onKey);
+  lifecycle.event(globalThis, "roam-plexus:ready", onPlexusReady);
+  lifecycle.event(globalThis, "roam-plexus:unload", onPlexusUnload);
+  subscribePlexus();
   lifecycle.add(() => {
+    if (plexusOff) plexusOff();
+    for (const uid of [...thumbUrls.keys()]) dropThumb(uid);
     for (const id of timers) globalThis.clearTimeout(id);
     timers.clear();
     root.hidden = true;

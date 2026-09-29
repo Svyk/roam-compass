@@ -580,3 +580,16 @@
     transition: none;
   }
 }
+
+.compass-root .compass-node-thumb {
+  display: block;
+  max-width: 100%;
+  max-height: 64px;
+  margin: 0 auto 4px;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
+.compass-root .compass-result-drawing {
+  font-style: italic;
+}
