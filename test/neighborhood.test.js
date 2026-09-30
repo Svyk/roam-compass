@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildNeighborhood, isDrawingLike, plexusRegionLabels, roleOf, modelSettings, typedParentUids } from "../src/model/neighborhood.js";
+import { buildNeighborhood, createPlexusOpener, isDrawingLike, plexusKind, plexusOpenPlan, plexusRegionLabels, roleOf, modelSettings, typedParentUids } from "../src/model/neighborhood.js";
 
 const page = (uid, title) => ({ uid, title });
 
@@ -385,4 +385,94 @@ test("plexusRegionLabels: loaded gives labels, unloaded and v2 entries give none
   assert.equal(boom("r1", str), null);
   const hood = buildNeighborhood(snap({ center: { uid: "r1", kind: "block", string: str, page: page("pg", "D"), parent: null, siblings: [] } }), {}, { regionLabel: plexusRegionLabels(undefined) });
   assert.equal(hood.center.title, "Region");
+});
+
+test("plexusKind separates regions from drawings", () => {
+  assert.equal(plexusKind({ string: "{{[[plexus-region]]: abc}}" }), "region");
+  assert.equal(plexusKind({ string: " {{[[excalidraw]]}}" }), "drawing");
+  assert.equal(plexusKind({ string: "plain" }), null);
+  assert.equal(plexusKind(null), null);
+});
+
+test("outline rows and a block centre carry their plexus kind", () => {
+  const hood = buildNeighborhood(snap({
+    center: { uid: "c", kind: "block", string: "{{[[plexus-region]]: r}}", page: page("p", "P") },
+    outline: [{ uid: "a", string: "{{[[excalidraw]]}}" }, { uid: "b", string: "text" }],
+  }), modelSettings({}));
+  assert.equal(hood.center.plexus, "region");
+  assert.deepEqual(hood.outline.map((row) => row.plexus), ["drawing", null]);
+});
+
+test("plexusOpenPlan closes for regions and main-window opens only", () => {
+  const api = { apiVersion: 2, open() {} };
+  assert.deepEqual(plexusOpenPlan(api, "region", true), { closeFirst: true });
+  assert.deepEqual(plexusOpenPlan(api, "region", false), { closeFirst: true });
+  assert.deepEqual(plexusOpenPlan(api, "drawing", true), { closeFirst: false });
+  assert.deepEqual(plexusOpenPlan(api, "drawing", false), { closeFirst: true });
+  assert.equal(plexusOpenPlan(api, null, true), null);
+  assert.equal(plexusOpenPlan(null, "region", true), null);
+  assert.equal(plexusOpenPlan({ apiVersion: 1, open() {} }, "region", true), null);
+  assert.equal(plexusOpenPlan({ apiVersion: 3 }, "region", true), null);
+});
+
+function openerRig({ plexus, kind = "region" } = {}) {
+  const log = [];
+  const errors = [];
+  const orig = console.error;
+  console.error = (...a) => errors.push(a);
+  const host = {
+    openInSidebar: async (uid, k) => { log.push(["host:sidebar", uid, k]); },
+    openInMain: async (uid, k) => { log.push(["host:main", uid, k]); },
+  };
+  const opener = createPlexusOpener({ plexus: () => plexus?.(log), close: () => log.push(["close"]), host, plexusKindOf: () => kind, nodeKind: () => "block" });
+  return { log, errors, opener, restore: () => { console.error = orig; } };
+}
+const fakePlexus = (open) => (log) => ({ apiVersion: 4, open: (uid, o) => { log.push(["open", uid, o]); return open(); } });
+
+test("opener: a region in the sidebar closes the overlay before RoamPlexus.open", async () => {
+  const r = openerRig({ plexus: fakePlexus(async () => {}) });
+  try {
+    await r.opener.openSidebar("u1");
+    assert.deepEqual(r.log, [["close"], ["open", "u1", { sidebar: true }]]);
+  } finally { r.restore(); }
+});
+
+test("opener: a drawing in the sidebar keeps the overlay open", async () => {
+  const r = openerRig({ plexus: fakePlexus(async () => {}), kind: "drawing" });
+  try {
+    await r.opener.openSidebar("u1");
+    assert.deepEqual(r.log, [["open", "u1", { sidebar: true }]]);
+    await r.opener.openMain("u1");
+    assert.deepEqual(r.log.slice(1), [["close"], ["open", "u1", { sidebar: false }]]);
+  } finally { r.restore(); }
+});
+
+test("opener: without Plexus the host opens, and main closes the overlay once", async () => {
+  const r = openerRig({ plexus: undefined });
+  try {
+    await r.opener.openSidebar("u1");
+    await r.opener.openMain("u1");
+    assert.deepEqual(r.log, [["host:sidebar", "u1", "block"], ["close"], ["host:main", "u1", "block"]]);
+  } finally { r.restore(); }
+});
+
+test("opener: a synchronous throw from open falls back to the host", async () => {
+  const r = openerRig({ plexus: fakePlexus(() => { throw new Error("boom"); }) });
+  try {
+    await r.opener.openSidebar("u1");
+    assert.deepEqual(r.log.at(-1), ["host:sidebar", "u1", "block"]);
+    assert.equal(r.errors.length, 1);
+    await r.opener.openMain("u2");
+    assert.deepEqual(r.log.at(-1), ["host:main", "u2", "block"]);
+  } finally { r.restore(); }
+});
+
+test("opener: a rejected open is logged only, with no host fallback", async () => {
+  const r = openerRig({ plexus: fakePlexus(() => Promise.reject(new Error("nope"))) });
+  try {
+    await r.opener.openSidebar("u1");
+    assert.equal(r.log.some((e) => String(e[0]).startsWith("host:")), false);
+    assert.equal(r.errors.length, 1);
+    assert.equal(r.errors[0][0], "[compass] open");
+  } finally { r.restore(); }
 });

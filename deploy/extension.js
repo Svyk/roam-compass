@@ -1,4 +1,4 @@
-/* Compass v0.3.0 | MIT | generated; edit src/ */
+/* Compass v0.4.0 | MIT | generated; edit src/ */
 
 // src/lifecycle.js
 function isPromiseLike(value) {
@@ -385,6 +385,40 @@ function isDrawingLike(node) {
   const text = typeof node?.string === "string" ? node.string.trimStart() : "";
   return text.startsWith("{{[[excalidraw]]}}") || text.startsWith("{{excalidraw}}") || text.startsWith("{{[[plexus-region]]");
 }
+function plexusKind(node) {
+  if (!isDrawingLike(node)) return null;
+  return node.string.trimStart().startsWith("{{[[plexus-region]]") ? "region" : "drawing";
+}
+function plexusOpenPlan(api, target, sidebar) {
+  if (!target || !api || !(api.apiVersion >= 2) || typeof api.open !== "function") return null;
+  return { closeFirst: target === "region" || !sidebar };
+}
+function createPlexusOpener({ plexus: plexus2, close, host, plexusKindOf, nodeKind }) {
+  function viaPlexus(uid, sidebar) {
+    const api = plexus2();
+    const plan = plexusOpenPlan(api, plexusKindOf(uid), sidebar);
+    if (!plan) return null;
+    if (plan.closeFirst) close();
+    try {
+      return Promise.resolve(api.open(uid, { sidebar })).catch((error) => console.error("[compass] open", error));
+    } catch (error) {
+      console.error("[compass] open", error);
+      return null;
+    }
+  }
+  function openSidebar(uid, kind = nodeKind(uid)) {
+    const routed = viaPlexus(uid, true);
+    if (routed) return routed;
+    return host.openInSidebar(uid, kind).catch((error) => console.error("[compass] open", error));
+  }
+  function openMain(uid, kind = nodeKind(uid)) {
+    const routed = viaPlexus(uid, false);
+    if (routed) return routed;
+    close();
+    return host.openInMain(uid, kind).catch((error) => console.error("[compass] open", error));
+  }
+  return { openSidebar, openMain };
+}
 function kindOf(entity) {
   return typeof entity?.title === "string" && entity.title ? "page" : "block";
 }
@@ -432,7 +466,8 @@ function outlineIndex(outline, resolveRegion) {
       text: blockTitle(block.uid, block.string, 72, resolveRegion) || " ",
       depth,
       parentUid,
-      childCount: (block.children ?? []).filter((child) => child?.uid).length
+      childCount: (block.children ?? []).filter((child) => child?.uid).length,
+      plexus: plexusKind(block)
     });
   });
   return { index, rows };
@@ -691,7 +726,8 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
       uid: centerUid,
       kind: center.kind === "block" ? "block" : "page",
       title: center.kind === "block" ? blockTitle(centerUid, center.string, 120, resolveRegion) || centerUid : center.title || centerUid,
-      badges
+      badges,
+      plexus: center.kind === "block" ? plexusKind(center) : null
     },
     nodes: kept,
     overflow,
@@ -2372,13 +2408,11 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (uid === hood?.center?.uid) return hood.center.kind;
     return nodeByUid.get(uid)?.kind ?? "page";
   }
-  function openSidebar(uid, kind = nodeKind(uid)) {
-    return host.openInSidebar(uid, kind).catch((error) => console.error("[compass] open", error));
+  function plexusOpenKind(uid) {
+    const entity = uid === hood?.center?.uid ? hood.center : nodeByUid.get(uid) ?? hood?.outline?.find((row) => row.uid === uid);
+    return entity?.plexus !== void 0 ? entity.plexus : plexusKind(entity);
   }
-  function openMain(uid, kind = nodeKind(uid)) {
-    close();
-    return host.openInMain(uid, kind).catch((error) => console.error("[compass] open", error));
-  }
+  const { openSidebar, openMain } = createPlexusOpener({ plexus, close, host, plexusKindOf: plexusOpenKind, nodeKind });
   function menuItem(text, action) {
     const item = button("compass-menu-item", text);
     item.setAttribute("role", "menuitem");

@@ -4,6 +4,12 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-29
+
+### Changed
+
+- Double-click, "Open in sidebar" and "Open in main window" on a drawing or Plexus region node, outline row or centre open through `RoamPlexus.open(uid, {sidebar})` when Plexus reports `apiVersion` 2 or later and exposes `open`. A region opens zoomed with spotlight. The overlay closes before any region open and before a main-window drawing open; a drawing opened in the sidebar leaves the overlay up. The sidecar and the other sidebar windows are not touched. Without Plexus, or when `open` throws synchronously, the plain block opens as before; a rejected promise is only logged.
+
 ## [0.3.0] - 2026-09-29
 
 ### Changed

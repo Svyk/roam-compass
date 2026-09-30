@@ -119,6 +119,51 @@ export function isDrawingLike(node) {
   return text.startsWith("{{[[excalidraw]]}}") || text.startsWith("{{excalidraw}}") || text.startsWith("{{[[plexus-region]]");
 }
 
+// "region" for a Plexus region macro, "drawing" for an Excalidraw macro, else null.
+export function plexusKind(node) {
+  if (!isDrawingLike(node)) return null;
+  return node.string.trimStart().startsWith("{{[[plexus-region]]") ? "region" : "drawing";
+}
+
+// Whether a node opens through RoamPlexus.open, and whether the overlay closes first.
+// Regions go full-screen even from the sidebar; drawings only leave the overlay for the main window.
+export function plexusOpenPlan(api, target, sidebar) {
+  if (!target || !api || !(api.apiVersion >= 2) || typeof api.open !== "function") return null;
+  return { closeFirst: target === "region" || !sidebar };
+}
+
+// Open handlers for the overlay. Drawing and region blocks go through RoamPlexus.open when it is loaded;
+// otherwise, or when open throws synchronously, the host path runs. A rejected open is logged only.
+export function createPlexusOpener({ plexus, close, host, plexusKindOf, nodeKind }) {
+  function viaPlexus(uid, sidebar) {
+    const api = plexus();
+    const plan = plexusOpenPlan(api, plexusKindOf(uid), sidebar);
+    if (!plan) return null;
+    if (plan.closeFirst) close();
+    try {
+      return Promise.resolve(api.open(uid, { sidebar })).catch((error) => console.error("[compass] open", error));
+    } catch (error) {
+      console.error("[compass] open", error);
+      return null;
+    }
+  }
+
+  function openSidebar(uid, kind = nodeKind(uid)) {
+    const routed = viaPlexus(uid, true);
+    if (routed) return routed;
+    return host.openInSidebar(uid, kind).catch((error) => console.error("[compass] open", error));
+  }
+
+  function openMain(uid, kind = nodeKind(uid)) {
+    const routed = viaPlexus(uid, false);
+    if (routed) return routed;
+    close();
+    return host.openInMain(uid, kind).catch((error) => console.error("[compass] open", error));
+  }
+
+  return { openSidebar, openMain };
+}
+
 function kindOf(entity) {
   return typeof entity?.title === "string" && entity.title ? "page" : "block";
 }
@@ -174,6 +219,7 @@ function outlineIndex(outline, resolveRegion) {
       depth,
       parentUid,
       childCount: (block.children ?? []).filter((child) => child?.uid).length,
+      plexus: plexusKind(block),
     });
   });
   return { index, rows };
@@ -454,6 +500,7 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
       kind: center.kind === "block" ? "block" : "page",
       title: center.kind === "block" ? blockTitle(centerUid, center.string, 120, resolveRegion) || centerUid : center.title || centerUid,
       badges,
+      plexus: center.kind === "block" ? plexusKind(center) : null,
     },
     nodes: kept,
     overflow,

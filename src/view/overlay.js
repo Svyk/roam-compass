@@ -1,4 +1,4 @@
-import { attributeForRole, buildNeighborhood, DROP_ROLE, inverseRole, isDrawingLike, plexusRegionLabels } from "../model/neighborhood.js";
+import { attributeForRole, buildNeighborhood, createPlexusOpener, DROP_ROLE, inverseRole, isDrawingLike, plexusKind, plexusRegionLabels } from "../model/neighborhood.js";
 import { layout, sideAt } from "../model/layout.js";
 import { rankTitles } from "../model/search.js";
 import { readCompassSettings, SETTING_IDS, writeSetting } from "../settings.js";
@@ -898,14 +898,12 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     return nodeByUid.get(uid)?.kind ?? "page";
   }
 
-  function openSidebar(uid, kind = nodeKind(uid)) {
-    return host.openInSidebar(uid, kind).catch((error) => console.error("[compass] open", error));
+  function plexusOpenKind(uid) {
+    const entity = uid === hood?.center?.uid ? hood.center : nodeByUid.get(uid) ?? hood?.outline?.find((row) => row.uid === uid);
+    return entity?.plexus !== undefined ? entity.plexus : plexusKind(entity);
   }
 
-  function openMain(uid, kind = nodeKind(uid)) {
-    close();
-    return host.openInMain(uid, kind).catch((error) => console.error("[compass] open", error));
-  }
+  const { openSidebar, openMain } = createPlexusOpener({ plexus, close, host, plexusKindOf: plexusOpenKind, nodeKind });
 
   function menuItem(text, action) {
     const item = button("compass-menu-item", text);
