@@ -15,6 +15,39 @@ function stampVersion(version) {
   versionHost()[VERSION_FLAG] = version;
 }
 
+function installRoamCompass(win, overlay) {
+  const api = Object.freeze({
+    isAvailable() {
+      return true;
+    },
+    focus(uid) {
+      if (typeof overlay?.focusUid === "function") overlay.focusUid(uid);
+    },
+  });
+  win.RoamCompass = api;
+  const emit = (type) => {
+    try {
+      const EventType = win.CustomEvent;
+      if (typeof EventType === "function" && typeof win.dispatchEvent === "function") {
+        win.dispatchEvent(new EventType(type));
+      }
+    } catch (error) {
+      console.warn("[compass] event failed", error);
+    }
+  };
+  emit("roam-compass:ready");
+  return () => {
+    if (win.RoamCompass === api) {
+      try {
+        delete win.RoamCompass;
+      } catch {
+        win.RoamCompass = undefined;
+      }
+    }
+    emit("roam-compass:unload");
+  };
+}
+
 function clearVersion() {
   const host = versionHost();
   try {
@@ -35,6 +68,7 @@ export async function onload({ extensionAPI, extension }) {
     stampVersion(version);
     const host = createHost({ lifecycle });
     const overlay = mountOverlay({ extensionAPI, lifecycle, host });
+    lifecycle.add(installRoamCompass(versionHost(), overlay));
     await initializeSettings(extensionAPI);
     await lifecycle.settingsPanel(extensionAPI, createSettingsPanel({
       extensionAPI,

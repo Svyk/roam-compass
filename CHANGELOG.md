@@ -4,6 +4,14 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-30
+
+### Added
+
+- `window.RoamCompass` is frozen `{ focus, isAvailable }`. `isAvailable` is a function. Load fires `roam-compass:ready` and unload fires `roam-compass:unload`.
+- Settings Follow main window (off) and Related drawings (on). A drawing centre lists frames then regions. Hover asks for a 480px cache thumbnail and does not render. Dashed edges use the link stroke. Show linked window is a bar button. The three palette commands register on Cmd/Ctrl+P and leave when that palette closes, so idle typing does not pay for them. A keyup does not schedule work until those commands are registered. Related drawings rank shared block refs and element links, and skip the excalidraw syntax page.
+- Typing with Compass 0.5.0 and Plexus 0.14.0 loaded measured +0.142 ms/key (five interleaved rounds, 42 keys, 5 s settle, editor closed).
+
 ## [0.4.0] - 2026-09-29
 
 ### Changed

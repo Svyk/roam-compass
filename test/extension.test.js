@@ -17,6 +17,8 @@ const SETTING_IDS = [
   "compass-sidecar",
   "compass-outline",
   "compass-drawings",
+  "compass-follow",
+  "compass-related-drawings",
   "compass-max-zone",
   "compass-pins",
 ];
@@ -28,6 +30,8 @@ const SWITCH_IDS = [
   "compass-sidecar",
   "compass-outline",
   "compass-drawings",
+  "compass-follow",
+  "compass-related-drawings",
 ];
 
 function versionHost() {
@@ -125,12 +129,29 @@ test("extension exports the Roam lifecycle contract and survives repeated unload
   const api = fakeExtensionApi();
   const menu = installRoam(api.calls);
   const lines = [];
+  const events = [];
   const originalInfo = console.info;
+  const priorDispatch = globalThis.dispatchEvent;
+  const priorCustom = globalThis.CustomEvent;
   console.info = (...parts) => {
     lines.push(parts.map(String).join(" "));
   };
+  globalThis.CustomEvent = class CustomEvent {
+    constructor(type) { this.type = type; }
+  };
+  globalThis.dispatchEvent = (event) => {
+    events.push(event.type);
+    return true;
+  };
   try {
     const cleanup = await extension.onload({ extensionAPI: api, extension: { version: "test" } });
+    const compass = versionHost().RoamCompass;
+    assert.equal(typeof compass?.isAvailable, "function");
+    assert.equal(compass.isAvailable(), true);
+    assert.equal(typeof compass.focus, "function");
+    assert.equal(Object.isFrozen(compass), true);
+    compass.focus("block-x");
+    assert.ok(events.includes("roam-compass:ready"));
     assert.equal(typeof cleanup, "function");
     assert.equal(versionHost().__ROAM_COMPASS_VERSION, "test");
     assert.equal(api.settings.get("compass-north"), "Parent, Up, Part of, Is a, Type, Category, Project, BT_attrProject");
@@ -145,6 +166,8 @@ test("extension exports the Roam lifecycle contract and survives repeated unload
     assert.equal(api.settings.get("compass-badges"), true);
     assert.equal(api.settings.get("compass-sidecar"), true);
     assert.equal(api.settings.get("compass-outline"), false);
+    assert.equal(api.settings.get("compass-follow"), false);
+    assert.equal(api.settings.get("compass-related-drawings"), true);
     assert.equal(api.settings.get("compass-max-zone"), "12");
     assert.deepEqual(api.settings.get("compass-pins"), []);
     assert.deepEqual(api.panel.settings.map((row) => row.id), SETTING_IDS);
@@ -163,10 +186,16 @@ test("extension exports the Roam lifecycle contract and survives repeated unload
     menu.command.callback({ "block-uid": "block-1" });
     await cleanup();
     assert.equal(versionHost().__ROAM_COMPASS_VERSION, undefined);
+    assert.equal(versionHost().RoamCompass, undefined);
+    assert.ok(events.includes("roam-compass:unload"));
     await extension.onunload();
     await extension.onunload();
   } finally {
     console.info = originalInfo;
+    if (priorDispatch === undefined) delete globalThis.dispatchEvent;
+    else globalThis.dispatchEvent = priorDispatch;
+    if (priorCustom === undefined) delete globalThis.CustomEvent;
+    else globalThis.CustomEvent = priorCustom;
     delete globalThis.roamAlphaAPI;
     await extension.onunload();
   }

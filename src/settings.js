@@ -16,6 +16,8 @@ export const SETTING_IDS = Object.freeze({
   maxZone: "compass-max-zone",
   pins: "compass-pins",
   drawings: "compass-drawings",
+  follow: "compass-follow",
+  relatedDrawings: "compass-related-drawings",
 });
 
 export const DEFAULTS = Object.freeze({
@@ -34,6 +36,8 @@ export const DEFAULTS = Object.freeze({
   "compass-max-zone": "12",
   "compass-pins": [],
   "compass-drawings": true,
+  "compass-follow": false,
+  "compass-related-drawings": true,
 });
 
 const SWITCHES = new Set([
@@ -43,6 +47,8 @@ const SWITCHES = new Set([
   SETTING_IDS.sidecar,
   SETTING_IDS.outline,
   SETTING_IDS.drawings,
+  SETTING_IDS.follow,
+  SETTING_IDS.relatedDrawings,
 ]);
 
 const ROWS = [
@@ -59,6 +65,8 @@ const ROWS = [
   [SETTING_IDS.sidecar, "Sidecar", "Keep the center open in the right sidebar."],
   [SETTING_IDS.outline, "Outline", "Expand the center into its blocks."],
   [SETTING_IDS.drawings, "Drawings", "Show drawing thumbnails on nodes and offer New drawing in search when the Plexus extension is installed."],
+  [SETTING_IDS.follow, "Follow main window", "Recentre when the main window opens another page or block. Off skips that. A pin, typing, or a Compass navigation also skips it."],
+  [SETTING_IDS.relatedDrawings, "Related drawings", "When Plexus exposes linksOf, list drawings that share block or link refs with the centre."],
   [SETTING_IDS.maxZone, "Nodes per side", "How many nodes a side shows before it offers Show all."],
   [SETTING_IDS.pins, "Pins", "JSON list of {uid, title}. Use the Pin button instead of editing this."],
 ];
@@ -113,6 +121,8 @@ export function readCompassSettings(extensionAPI) {
     sidecar: flag(read(SETTING_IDS.sidecar), true),
     outline: flag(read(SETTING_IDS.outline), false),
     drawings: flag(read(SETTING_IDS.drawings), true),
+    follow: flag(read(SETTING_IDS.follow), false),
+    relatedDrawings: flag(read(SETTING_IDS.relatedDrawings), true),
     pins: readPins(read(SETTING_IDS.pins)),
   };
 }

@@ -1,4 +1,4 @@
-/* Compass v0.4.0 | MIT | generated; edit src/ */
+/* Compass v0.5.0 | MIT | generated; edit src/ */
 
 // src/lifecycle.js
 function isPromiseLike(value) {
@@ -736,6 +736,21 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
     settings
   };
 }
+var DRAWING_LINK_CAP = 50;
+function drawingLinkEdges(rows) {
+  if (!Array.isArray(rows)) return [];
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const row of rows) {
+    const uid = typeof row?.uid === "string" ? row.uid : "";
+    if (!uid.trim() || seen.has(uid)) continue;
+    seen.add(uid);
+    const text = typeof row.text === "string" ? row.text : "";
+    out.push({ uid, text });
+    if (out.length >= DRAWING_LINK_CAP) break;
+  }
+  return out;
+}
 
 // src/model/rewrite.js
 var FORBIDDEN = [":harc", ":entity/attrs", ":attr/proxy"];
@@ -805,6 +820,7 @@ function planMove({ source, fromAttribute, toAttribute, value, newUid }) {
 var LABELS = "{:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string]}]}";
 var SOURCE = "[:block/uid :block/string :block/order {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order]}]";
 var CENTER_PULL = `[:block/uid :node/title :block/string :block/order
+ {:block/refs [:block/uid :node/title :block/string]}
  {:block/page [:block/uid :node/title]}
  {:block/_children [:block/uid :node/title :block/string {:block/children [:block/uid :block/string :block/order]}]}
  {:harc/_e [:block/uid
@@ -830,6 +846,15 @@ var WATCHES = [
   "[:block/uid :block/string {:block/children ...}]"
 ];
 var TITLES_QUERY = "[:find ?uid ?title :where [?page :node/title ?title] [?page :block/uid ?uid]]";
+var DRAWING_REF_QUERY = `[:find ?uid ?want ?time
+ :in $ [?want ...]
+ :where
+ [?r :block/uid ?want]
+ [?b :block/refs ?r]
+ [?b :block/uid ?uid]
+ [?b :block/string ?s]
+ [(clojure.string/includes? ?s "excalidraw")]
+ [?b :edit/time ?time]]`;
 var PREFIX_QUERY = `[:find ?uid ?title
  :in $ ?prefix
  :where
@@ -852,6 +877,13 @@ function entityString(uid) {
 }
 function byOrder(a, b) {
   return (a.order ?? 0) - (b.order ?? 0) || (a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0);
+}
+function topicRefUid(entity) {
+  if (typeof entity === "string") return entity || null;
+  const uid = entity?.uid;
+  if (typeof uid !== "string" || !uid) return null;
+  if (entity.title === "excalidraw") return null;
+  return uid;
 }
 function entityOf(node) {
   const uid = node?.[":block/uid"];
@@ -970,7 +1002,8 @@ function normalizeCenter(pulled, uid) {
     string: typeof pulled?.[":block/string"] === "string" ? pulled[":block/string"] : "",
     page: entityOf(pulled?.[":block/page"]),
     parent,
-    siblings: asList(parentNode?.[":block/children"]).map(entityOf).filter((item) => item?.string != null && item.uid !== uid).sort(byOrder)
+    siblings: asList(parentNode?.[":block/children"]).map(entityOf).filter((item) => item?.string != null && item.uid !== uid).sort(byOrder),
+    refs: asList(pulled?.[":block/refs"]).map(entityOf).filter(Boolean)
   };
 }
 function normalizePeer(parentUid, pulled) {
@@ -990,6 +1023,28 @@ function normalizePeer(parentUid, pulled) {
 }
 function pad(number) {
   return String(number).padStart(2, "0");
+}
+async function mainUid() {
+  try {
+    const uid = await roamApi()?.ui?.mainWindow?.getOpenPageOrBlockUid?.();
+    return typeof uid === "string" && uid ? uid : null;
+  } catch (error) {
+    console.error("[compass] main uid", error);
+    return null;
+  }
+}
+function uidFromHash(hash) {
+  if (typeof hash !== "string" || !hash) return null;
+  const read = (kind) => {
+    const match = new RegExp(`/${kind}/([^/?#]+)`).exec(hash);
+    if (!match?.[1]) return null;
+    try {
+      return decodeURIComponent(match[1]) || null;
+    } catch {
+      return match[1];
+    }
+  };
+  return read("block") ?? read("page");
 }
 function adjacentDayUids(uid) {
   const match = DAILY_UID.exec(String(uid ?? ""));
@@ -1245,6 +1300,43 @@ function createHost({ lifecycle }) {
     queue = run.then(() => void 0, () => void 0);
     return run;
   }
+  function drawingRows(centreUid, refUids) {
+    const api = roamApi()?.data;
+    if (!api?.q) return [];
+    const wants = [];
+    const seen = /* @__PURE__ */ new Set();
+    const add = (uid) => {
+      if (typeof uid !== "string" || !uid || seen.has(uid)) return;
+      seen.add(uid);
+      wants.push(uid);
+    };
+    add(centreUid);
+    for (const uid of refUids || []) add(uid);
+    if (!wants.length) return [];
+    let found = [];
+    try {
+      found = api.q(DRAWING_REF_QUERY, wants) ?? [];
+    } catch (error) {
+      console.error("[compass] related query", error);
+      return [];
+    }
+    const byUid = /* @__PURE__ */ new Map();
+    for (const row of found) {
+      if (!Array.isArray(row)) continue;
+      const [uid, ref, time] = row;
+      if (typeof uid !== "string" || !uid || uid === centreUid) continue;
+      let item = byUid.get(uid);
+      if (!item) {
+        if (byUid.size >= 80) continue;
+        item = { uid, refs: [], editTime: Number(time) || 0, title: uid };
+        byUid.set(uid, item);
+      }
+      if (typeof ref === "string" && ref && !item.refs.includes(ref)) item.refs.push(ref);
+      const edit = Number(time) || 0;
+      if (edit > item.editTime) item.editTime = edit;
+    }
+    return [...byUid.values()];
+  }
   lifecycle.add(() => closeSidecar());
   lifecycle.add(() => unwatch());
   lifecycle.add(() => {
@@ -1256,6 +1348,7 @@ function createHost({ lifecycle }) {
     unwatch,
     titles,
     openPageUid,
+    mainUid,
     focusedBlock,
     openInSidebar,
     openInMain,
@@ -1263,6 +1356,7 @@ function createHost({ lifecycle }) {
     releaseSidecar,
     closeSidecar,
     move,
+    drawingRows,
     blockContextMenu() {
       return roamApi()?.ui?.blockContextMenu ?? null;
     }
@@ -1413,6 +1507,37 @@ function sideAt(point, center) {
   return nx < 0 ? "west" : "east";
 }
 
+// src/model/related.js
+var CAP = 50;
+function centreSet(centreRefs) {
+  if (centreRefs instanceof Set) return centreRefs.size > 0 ? centreRefs : null;
+  if (!Array.isArray(centreRefs) || centreRefs.length === 0) return null;
+  return new Set(centreRefs);
+}
+function scoreOf(refs, centre) {
+  if (!Array.isArray(refs) || refs.length === 0) return 0;
+  const seen = /* @__PURE__ */ new Set();
+  let score2 = 0;
+  for (const ref of refs) {
+    if (seen.has(ref)) continue;
+    seen.add(ref);
+    if (centre.has(ref)) score2 += 1;
+  }
+  return score2;
+}
+function rankDrawings(centreRefs, rows) {
+  const centre = centreSet(centreRefs);
+  if (!centre || !Array.isArray(rows) || rows.length === 0) return [];
+  const ranked = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const score2 = scoreOf(row.refs, centre);
+    if (score2 > 0) ranked.push({ row, score: score2 });
+  }
+  ranked.sort((a, b) => b.score - a.score || (b.row.editTime ?? 0) - (a.row.editTime ?? 0));
+  return ranked.slice(0, CAP).map((item) => item.row);
+}
+
 // src/model/search.js
 function subsequence(needle, haystack) {
   let at = 0;
@@ -1466,7 +1591,9 @@ var SETTING_IDS = Object.freeze({
   outline: "compass-outline",
   maxZone: "compass-max-zone",
   pins: "compass-pins",
-  drawings: "compass-drawings"
+  drawings: "compass-drawings",
+  follow: "compass-follow",
+  relatedDrawings: "compass-related-drawings"
 });
 var DEFAULTS = Object.freeze({
   "compass-north": MODEL_DEFAULTS.parent,
@@ -1483,7 +1610,9 @@ var DEFAULTS = Object.freeze({
   "compass-outline": false,
   "compass-max-zone": "12",
   "compass-pins": [],
-  "compass-drawings": true
+  "compass-drawings": true,
+  "compass-follow": false,
+  "compass-related-drawings": true
 });
 var SWITCHES = /* @__PURE__ */ new Set([
   SETTING_IDS.links,
@@ -1491,7 +1620,9 @@ var SWITCHES = /* @__PURE__ */ new Set([
   SETTING_IDS.badges,
   SETTING_IDS.sidecar,
   SETTING_IDS.outline,
-  SETTING_IDS.drawings
+  SETTING_IDS.drawings,
+  SETTING_IDS.follow,
+  SETTING_IDS.relatedDrawings
 ]);
 var ROWS = [
   [SETTING_IDS.north, "Parents (north)", "Attributes whose value sits above the center. The first one is written when you drag a node north."],
@@ -1507,6 +1638,8 @@ var ROWS = [
   [SETTING_IDS.sidecar, "Sidecar", "Keep the center open in the right sidebar."],
   [SETTING_IDS.outline, "Outline", "Expand the center into its blocks."],
   [SETTING_IDS.drawings, "Drawings", "Show drawing thumbnails on nodes and offer New drawing in search when the Plexus extension is installed."],
+  [SETTING_IDS.follow, "Follow main window", "Recentre when the main window opens another page or block. Off skips that. A pin, typing, or a Compass navigation also skips it."],
+  [SETTING_IDS.relatedDrawings, "Related drawings", "When Plexus exposes linksOf, list drawings that share block or link refs with the centre."],
   [SETTING_IDS.maxZone, "Nodes per side", "How many nodes a side shows before it offers Show all."],
   [SETTING_IDS.pins, "Pins", "JSON list of {uid, title}. Use the Pin button instead of editing this."]
 ];
@@ -1557,6 +1690,8 @@ function readCompassSettings(extensionAPI) {
     sidecar: flag2(read(SETTING_IDS.sidecar), true),
     outline: flag2(read(SETTING_IDS.outline), false),
     drawings: flag2(read(SETTING_IDS.drawings), true),
+    follow: flag2(read(SETTING_IDS.follow), false),
+    relatedDrawings: flag2(read(SETTING_IDS.relatedDrawings), true),
     pins: readPins(read(SETTING_IDS.pins))
   };
 }
@@ -1606,6 +1741,9 @@ var ENTER_FROM = { north: [0, -36], south: [0, 36], west: [-36, 0], east: [36, 0
 var CLICK_DELAY = 230;
 var HISTORY_CAP = 100;
 var THUMB_WIDTH = 160;
+var HOVER_WIDTH = 480;
+var BLOCK_REF = /^\(\(([^)]+)\)\)$/;
+var PAGE_REF = /^\[\[(.+)\]\]$/;
 function plexus() {
   const api = globalThis.window?.RoamPlexus;
   return api && api.apiVersion >= 1 ? api : null;
@@ -1631,12 +1769,57 @@ function guard(work) {
     }
   };
 }
+function isPaletteChord(event) {
+  const key = event?.key;
+  if (typeof key !== "string" || key.toLowerCase() !== "p") return false;
+  return (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey;
+}
 async function registerCommands({ extensionAPI, lifecycle, host, view }) {
   const palette = extensionAPI?.ui?.commandPalette;
   if (!palette?.addCommand || !palette?.removeCommand) throw new TypeError("A command palette is required");
-  await lifecycle.command(palette, { label: "Compass: Open", callback: guard(() => view.toggle()) });
-  await lifecycle.command(palette, { label: "Compass: Focus page", callback: guard(() => view.focusPage()) });
-  await lifecycle.command(palette, { label: "Compass: Focus block", callback: guard(() => view.focusBlock()) });
+  const paletteCommands = [
+    { label: "Compass: Open", callback: guard(() => view.toggle()) },
+    { label: "Compass: Focus page", callback: guard(() => view.focusPage()) },
+    { label: "Compass: Focus block", callback: guard(() => view.focusBlock()) }
+  ];
+  let paletteOn = false;
+  const enablePalette = () => {
+    if (paletteOn || lifecycle.disposed) return;
+    paletteOn = true;
+    for (const command of paletteCommands) {
+      const added = palette.addCommand(command);
+      if (added?.then) added.catch((error) => console.error("[compass] command", error));
+    }
+  };
+  const disablePalette = () => {
+    if (!paletteOn) return;
+    paletteOn = false;
+    for (const command of paletteCommands) {
+      try {
+        palette.removeCommand({ label: command.label });
+      } catch {
+      }
+    }
+  };
+  const releaseIfClosed = () => {
+    if (!paletteOn || document.querySelector(".rm-command-palette")) return;
+    disablePalette();
+  };
+  const doc = globalThis.document;
+  if (typeof doc?.addEventListener !== "function") {
+    enablePalette();
+  } else {
+    lifecycle.event(doc, "keydown", (event) => {
+      if (isPaletteChord(event)) enablePalette();
+    }, true);
+    lifecycle.event(doc, "keyup", () => {
+      if (paletteOn) setTimeout(releaseIfClosed, 0);
+    }, true);
+    lifecycle.event(doc, "pointerup", () => {
+      if (paletteOn) setTimeout(releaseIfClosed, 0);
+    }, true);
+  }
+  lifecycle.add(disablePalette);
   const menu = host.blockContextMenu?.();
   if (menu?.addCommand && menu?.removeCommand) {
     await lifecycle.command(menu, {
@@ -1726,6 +1909,8 @@ function mountOverlay({ extensionAPI, lifecycle, host }) {
       },
       focusBlock() {
         return Promise.resolve();
+      },
+      focusUid() {
       }
     };
     return { ...view, installCommands: () => registerCommands({ extensionAPI, lifecycle, host, view }) };
@@ -1755,10 +1940,11 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   outlineButton.setAttribute("aria-pressed", "false");
   const fitButton = button("compass-fit", "Fit", "Fit the neighborhood");
   const refreshButton = button("compass-refresh", "Refresh", "Read the graph again");
+  const linkedButton = button("compass-linked", "Show linked window", "Open this page in the main window");
   const status = el("span", "compass-status");
   status.setAttribute("role", "status");
   const closeButton = button("compass-close", "Close", "Close (Esc)");
-  bar.append(backButton, forwardButton, find, pinButton, outlineButton, fitButton, refreshButton, status, closeButton);
+  bar.append(backButton, forwardButton, find, pinButton, outlineButton, fitButton, refreshButton, linkedButton, status, closeButton);
   const pinRow = el("div", "compass-pins");
   pinRow.hidden = true;
   const stage = el("div", "compass-stage");
@@ -1785,7 +1971,11 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   details.hidden = true;
   const ghost = el("div", "compass-ghost");
   ghost.hidden = true;
-  root.append(bar, pinRow, stage, menu, details, ghost);
+  const hover = el("div", "compass-hover");
+  hover.hidden = true;
+  const related = el("div", "compass-related");
+  related.hidden = true;
+  root.append(bar, pinRow, stage, menu, details, ghost, hover, related);
   const nodeEls = /* @__PURE__ */ new Map();
   const chipEls = /* @__PURE__ */ new Map();
   const timers = /* @__PURE__ */ new Set();
@@ -1816,6 +2006,17 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   let plexusOff = null;
   let plexusApi = null;
   let plexusFramePending = false;
+  let followGen = 0;
+  let compassNavUntil = 0;
+  let hoverToken = 0;
+  let hoverUid = null;
+  let hoverUrl = null;
+  const partUrls = /* @__PURE__ */ new Set();
+  const rawOpenInMain = host.openInMain.bind(host);
+  host.openInMain = (uid, kind) => {
+    compassNavUntil = Date.now() + 800;
+    return rawOpenInMain(uid, kind);
+  };
   function later(fn, ms) {
     const id = globalThis.setTimeout(() => {
       timers.delete(id);
@@ -1996,8 +2197,69 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     titleCache = null;
     pointer = null;
     hideFloating();
+    clearHover();
     endDrag();
     setStatus("");
+  }
+  function recenter(uid) {
+    if (!uid || root.hidden || lifecycle.disposed) return;
+    hideFloating();
+    current = uid;
+    host.watch(uid, scheduleReload);
+    const next = readSettings();
+    if (!next) return;
+    settings = next;
+    try {
+      snapshot = host.snapshot(current, settings.model);
+    } catch (error) {
+      console.error("[compass] read failed", error);
+      setStatus("Could not read this neighborhood.", true);
+      return;
+    }
+    rebuild();
+    render({ navigate: true });
+    renderPins();
+    if (snapshot.missing) setStatus("Nothing in this graph has that uid.", true);
+    updateButtons();
+  }
+  function sleep(ms) {
+    return new Promise((resolve) => {
+      const id = globalThis.setTimeout(() => {
+        timers.delete(id);
+        resolve();
+      }, ms);
+      timers.add(id);
+    });
+  }
+  function followPaused() {
+    if (root.hidden || lifecycle.disposed || !settings?.follow) return true;
+    if ((settings.pins ?? []).some((pin) => pin.uid === current)) return true;
+    if (Date.now() < compassNavUntil) return true;
+    const active = document.activeElement;
+    if (!active) return false;
+    const tag = active.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || active.isContentEditable === true;
+  }
+  async function onHashChange() {
+    const gen = ++followGen;
+    const uid = uidFromHash(globalThis.location?.hash ?? "");
+    if (!uid || followPaused()) return;
+    for (let i = 0; i < 12; i += 1) {
+      if (gen !== followGen || lifecycle.disposed) return;
+      let open = null;
+      try {
+        open = await host.mainUid();
+      } catch (error) {
+        console.error("[compass] follow", error);
+        return;
+      }
+      if (gen !== followGen || followPaused()) return;
+      if (open === uid) {
+        if (uid !== current) recenter(uid);
+        return;
+      }
+      await sleep(40);
+    }
   }
   async function toggle() {
     if (!root.hidden) {
@@ -2063,6 +2325,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       more.style.top = `${box.h - 8 - 24}px`;
       element.append(more);
     }
+    if (hood.center.plexus === "drawing") renderDrawingParts(element, box);
   }
   function placeElement(element, box) {
     element.style.width = `${box.w}px`;
@@ -2122,6 +2385,226 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       thumbRenderTried.add(key);
       thumbRenderChain = thumbRenderChain.then(() => lifecycle.disposed ? null : requestThumb(plexus() ?? api, node.uid, true)).then(accept).catch((error) => console.error("[compass] thumbnail", error));
     }).catch((error) => console.error("[compass] thumbnail", error));
+  }
+  function revokePartUrls() {
+    for (const url of partUrls) {
+      try {
+        globalThis.URL.revokeObjectURL(url);
+      } catch {
+      }
+    }
+    partUrls.clear();
+  }
+  function resolveRef(ref) {
+    if (typeof ref !== "string") return null;
+    const block = BLOCK_REF.exec(ref);
+    if (block?.[1]) return block[1];
+    const page = PAGE_REF.exec(ref);
+    if (!page?.[1]) return null;
+    if (!titleCache) titleCache = host.titles();
+    const hit = (titleCache ?? []).find((row) => row.title === page[1]);
+    return hit?.uid ?? null;
+  }
+  function centreRefs() {
+    const refs = /* @__PURE__ */ new Set();
+    if (current) refs.add(current);
+    const api = plexus();
+    if (typeof api?.linksOf === "function") {
+      try {
+        for (const row of api.linksOf(current) ?? []) {
+          const uid = resolveRef(row.ref);
+          if (uid) refs.add(uid);
+        }
+      } catch (error) {
+        console.error("[compass] links", error);
+      }
+    }
+    for (const ref of snapshot?.center?.refs ?? []) {
+      const uid = topicRefUid(ref);
+      if (uid) refs.add(uid);
+    }
+    for (const mention of snapshot?.mentions ?? []) {
+      if (mention?.uid) refs.add(mention.uid);
+      if (mention?.page?.uid) refs.add(mention.page.uid);
+      for (const ref of mention?.refs ?? []) {
+        const uid = topicRefUid(ref);
+        if (uid) refs.add(uid);
+      }
+    }
+    return refs;
+  }
+  function renderDrawingParts(element, box) {
+    const api = plexus();
+    revokePartUrls();
+    const list = el("div", "compass-parts");
+    list.style.top = `${box.h}px`;
+    element.append(list);
+    if (typeof api?.framesOf !== "function") return;
+    let frames = [];
+    let regions = [];
+    try {
+      frames = api.framesOf(current) ?? [];
+      regions = typeof api.regionsOf === "function" ? api.regionsOf(current) ?? [] : [];
+    } catch (error) {
+      console.error("[compass] parts", error);
+      return;
+    }
+    for (const frame2 of frames) {
+      if (!frame2?.elementId) continue;
+      const row = button("compass-part", frame2.name || "Frame");
+      row.dataset.kind = "frame";
+      row.dataset.id = frame2.elementId;
+      list.append(row);
+    }
+    for (const region of regions) {
+      if (!region?.uid) continue;
+      const row = button("compass-part", region.label || region.uid);
+      row.dataset.kind = "region";
+      row.dataset.uid = region.uid;
+      list.append(row);
+      if (typeof api.thumbnail !== "function") continue;
+      const uid = region.uid;
+      Promise.resolve(api.thumbnail(uid, { maxWidth: THUMB_WIDTH })).then((blob) => {
+        if (!blob || !row.isConnected) return;
+        const url = globalThis.URL.createObjectURL(blob);
+        partUrls.add(url);
+        const img = el("img", "compass-part-thumb");
+        img.alt = "";
+        img.src = url;
+        row.prepend(img);
+      }).catch((error) => console.error("[compass] part thumb", error));
+    }
+  }
+  function drawLinkEdges(boxes) {
+    const api = plexus();
+    if (typeof api?.linksOf !== "function" || !current || !geometry) return;
+    let rows = [];
+    try {
+      rows = api.linksOf(current) ?? [];
+    } catch (error) {
+      console.error("[compass] links", error);
+      return;
+    }
+    const prepared = [];
+    for (const row of rows) {
+      const uid = resolveRef(row?.ref);
+      if (!uid || uid === current || !boxes.has(uid)) continue;
+      prepared.push({ uid, text: typeof row.text === "string" ? row.text : "" });
+    }
+    for (const edge of drawingLinkEdges(prepared)) {
+      const box = boxes.get(edge.uid);
+      if (!box) continue;
+      const shape = edgeFromCenter(box);
+      const group = svg("g", "compass-edge");
+      group.dataset.uid = edge.uid;
+      group.dataset.style = "link";
+      const hit = svg("path", "compass-edge-hit");
+      hit.setAttribute("d", shape.d);
+      const line = svg("path", "compass-edge-line");
+      line.setAttribute("d", shape.d);
+      group.append(hit, line);
+      if (edge.text) {
+        const text = svg("text", "compass-edge-label");
+        text.setAttribute("x", String(shape.mid[0]));
+        text.setAttribute("y", String(shape.mid[1] - 4));
+        text.textContent = edge.text.length > 48 ? `${edge.text.slice(0, 47)}…` : edge.text;
+        group.append(text);
+      }
+      edgeLayer.append(group);
+    }
+  }
+  function renderRelated() {
+    related.replaceChildren();
+    related.hidden = true;
+    const api = plexus();
+    if (!settings?.relatedDrawings || typeof api?.linksOf !== "function" || !current || typeof host.drawingRows !== "function") return;
+    const refs = centreRefs();
+    let rows = [];
+    try {
+      rows = host.drawingRows(current, [...refs]) ?? [];
+    } catch (error) {
+      console.error("[compass] related", error);
+      return;
+    }
+    for (const row of rows) {
+      try {
+        for (const link of api.linksOf(row.uid) ?? []) {
+          const uid = resolveRef(link?.ref);
+          if (uid && refs.has(uid) && !row.refs.includes(uid)) row.refs.push(uid);
+        }
+      } catch (error) {
+        console.error("[compass] related links", error);
+      }
+    }
+    const ranked = rankDrawings(refs, rows).filter((row) => row.uid && row.uid !== current);
+    if (!ranked.length) return;
+    related.hidden = false;
+    related.append(el("div", "compass-related-title", "Related drawings"));
+    for (const row of ranked) {
+      const item = button("compass-related-item", row.title || row.uid);
+      item.dataset.uid = row.uid;
+      related.append(item);
+    }
+  }
+  function clearHover() {
+    hoverToken += 1;
+    hoverUid = null;
+    hover.hidden = true;
+    hover.replaceChildren();
+    if (hoverUrl) {
+      try {
+        globalThis.URL.revokeObjectURL(hoverUrl);
+      } catch {
+      }
+      hoverUrl = null;
+    }
+  }
+  function placeHover(clientX, clientY) {
+    hover.style.left = `${clientX + 12}px`;
+    hover.style.top = `${clientY + 12}px`;
+  }
+  function showHover(uid, clientX, clientY) {
+    const node = uid === hood?.center?.uid ? snapshot?.center : nodeByUid.get(uid);
+    const api = plexus();
+    if (!node || !isDrawingLike(node) || typeof api?.thumbnail !== "function") {
+      if (hoverUid) clearHover();
+      return;
+    }
+    if (hoverUid === uid) {
+      placeHover(clientX, clientY);
+      return;
+    }
+    const token = ++hoverToken;
+    hoverUid = uid;
+    hover.hidden = true;
+    hover.replaceChildren();
+    let pending;
+    try {
+      pending = api.thumbnail(uid, { maxWidth: HOVER_WIDTH });
+    } catch (error) {
+      console.error("[compass] hover", error);
+      return;
+    }
+    Promise.resolve(pending).then((blob) => {
+      if (token !== hoverToken) return;
+      if (!blob) {
+        hover.hidden = true;
+        return;
+      }
+      if (hoverUrl) {
+        try {
+          globalThis.URL.revokeObjectURL(hoverUrl);
+        } catch {
+        }
+      }
+      hoverUrl = globalThis.URL.createObjectURL(blob);
+      const img = el("img", "compass-hover-img");
+      img.alt = "";
+      img.src = hoverUrl;
+      hover.replaceChildren(img);
+      placeHover(clientX, clientY);
+      hover.hidden = false;
+    }).catch((error) => console.error("[compass] hover", error));
   }
   function plexusChanged() {
     if (plexusFramePending || lifecycle.disposed) return;
@@ -2226,6 +2709,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     }
     renderChips();
     renderEdges(boxes);
+    drawLinkEdges(boxes);
+    renderRelated();
     empty.hidden = hood.nodes.length > 0;
     if (!empty.hidden) {
       empty.textContent = "Nothing is connected here yet. Write Name:: [[Page]] in this outline, or link a page, and it appears here.";
@@ -2412,7 +2897,23 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const entity = uid === hood?.center?.uid ? hood.center : nodeByUid.get(uid) ?? hood?.outline?.find((row) => row.uid === uid);
     return entity?.plexus !== void 0 ? entity.plexus : plexusKind(entity);
   }
-  const { openSidebar, openMain } = createPlexusOpener({ plexus, close, host, plexusKindOf: plexusOpenKind, nodeKind });
+  const { openSidebar, openMain } = createPlexusOpener({
+    plexus: () => {
+      const api = plexus();
+      if (!api || typeof api.open !== "function") return api;
+      return {
+        apiVersion: api.apiVersion,
+        open(...args) {
+          compassNavUntil = Date.now() + 800;
+          return api.open(...args);
+        }
+      };
+    },
+    close,
+    host,
+    plexusKindOf: plexusOpenKind,
+    nodeKind
+  });
   function menuItem(text, action) {
     const item = button("compass-menu-item", text);
     item.setAttribute("role", "menuitem");
@@ -2620,9 +3121,23 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     panY = oy - wy * zoom;
     applyCamera(false);
   }
+  function openPart(part) {
+    const api = plexus();
+    if (typeof api?.open !== "function" || !part) return;
+    compassNavUntil = Date.now() + 800;
+    const work = part.dataset.kind === "frame" ? api.open(current, { frame: part.dataset.id }) : api.open(part.dataset.uid);
+    Promise.resolve(work).catch((error) => console.error("[compass] part", error));
+  }
   function onStageClick(event) {
     if (suppressClick) return;
     const target = event.target;
+    const part = target.closest?.(".compass-part");
+    if (part) {
+      event.preventDefault();
+      event.stopPropagation();
+      openPart(part);
+      return;
+    }
     const chip = target.closest?.(".compass-chip");
     if (chip) {
       const zones = expandedFor(current);
@@ -2670,7 +3185,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   function onStageDoubleClick(event) {
     clickTimer = cancel(clickTimer);
     const target = event.target;
-    if (target.closest?.(".compass-caret, .compass-chip")) return;
+    if (target.closest?.(".compass-part, .compass-caret, .compass-chip")) return;
     const row = target.closest?.(".compass-row[data-uid]");
     const element = target.closest?.(".compass-node");
     if (!row && !element) return;
@@ -2679,6 +3194,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     else void openSidebar(element.dataset.uid);
   }
   function onContextMenu(event) {
+    if (event.target.closest?.(".compass-part")) {
+      event.preventDefault();
+      return;
+    }
     const element = event.target.closest?.(".compass-node, .compass-edge, .compass-row[data-uid]");
     if (!element) return;
     event.preventDefault();
@@ -2832,6 +3351,35 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   lifecycle.event(outlineButton, "click", guard(() => toggleOutline()));
   lifecycle.event(fitButton, "click", () => fit(true));
   lifecycle.event(refreshButton, "click", () => load());
+  lifecycle.event(linkedButton, "click", guard(() => {
+    if (current) void host.openInMain(current);
+  }));
+  lifecycle.event(related, "click", (event) => {
+    const item = event.target.closest?.(".compass-related-item");
+    if (!item?.dataset.uid) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const uid = item.dataset.uid;
+    const api = plexus();
+    if (typeof api?.open === "function") {
+      compassNavUntil = Date.now() + 800;
+      Promise.resolve(api.open(uid)).catch((error) => console.error("[compass] related open", error));
+      return;
+    }
+    void host.openInMain(uid);
+  });
+  lifecycle.event(stage, "pointerover", (event) => {
+    const node = event.target.closest?.(".compass-node");
+    if (!node?.dataset.uid) return;
+    showHover(node.dataset.uid, event.clientX, event.clientY);
+  });
+  lifecycle.event(stage, "pointerout", (event) => {
+    if (event.relatedTarget?.closest?.(".compass-node")) return;
+    clearHover();
+  });
+  lifecycle.event(globalThis, "hashchange", () => {
+    void onHashChange();
+  });
   lifecycle.event(pinRow, "click", (event) => {
     const remove = event.target.closest?.(".compass-pin-remove");
     if (remove) {
@@ -2869,13 +3417,15 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   lifecycle.add(() => {
     if (plexusOff) plexusOff();
     dropAllThumbs();
+    revokePartUrls();
+    clearHover();
     for (const id of timers) globalThis.clearTimeout(id);
     timers.clear();
     root.hidden = true;
   });
   applyCamera(false);
   updateButtons();
-  const view = { repullIfOpen, toggle, focusPage, focusBlock };
+  const view = { repullIfOpen, toggle, focusPage, focusBlock, focusUid };
   return { ...view, installCommands: () => registerCommands({ extensionAPI, lifecycle, host, view }) };
 }
 
@@ -2887,6 +3437,38 @@ function versionHost() {
 }
 function stampVersion(version) {
   versionHost()[VERSION_FLAG] = version;
+}
+function installRoamCompass(win, overlay) {
+  const api = Object.freeze({
+    isAvailable() {
+      return true;
+    },
+    focus(uid) {
+      if (typeof overlay?.focusUid === "function") overlay.focusUid(uid);
+    }
+  });
+  win.RoamCompass = api;
+  const emit = (type) => {
+    try {
+      const EventType = win.CustomEvent;
+      if (typeof EventType === "function" && typeof win.dispatchEvent === "function") {
+        win.dispatchEvent(new EventType(type));
+      }
+    } catch (error) {
+      console.warn("[compass] event failed", error);
+    }
+  };
+  emit("roam-compass:ready");
+  return () => {
+    if (win.RoamCompass === api) {
+      try {
+        delete win.RoamCompass;
+      } catch {
+        win.RoamCompass = void 0;
+      }
+    }
+    emit("roam-compass:unload");
+  };
 }
 function clearVersion() {
   const host = versionHost();
@@ -2906,6 +3488,7 @@ async function onload({ extensionAPI, extension }) {
     stampVersion(version);
     const host = createHost({ lifecycle });
     const overlay = mountOverlay({ extensionAPI, lifecycle, host });
+    lifecycle.add(installRoamCompass(versionHost(), overlay));
     await initializeSettings(extensionAPI);
     await lifecycle.settingsPanel(extensionAPI, createSettingsPanel({
       extensionAPI,

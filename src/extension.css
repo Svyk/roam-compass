@@ -597,3 +597,81 @@
 .compass-root .compass-result-drawing {
   font-style: italic;
 }
+
+.compass-root .compass-hover {
+  position: fixed;
+  z-index: 30;
+  pointer-events: none;
+}
+
+.compass-root .compass-hover-img {
+  display: block;
+  max-width: 480px;
+  height: auto;
+}
+
+.compass-root .compass-parts {
+  position: absolute;
+  right: 0;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.compass-root .compass-part {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 8px;
+  border: 0;
+  background: var(--compass-paper);
+  font-size: 12px;
+  text-align: left;
+}
+
+.compass-root .compass-part-thumb {
+  display: block;
+  flex: none;
+  width: 24px;
+  height: 16px;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.compass-root .compass-related {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 220px;
+  max-height: 40%;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--compass-line);
+  border-radius: 6px;
+  background: var(--compass-paper);
+}
+
+.compass-root .compass-related-title {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.compass-root .compass-related-item {
+  width: 100%;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+}

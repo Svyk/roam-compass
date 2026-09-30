@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildNeighborhood, createPlexusOpener, isDrawingLike, plexusKind, plexusOpenPlan, plexusRegionLabels, roleOf, modelSettings, typedParentUids } from "../src/model/neighborhood.js";
+import { buildNeighborhood, createPlexusOpener, drawingLinkEdges, isDrawingLike, plexusKind, plexusOpenPlan, plexusRegionLabels, roleOf, modelSettings, typedParentUids } from "../src/model/neighborhood.js";
 
 const page = (uid, title) => ({ uid, title });
 
@@ -465,6 +465,38 @@ test("opener: a synchronous throw from open falls back to the host", async () =>
     await r.opener.openMain("u2");
     assert.deepEqual(r.log.at(-1), ["host:main", "u2", "block"]);
   } finally { r.restore(); }
+});
+
+test("drawingLinkEdges drops empty uids, keeps the first text, and caps at 50", () => {
+  assert.deepEqual(drawingLinkEdges([
+    { uid: "", text: "drop" },
+    { uid: "   ", text: "blank" },
+    null,
+    { text: "missing" },
+    { uid: null, text: "null" },
+    { uid: 12, text: "number" },
+    { uid: "a", text: "first", extra: "no" },
+    { uid: "a", text: "second" },
+    { uid: "b", text: "bee" },
+    { uid: "  c  ", text: "see" },
+  ]), [
+    { uid: "a", text: "first" },
+    { uid: "b", text: "bee" },
+    { uid: "  c  ", text: "see" },
+  ]);
+  assert.deepEqual(drawingLinkEdges([{ uid: "a", text: "" }, { uid: "a", text: "later" }]), [{ uid: "a", text: "" }]);
+  assert.deepEqual(drawingLinkEdges([{ uid: "a" }]), [{ uid: "a", text: "" }]);
+  const many = [{ uid: "a", text: "kept" }];
+  for (let i = 0; i < 80; i += 1) many.push({ uid: "a", text: "later" }, { uid: `u${i}`, text: `t${i}` }, { uid: "", text: "x" });
+  const edges = drawingLinkEdges(many);
+  assert.equal(edges.length, 50);
+  assert.deepEqual(edges[0], { uid: "a", text: "kept" });
+  assert.deepEqual(edges[49], { uid: "u48", text: "t48" });
+  assert.equal(edges.some((edge) => edge.uid === "u49"), false);
+  assert.deepEqual(drawingLinkEdges(null), []);
+  assert.deepEqual(drawingLinkEdges(undefined), []);
+  assert.deepEqual(drawingLinkEdges(), []);
+  assert.deepEqual(drawingLinkEdges({ uid: "a", text: "no" }), []);
 });
 
 test("opener: a rejected open is logged only, with no host fallback", async () => {

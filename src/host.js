@@ -6,6 +6,7 @@ const LABELS = "{:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/ti
 const SOURCE = "[:block/uid :block/string :block/order {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order]}]";
 
 export const CENTER_PULL = `[:block/uid :node/title :block/string :block/order
+ {:block/refs [:block/uid :node/title :block/string]}
  {:block/page [:block/uid :node/title]}
  {:block/_children [:block/uid :node/title :block/string {:block/children [:block/uid :block/string :block/order]}]}
  {:harc/_e [:block/uid
@@ -35,6 +36,15 @@ const WATCHES = [
 ];
 
 const TITLES_QUERY = "[:find ?uid ?title :where [?page :node/title ?title] [?page :block/uid ?uid]]";
+const DRAWING_REF_QUERY = `[:find ?uid ?want ?time
+ :in $ [?want ...]
+ :where
+ [?r :block/uid ?want]
+ [?b :block/refs ?r]
+ [?b :block/uid ?uid]
+ [?b :block/string ?s]
+ [(clojure.string/includes? ?s "excalidraw")]
+ [?b :edit/time ?time]]`;
 const PREFIX_QUERY = `[:find ?uid ?title
  :in $ ?prefix
  :where
@@ -62,6 +72,14 @@ export function entityString(uid) {
 
 function byOrder(a, b) {
   return (a.order ?? 0) - (b.order ?? 0) || (a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0);
+}
+
+export function topicRefUid(entity) {
+  if (typeof entity === "string") return entity || null;
+  const uid = entity?.uid;
+  if (typeof uid !== "string" || !uid) return null;
+  if (entity.title === "excalidraw") return null;
+  return uid;
 }
 
 export function entityOf(node) {
@@ -200,6 +218,7 @@ export function normalizeCenter(pulled, uid) {
       .map(entityOf)
       .filter((item) => item?.string != null && item.uid !== uid)
       .sort(byOrder),
+    refs: asList(pulled?.[":block/refs"]).map(entityOf).filter(Boolean),
   };
 }
 
@@ -221,6 +240,32 @@ export function normalizePeer(parentUid, pulled) {
 
 function pad(number) {
   return String(number).padStart(2, "0");
+}
+
+// The open page or block, or null. Never today's daily note.
+export async function mainUid() {
+  try {
+    const uid = await roamApi()?.ui?.mainWindow?.getOpenPageOrBlockUid?.();
+    return typeof uid === "string" && uid ? uid : null;
+  } catch (error) {
+    console.error("[compass] main uid", error);
+    return null;
+  }
+}
+
+// Page or block route only. A graph prefix is ignored. Block wins when both are present.
+export function uidFromHash(hash) {
+  if (typeof hash !== "string" || !hash) return null;
+  const read = (kind) => {
+    const match = new RegExp(`/${kind}/([^/?#]+)`).exec(hash);
+    if (!match?.[1]) return null;
+    try {
+      return decodeURIComponent(match[1]) || null;
+    } catch {
+      return match[1];
+    }
+  };
+  return read("block") ?? read("page");
 }
 
 export function adjacentDayUids(uid) {
@@ -510,6 +555,44 @@ export function createHost({ lifecycle }) {
     return run;
   }
 
+  function drawingRows(centreUid, refUids) {
+    const api = roamApi()?.data;
+    if (!api?.q) return [];
+    const wants = [];
+    const seen = new Set();
+    const add = (uid) => {
+      if (typeof uid !== "string" || !uid || seen.has(uid)) return;
+      seen.add(uid);
+      wants.push(uid);
+    };
+    add(centreUid);
+    for (const uid of refUids || []) add(uid);
+    if (!wants.length) return [];
+    let found = [];
+    try {
+      found = api.q(DRAWING_REF_QUERY, wants) ?? [];
+    } catch (error) {
+      console.error("[compass] related query", error);
+      return [];
+    }
+    const byUid = new Map();
+    for (const row of found) {
+      if (!Array.isArray(row)) continue;
+      const [uid, ref, time] = row;
+      if (typeof uid !== "string" || !uid || uid === centreUid) continue;
+      let item = byUid.get(uid);
+      if (!item) {
+        if (byUid.size >= 80) continue;
+        item = { uid, refs: [], editTime: Number(time) || 0, title: uid };
+        byUid.set(uid, item);
+      }
+      if (typeof ref === "string" && ref && !item.refs.includes(ref)) item.refs.push(ref);
+      const edit = Number(time) || 0;
+      if (edit > item.editTime) item.editTime = edit;
+    }
+    return [...byUid.values()];
+  }
+
   lifecycle.add(() => closeSidecar());
   lifecycle.add(() => unwatch());
   lifecycle.add(() => { alive = false; });
@@ -520,6 +603,7 @@ export function createHost({ lifecycle }) {
     unwatch,
     titles,
     openPageUid,
+    mainUid,
     focusedBlock,
     openInSidebar,
     openInMain,
@@ -527,6 +611,7 @@ export function createHost({ lifecycle }) {
     releaseSidecar,
     closeSidecar,
     move,
+    drawingRows,
     blockContextMenu() {
       return roamApi()?.ui?.blockContextMenu ?? null;
     },

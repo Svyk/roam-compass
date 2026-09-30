@@ -11,6 +11,7 @@ import {
   normalizeOut,
   normalizeOutline,
   OUTLINE_PULL,
+  topicRefUid,
 } from "../src/host.js";
 import { createLifecycle } from "../src/lifecycle.js";
 import { buildNeighborhood } from "../src/model/neighborhood.js";
@@ -103,8 +104,10 @@ test("normalizeCenter reads a block's page, parent, and siblings", () => {
         { ":block/uid": "sib", ":block/string": "sib", ":block/order": 1 },
       ],
     }],
+    ":block/refs": [rawPage("topic", "Topic"), rawPage("excal", "excalidraw"), { ":block/uid": "blk", ":block/string": "note" }],
   }, "me");
   assert.equal(center.kind, "block");
+  assert.deepEqual(center.refs.map((ref) => ref.uid), ["topic", "excal", "blk"]);
   assert.deepEqual(center.page, { uid: "pg", title: "Page" });
   assert.deepEqual(center.parent, { uid: "par", string: "parent" });
   assert.deepEqual(center.siblings, [{ uid: "sib", string: "sib", order: 1 }]);
@@ -246,4 +249,58 @@ test("watch registers both patterns and unwatch removes them", async () => {
     delete globalThis.roamAlphaAPI;
   }
   assert.deepEqual(calls.map(([name]) => name), ["watch", "watch", "unwatch", "unwatch", "watch", "watch", "unwatch", "unwatch"]);
+});
+
+test("topicRefUid keeps block refs and drops the excalidraw syntax page", () => {
+  assert.equal(topicRefUid({ uid: "topic", title: "Topic" }), "topic");
+  assert.equal(topicRefUid({ uid: "blk", string: "note" }), "blk");
+  assert.equal(topicRefUid({ uid: "ex", title: "excalidraw" }), null);
+  assert.equal(topicRefUid(null), null);
+});
+
+test("drawingRows groups shared refs and drops the centre", async () => {
+  globalThis.roamAlphaAPI = {
+    data: {
+      q(query, wants) {
+        assert.match(query, /:find \?uid \?want \?time/);
+        assert.doesNotMatch(query, /\?ref/);
+        assert.match(query, /includes\? \?s "excalidraw"/);
+        assert.ok(wants.includes("centre"));
+        assert.ok(wants.includes("other"));
+        return [
+          ["draw-a", "centre", 10],
+          ["draw-a", "other", 30],
+          ["centre", "other", 99],
+          ["draw-b", "other", 5],
+        ];
+      },
+    },
+  };
+  const lifecycle = createLifecycle();
+  try {
+    const host = createHost({ lifecycle });
+    const rows = host.drawingRows("centre", ["other", "centre"]);
+    assert.equal(rows.find((row) => row.uid === "centre"), undefined);
+    const first = rows.find((row) => row.uid === "draw-a");
+    assert.deepEqual([...first.refs].sort(), ["centre", "other"]);
+    assert.equal(first.editTime, 30);
+    assert.equal(first.title, "draw-a");
+    assert.equal(rows.find((row) => row.uid === "draw-b").editTime, 5);
+  } finally {
+    await lifecycle.dispose();
+    delete globalThis.roamAlphaAPI;
+  }
+});
+
+test("mainUid stays null when the main window has no page", async () => {
+  globalThis.roamAlphaAPI = {
+    util: { dateToPageUid: () => "today-uid" },
+    ui: { mainWindow: { getOpenPageOrBlockUid: async () => null } },
+  };
+  try {
+    const { mainUid } = await import("../src/host.js");
+    assert.equal(await mainUid(), null);
+  } finally {
+    delete globalThis.roamAlphaAPI;
+  }
 });

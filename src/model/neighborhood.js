@@ -509,3 +509,21 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
     settings,
   };
 }
+
+const DRAWING_LINK_CAP = 50;
+
+// Overlay strokes. Not neighborhood nodes: maxPerZone is 12 and would drop them.
+export function drawingLinkEdges(rows) {
+  if (!Array.isArray(rows)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const row of rows) {
+    const uid = typeof row?.uid === "string" ? row.uid : "";
+    if (!uid.trim() || seen.has(uid)) continue;
+    seen.add(uid);
+    const text = typeof row.text === "string" ? row.text : "";
+    out.push({ uid, text });
+    if (out.length >= DRAWING_LINK_CAP) break;
+  }
+  return out;
+}
