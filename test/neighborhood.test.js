@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildNeighborhood, isDrawingLike, roleOf, modelSettings, typedParentUids } from "../src/model/neighborhood.js";
+import { buildNeighborhood, isDrawingLike, plexusRegionLabels, roleOf, modelSettings, typedParentUids } from "../src/model/neighborhood.js";
 
 const page = (uid, title) => ({ uid, title });
 
@@ -337,4 +337,52 @@ test("region center and drawing/region outline rows show stripped titles", () =>
   assert.equal(hood.center.title, "Image region");
   const texts = hood.outline.map((r) => r.text);
   assert.deepEqual(texts, ["Drawing: a", "Tail"]);
+});
+
+test("regionLabel resolver names region nodes, outline rows and the centre; falls back to the stripped caption", () => {
+  const calls = [];
+  const labels = { r2: "Tail rotor · area", o2: "Outline label", r1: "Centre label" };
+  const snapshot = () => snap({
+    center: {
+      uid: "r1",
+      kind: "block",
+      string: "{{[[plexus-region]]: k=area d=abc ids=a}}",
+      page: page("pg", "Drawing"),
+      parent: null,
+      siblings: [
+        { uid: "r2", string: "{{[[plexus-region]]: k=area d=abc ids=b}}", order: 1 },
+        { uid: "r3", string: "{{[[plexus-region]]: k=area d=abc ids=c}} Kept", order: 2 },
+      ],
+    },
+    outline: [block("o2", "{{[[plexus-region]]: k=area d=x ids=a}} Tail")],
+  });
+  const hood = buildNeighborhood(snapshot(), {}, {
+    regionLabel: (uid, string) => { calls.push(uid); return uid === "r3" ? "" : labels[uid] ?? null; },
+  });
+  assert.equal(hood.center.title, "Centre label");
+  assert.equal(hood.nodes.find((n) => n.uid === "r2").title, "Tail rotor · area");
+  assert.equal(hood.nodes.find((n) => n.uid === "r3").title, "Kept");
+  assert.equal(hood.outline[0].text, "Outline label");
+  const thrown = buildNeighborhood(snapshot(), {}, { regionLabel: () => { throw new Error("boom"); } });
+  assert.equal(thrown.center.title, "Region");
+  assert.equal(thrown.nodes.find((n) => n.uid === "r2").title, "Region");
+  const capped = buildNeighborhood(snapshot(), {}, { regionLabel: () => "x".repeat(200) });
+  assert.equal(capped.outline[0].text.length, 72);
+});
+
+test("plexusRegionLabels: loaded gives labels, unloaded and v2 entries give none, one call per owner", () => {
+  const str = "{{[[plexus-region]]: k=area d=abc ids=a}}";
+  let calls = 0;
+  const api = { regionsOf: (owner) => { calls += 1; return [{ uid: "r1", kind: "area", caption: "", label: "Wing · area" }, { uid: "r2", kind: "area", caption: "" }]; } };
+  const resolve = plexusRegionLabels(api);
+  assert.equal(resolve("r1", str), "Wing · area");
+  assert.equal(resolve("r2", str), null);
+  assert.equal(resolve("r9", str), null);
+  assert.equal(calls, 1);
+  assert.equal(plexusRegionLabels(undefined), null);
+  assert.equal(plexusRegionLabels({}), null);
+  const boom = plexusRegionLabels({ regionsOf: () => { throw new Error("x"); } });
+  assert.equal(boom("r1", str), null);
+  const hood = buildNeighborhood(snap({ center: { uid: "r1", kind: "block", string: str, page: page("pg", "D"), parent: null, siblings: [] } }), {}, { regionLabel: plexusRegionLabels(undefined) });
+  assert.equal(hood.center.title, "Region");
 });

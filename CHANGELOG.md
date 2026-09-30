@@ -4,6 +4,12 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-29
+
+### Changed
+
+- Plexus region nodes, outline rows and the centre title use the entry `label` from `RoamPlexus.regionsOf` (Plexus apiVersion 3) when it is present. The owner drawing comes from the region's `d=` token, and `regionsOf` is called at most once per drawing per neighbourhood build. Without Plexus, or with a Plexus that returns no `label`, the title is the region caption or "Region" as before.
+
 ## [0.2.1] - 2026-09-28
 
 ### Fixed

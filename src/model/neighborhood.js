@@ -1,4 +1,4 @@
-import { drawingTitle, parseAttribute, plainText, scanRefs, splitNames, tailShape } from "./text.js";
+import { drawingTitle, parseAttribute, plainText, regionOwner, scanRefs, splitNames, tailShape } from "./text.js";
 
 // One center, six relationship roles, four directions. Siblings sit in their own band.
 export const ROLES = ["parent", "child", "friend", "challenger", "previous", "next"];
@@ -99,10 +99,19 @@ export function attributeForRole(role, settings) {
   return name;
 }
 
-function titleOf(entity) {
+// Title of a block string. A Plexus region takes the resolver's label when it gives a non-empty string.
+function blockTitle(uid, string, max, resolveRegion) {
+  if (resolveRegion && regionOwner(string) !== null) {
+    const label = resolveRegion(uid, string);
+    if (label) return label.length > max ? `${label.slice(0, Math.max(1, max - 1)).trimEnd()}…` : label;
+  }
+  return drawingTitle(string, max) ?? plainText(string ?? "", max);
+}
+
+function titleOf(entity, resolveRegion) {
   if (!entity) return "";
   if (typeof entity.title === "string" && entity.title) return entity.title;
-  return drawingTitle(entity.string) ?? plainText(entity.string ?? "");
+  return blockTitle(entity.uid, entity.string, 90, resolveRegion);
 }
 
 export function isDrawingLike(node) {
@@ -154,14 +163,14 @@ export function linkRefs(block) {
   return resolveTokens(scanRefs(text), block?.refs);
 }
 
-function outlineIndex(outline) {
+function outlineIndex(outline, resolveRegion) {
   const index = new Map();
   const rows = [];
   walk(outline, (block, depth, parentUid) => {
     index.set(block.uid, { parentUid, depth });
     rows.push({
       uid: block.uid,
-      text: (drawingTitle(block.string, 72) ?? plainText(block.string, 72)) || " ",
+      text: blockTitle(block.uid, block.string, 72, resolveRegion) || " ",
       depth,
       parentUid,
       childCount: (block.children ?? []).filter((child) => child?.uid).length,
@@ -206,6 +215,40 @@ export function typedParentUids(snapshot, rawSettings, limit = 6) {
   return uids;
 }
 
+// Region label resolver for one neighborhood build: RoamPlexus.regionsOf is called at most once per owner drawing.
+export function plexusRegionLabels(api) {
+  if (typeof api?.regionsOf !== "function") return null;
+  const owners = new Map();
+  return (uid, string) => {
+    const owner = regionOwner(string);
+    if (!owner) return null;
+    if (!owners.has(owner)) {
+      let entries = [];
+      try {
+        const got = api.regionsOf(owner);
+        if (Array.isArray(got)) entries = got;
+      } catch (error) {
+        console.warn("[compass] Plexus regionsOf failed", error);
+      }
+      owners.set(owner, entries);
+    }
+    const label = owners.get(owner).find((entry) => entry?.uid === uid)?.label;
+    return typeof label === "string" && label.trim() ? label : null;
+  };
+}
+
+// Wraps the optional Plexus label resolver: a throw or a non-string counts as no label.
+function regionResolver(resolve) {
+  return (uid, string) => {
+    try {
+      const label = resolve(uid, string);
+      return typeof label === "string" && label.trim() ? label.trim() : null;
+    } catch {
+      return null;
+    }
+  };
+}
+
 export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
   const settings = modelSettings(rawSettings);
   const source = snapshot ?? {};
@@ -215,7 +258,8 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
   const entities = new Map();
   const evidence = new Map();
   const badges = [];
-  const outline = outlineIndex(source.outline);
+  const resolveRegion = typeof options.regionLabel === "function" ? regionResolver(options.regionLabel) : null;
+  const outline = outlineIndex(source.outline, resolveRegion);
 
   function add(entity, item) {
     if (!isNode(entity) || entity.uid === centerUid) return;
@@ -323,7 +367,7 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
     nodes.push({
       uid,
       kind: kindOf(entity),
-      title: titleOf(entity) || uid,
+      title: titleOf(entity, resolveRegion) || uid,
       string: typeof entity?.string === "string" ? entity.string : "",
       role: picked.role,
       zone: ZONE_OF[picked.role],
@@ -350,7 +394,7 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
       siblings.set(entity.uid, {
         uid: entity.uid,
         kind: kindOf(entity),
-        title: titleOf(entity) || entity.uid,
+        title: titleOf(entity, resolveRegion) || entity.uid,
         string: typeof entity.string === "string" ? entity.string : "",
         role: "sibling",
         zone: "siblings",
@@ -408,7 +452,7 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
     center: {
       uid: centerUid,
       kind: center.kind === "block" ? "block" : "page",
-      title: center.kind === "block" ? (drawingTitle(center.string, 120) ?? plainText(center.string, 120)) || centerUid : center.title || centerUid,
+      title: center.kind === "block" ? blockTitle(centerUid, center.string, 120, resolveRegion) || centerUid : center.title || centerUid,
       badges,
     },
     nodes: kept,

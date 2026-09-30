@@ -210,6 +210,12 @@ export function drawingTitle(input, max = 90) {
   return null;
 }
 
+// Owner drawing uid (the d= token) of a Plexus region block string; null for anything else.
+export function regionOwner(input) {
+  const head = /^\{\{\s*\[\[plexus-region\]\]([^}]*)\}\}/.exec(String(input ?? "").trimStart());
+  return head ? /(?:^|[\s:])d=([\w-]+)/.exec(head[1])?.[1] ?? null : null;
+}
+
 export function splitNames(value) {
   const parts = Array.isArray(value) ? value : String(value ?? "").split(",");
   const names = [];

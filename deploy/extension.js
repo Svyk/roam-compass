@@ -1,4 +1,4 @@
-/* Compass v0.2.1 | MIT | generated; edit src/ */
+/* Compass v0.3.0 | MIT | generated; edit src/ */
 
 // src/lifecycle.js
 function isPromiseLike(value) {
@@ -276,6 +276,10 @@ function drawingTitle(input, max = 90) {
   }
   return null;
 }
+function regionOwner(input) {
+  const head = /^\{\{\s*\[\[plexus-region\]\]([^}]*)\}\}/.exec(String(input ?? "").trimStart());
+  return head ? /(?:^|[\s:])d=([\w-]+)/.exec(head[1])?.[1] ?? null : null;
+}
 function splitNames(value) {
   const parts = Array.isArray(value) ? value : String(value ?? "").split(",");
   const names = [];
@@ -365,10 +369,17 @@ function attributeForRole(role, settings) {
   if (!name || name.includes("::") || /[[\]\n]/.test(name) || isReadOnlyAttribute(name)) return null;
   return name;
 }
-function titleOf(entity) {
+function blockTitle(uid, string, max, resolveRegion) {
+  if (resolveRegion && regionOwner(string) !== null) {
+    const label = resolveRegion(uid, string);
+    if (label) return label.length > max ? `${label.slice(0, Math.max(1, max - 1)).trimEnd()}…` : label;
+  }
+  return drawingTitle(string, max) ?? plainText(string ?? "", max);
+}
+function titleOf(entity, resolveRegion) {
   if (!entity) return "";
   if (typeof entity.title === "string" && entity.title) return entity.title;
-  return drawingTitle(entity.string) ?? plainText(entity.string ?? "");
+  return blockTitle(entity.uid, entity.string, 90, resolveRegion);
 }
 function isDrawingLike(node) {
   const text = typeof node?.string === "string" ? node.string.trimStart() : "";
@@ -411,14 +422,14 @@ function linkRefs(block) {
   const text = attribute ? attribute.tail : block?.string;
   return resolveTokens(scanRefs(text), block?.refs);
 }
-function outlineIndex(outline) {
+function outlineIndex(outline, resolveRegion) {
   const index = /* @__PURE__ */ new Map();
   const rows = [];
   walk(outline, (block, depth, parentUid) => {
     index.set(block.uid, { parentUid, depth });
     rows.push({
       uid: block.uid,
-      text: (drawingTitle(block.string, 72) ?? plainText(block.string, 72)) || " ",
+      text: blockTitle(block.uid, block.string, 72, resolveRegion) || " ",
       depth,
       parentUid,
       childCount: (block.children ?? []).filter((child) => child?.uid).length
@@ -456,6 +467,36 @@ function typedParentUids(snapshot, rawSettings, limit = 6) {
   }
   return uids;
 }
+function plexusRegionLabels(api) {
+  if (typeof api?.regionsOf !== "function") return null;
+  const owners = /* @__PURE__ */ new Map();
+  return (uid, string) => {
+    const owner = regionOwner(string);
+    if (!owner) return null;
+    if (!owners.has(owner)) {
+      let entries = [];
+      try {
+        const got = api.regionsOf(owner);
+        if (Array.isArray(got)) entries = got;
+      } catch (error) {
+        console.warn("[compass] Plexus regionsOf failed", error);
+      }
+      owners.set(owner, entries);
+    }
+    const label = owners.get(owner).find((entry) => entry?.uid === uid)?.label;
+    return typeof label === "string" && label.trim() ? label : null;
+  };
+}
+function regionResolver(resolve) {
+  return (uid, string) => {
+    try {
+      const label = resolve(uid, string);
+      return typeof label === "string" && label.trim() ? label.trim() : null;
+    } catch {
+      return null;
+    }
+  };
+}
 function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
   const settings = modelSettings(rawSettings);
   const source = snapshot ?? {};
@@ -465,7 +506,8 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
   const entities = /* @__PURE__ */ new Map();
   const evidence = /* @__PURE__ */ new Map();
   const badges = [];
-  const outline = outlineIndex(source.outline);
+  const resolveRegion = typeof options.regionLabel === "function" ? regionResolver(options.regionLabel) : null;
+  const outline = outlineIndex(source.outline, resolveRegion);
   function add(entity, item) {
     if (!isNode(entity) || entity.uid === centerUid) return;
     if (!entities.has(entity.uid)) entities.set(entity.uid, entity);
@@ -566,7 +608,7 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
     nodes.push({
       uid,
       kind: kindOf(entity),
-      title: titleOf(entity) || uid,
+      title: titleOf(entity, resolveRegion) || uid,
       string: typeof entity?.string === "string" ? entity.string : "",
       role: picked.role,
       zone: ZONE_OF[picked.role],
@@ -592,7 +634,7 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
       siblings.set(entity.uid, {
         uid: entity.uid,
         kind: kindOf(entity),
-        title: titleOf(entity) || entity.uid,
+        title: titleOf(entity, resolveRegion) || entity.uid,
         string: typeof entity.string === "string" ? entity.string : "",
         role: "sibling",
         zone: "siblings",
@@ -648,7 +690,7 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
     center: {
       uid: centerUid,
       kind: center.kind === "block" ? "block" : "page",
-      title: center.kind === "block" ? (drawingTitle(center.string, 120) ?? plainText(center.string, 120)) || centerUid : center.title || centerUid,
+      title: center.kind === "block" ? blockTitle(centerUid, center.string, 120, resolveRegion) || centerUid : center.title || centerUid,
       badges
     },
     nodes: kept,
@@ -1834,7 +1876,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   }
   function rebuild() {
     if (!snapshot || !settings) return;
-    hood = buildNeighborhood(snapshot, settings.model, { expanded: expandedFor(current) });
+    hood = buildNeighborhood(snapshot, settings.model, { expanded: expandedFor(current), regionLabel: plexusRegionLabels(plexus()) });
     nodeByUid = new Map(hood.nodes.map((node) => [node.uid, node]));
   }
   function load({ navigate = false } = {}) {

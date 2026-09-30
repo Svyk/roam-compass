@@ -68,3 +68,11 @@ test("drawingTitle strips plexus-region components and names drawings", () => {
   assert.equal(drawingTitle("{{[[excalidraw]]}}"), "Drawing");
   assert.equal(drawingTitle("plain [[Jane]]"), null);
 });
+
+test("regionOwner reads the d= token of a region block only", async () => {
+  const { regionOwner } = await import("../src/model/text.js");
+  assert.equal(regionOwner("{{[[plexus-region]]: k=area d=abc123 ids=a}} Tail"), "abc123");
+  assert.equal(regionOwner("{{[[plexus-region]]: k=area ids=a}}"), null);
+  assert.equal(regionOwner("{{[[excalidraw]]}} d=abc"), null);
+  assert.equal(regionOwner(null), null);
+});

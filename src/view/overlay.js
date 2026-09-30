@@ -1,4 +1,4 @@
-import { attributeForRole, buildNeighborhood, DROP_ROLE, inverseRole, isDrawingLike } from "../model/neighborhood.js";
+import { attributeForRole, buildNeighborhood, DROP_ROLE, inverseRole, isDrawingLike, plexusRegionLabels } from "../model/neighborhood.js";
 import { layout, sideAt } from "../model/layout.js";
 import { rankTitles } from "../model/search.js";
 import { readCompassSettings, SETTING_IDS, writeSetting } from "../settings.js";
@@ -345,7 +345,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
 
   function rebuild() {
     if (!snapshot || !settings) return;
-    hood = buildNeighborhood(snapshot, settings.model, { expanded: expandedFor(current) });
+    hood = buildNeighborhood(snapshot, settings.model, { expanded: expandedFor(current), regionLabel: plexusRegionLabels(plexus()) });
     nodeByUid = new Map(hood.nodes.map((node) => [node.uid, node]));
   }
 
