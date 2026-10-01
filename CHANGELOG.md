@@ -4,6 +4,14 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-01
+
+### Added
+
+- An empty search lists pins, today, and up to eight pages and drawings by edit time. The list is cached until the overlay closes. There are no shortcut rows.
+- Hovering a node highlights its edges and dims the rest. Opacity only, so the layout stays put. A drawing thumbnail appears only while Ctrl or Cmd is held.
+- A side sorts by connections (the default), name, last edited, or created. A Name:: value is the neighbour's label. The tooltip keeps the page title. Compass does not write Name::.
+
 ## [0.5.0] - 2026-09-30
 
 ### Added

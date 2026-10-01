@@ -1,28 +1,29 @@
 import { typedParentUids } from "./model/neighborhood.js";
 import { planMove } from "./model/rewrite.js";
+import { drawingTitle, parseAttribute, plainText } from "./model/text.js";
 
 // Harc labels: attributes nested under a relation block (Role:: Lead under Owner::).
-const LABELS = "{:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string]}]}";
+const LABELS = "{:harc/_e [{:harc/a [:node/title :edit/time :create/time]} {:harc/v [:block/uid :node/title :edit/time :create/time :block/string :harc/v-string]}]}";
 const SOURCE = "[:block/uid :block/string :block/order {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order]}]";
 
-export const CENTER_PULL = `[:block/uid :node/title :block/string :block/order
- {:block/refs [:block/uid :node/title :block/string]}
- {:block/page [:block/uid :node/title]}
- {:block/_children [:block/uid :node/title :block/string {:block/children [:block/uid :block/string :block/order]}]}
+export const CENTER_PULL = `[:block/uid :node/title :edit/time :create/time :block/string :block/order
+ {:block/refs [:block/uid :node/title :edit/time :create/time :block/string]}
+ {:block/page [:block/uid :node/title :edit/time :create/time]}
+ {:block/_children [:block/uid :node/title :edit/time :create/time :block/string {:block/children [:block/uid :block/string :block/order]}]}
  {:harc/_e [:block/uid
-   {:harc/a [:node/title]}
-   {:harc/v [:block/uid :node/title :block/string :harc/v-string]}
+   {:harc/a [:node/title :edit/time :create/time]}
+   {:harc/v [:block/uid :node/title :edit/time :create/time :block/string :harc/v-string]}
    {:harc/a-source ${SOURCE}}
    ${LABELS}]}
  {:harc/_v [:block/uid
-   {:harc/e [:block/uid :node/title :block/string]}
-   {:harc/a [:node/title]}
+   {:harc/e [:block/uid :node/title :edit/time :create/time :block/string]}
+   {:harc/a [:node/title :edit/time :create/time]}
    {:harc/a-source ${SOURCE}}
    {:harc/v-source [:block/uid]}
    ${LABELS}]}
  {:block/_refs [:block/uid :block/string
-   {:block/page [:block/uid :node/title]}
-   {:block/refs [:block/uid :node/title :block/string]}]}]`;
+   {:block/page [:block/uid :node/title :edit/time :create/time]}
+   {:block/refs [:block/uid :node/title :edit/time :create/time :block/string]}]}]`;
 
 export const OUTLINE_PULL = "[:block/uid :block/string :block/order {:block/refs [:block/uid :node/title :block/string]} {:block/children ...}]";
 
@@ -45,12 +46,17 @@ const DRAWING_REF_QUERY = `[:find ?uid ?want ?time
  [?b :block/string ?s]
  [(clojure.string/includes? ?s "excalidraw")]
  [?b :edit/time ?time]]`;
-const PREFIX_QUERY = `[:find ?uid ?title
+const PREFIX_QUERY = `[:find ?uid ?title ?edit ?create
  :in $ ?prefix
  :where
   [?page :node/title ?title]
   [(clojure.string/starts-with? ?title ?prefix)]
-  [?page :block/uid ?uid]]`;
+  [?page :block/uid ?uid]
+  [?page :edit/time ?edit]
+  [?page :create/time ?create]]`;
+const ALIAS_QUERY = `[:find ?uid ?s :in $ [?uid ...] :where [?p :block/uid ?uid] [?p :block/children ?c] [?c :block/string ?s] [(clojure.string/includes? ?s "Name::")]]`;
+const RECENT_PAGES_QUERY = "[:find ?uid ?title ?edit ?create :where [?e :node/title ?title] [?e :block/uid ?uid] [?e :edit/time ?edit] [?e :create/time ?create]]";
+const RECENT_DRAWINGS_QUERY = `[:find ?uid ?edit :where [?b :block/uid ?uid] [?b :block/string ?s] [(clojure.string/includes? ?s "excalidraw")] [?b :edit/time ?edit]]`;
 
 const MENTION_CAP = 500;
 const NAMESPACE_CAP = 200;
@@ -82,17 +88,32 @@ export function topicRefUid(entity) {
   return uid;
 }
 
+function withTimes(entity, node) {
+  if (Number.isFinite(node[":edit/time"])) entity.editTime = node[":edit/time"];
+  if (Number.isFinite(node[":create/time"])) entity.createTime = node[":create/time"];
+  return entity;
+}
+
 export function entityOf(node) {
   const uid = node?.[":block/uid"];
   if (typeof uid !== "string" || !uid) return null;
-  if (typeof node[":node/title"] === "string") return { uid, title: node[":node/title"] };
+  if (typeof node[":node/title"] === "string") return withTimes({ uid, title: node[":node/title"] }, node);
   if (typeof node[":block/string"] === "string") {
     const entity = { uid, string: node[":block/string"] };
     if (Number.isFinite(node[":block/order"])) entity.order = node[":block/order"];
-    return entity;
+    return withTimes(entity, node);
   }
   if (node[":harc/v-string"] != null) return { uid, text: String(node[":harc/v-string"]) };
   return { uid };
+}
+
+// Only a Name:: attribute. A bare block ref plain-texts to "(( ))" and is not an alias.
+export function aliasFromBlock(string) {
+  const parsed = parseAttribute(string);
+  if (!parsed || parsed.name.toLowerCase() !== "name") return "";
+  const text = plainText(parsed.tail, 80);
+  if (!text || text === "(( ))") return "";
+  return text;
 }
 
 function displayText(node) {
@@ -298,12 +319,18 @@ function prefixPages(data, prefix) {
     console.error("[compass] namespace query failed", error);
     return [];
   }
+  if (!Array.isArray(rows)) return [];
   const pages = [];
-  for (const [uid, title] of rows) {
+  for (const row of rows) {
+    if (!Array.isArray(row)) continue;
+    const [uid, title, edit, create] = row;
     if (typeof uid !== "string" || typeof title !== "string") continue;
     const rest = title.slice(prefix.length);
     if (!rest || rest.includes("/")) continue;
-    pages.push({ uid, title });
+    const page = { uid, title };
+    if (Number.isFinite(edit)) page.editTime = edit;
+    if (Number.isFinite(create)) page.createTime = create;
+    pages.push(page);
   }
   pages.sort((a, b) => (a.title < b.title ? -1 : a.title > b.title ? 1 : 0));
   return pages.slice(0, NAMESPACE_CAP);
@@ -311,7 +338,7 @@ function prefixPages(data, prefix) {
 
 function pageByTitle(data, title) {
   try {
-    const found = data.pull("[:block/uid :node/title]", `[:node/title "${title.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"]`);
+    const found = data.pull("[:block/uid :node/title :edit/time :create/time]", `[:node/title "${title.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"]`);
     return entityOf(found);
   } catch {
     return null;
@@ -334,10 +361,77 @@ function daysOf(data, uid) {
   const around = adjacentDayUids(uid);
   if (!around) return null;
   const page = (dayUid) => {
-    const found = entityOf(pull(data, "[:block/uid :node/title]", dayUid));
+    const found = entityOf(pull(data, "[:block/uid :node/title :edit/time :create/time]", dayUid));
     return found?.title ? found : null;
   };
   return { previous: page(around.previous), next: page(around.next) };
+}
+
+function pageUidsOf(snap) {
+  const uids = [];
+  const seen = new Set();
+  const add = (entity) => {
+    if (typeof entity?.title !== "string") return;
+    const uid = entity.uid;
+    if (typeof uid !== "string" || !uid || seen.has(uid)) return;
+    seen.add(uid);
+    uids.push(uid);
+  };
+  for (const harc of snap.out ?? []) {
+    for (const value of harc.values ?? []) add(value);
+  }
+  for (const harc of snap.in ?? []) add(harc.entity);
+  for (const mention of snap.mentions ?? []) {
+    add(mention.page);
+    for (const ref of mention.refs ?? []) add(ref);
+  }
+  if (snap.namespace) {
+    add(snap.namespace.parent);
+    for (const page of snap.namespace.children ?? []) add(page);
+    for (const page of snap.namespace.siblings ?? []) add(page);
+  }
+  if (snap.days) {
+    add(snap.days.previous);
+    add(snap.days.next);
+  }
+  const walk = (blocks) => {
+    for (const block of blocks ?? []) {
+      for (const ref of block?.refs ?? []) add(ref);
+      walk(block?.children);
+    }
+  };
+  walk(snap.outline);
+  for (const ref of snap.center?.refs ?? []) add(ref);
+  add(snap.center?.page);
+  for (const peer of snap.peers ?? []) {
+    for (const row of peer?.incoming ?? []) add(row?.entity);
+    for (const row of peer?.outgoing ?? []) add(row?.value);
+  }
+  if (snap.center?.kind === "page") add(snap.center);
+  return uids;
+}
+
+// Pages already on the snap. The first non-empty Name:: wins; a failed query leaves {}.
+function aliasesOf(data, snap) {
+  const uids = pageUidsOf(snap);
+  if (!uids.length || typeof data.q !== "function") return {};
+  let rows = [];
+  try {
+    rows = data.q(ALIAS_QUERY, uids) ?? [];
+  } catch (error) {
+    console.error("[compass] aliases failed", error);
+    return {};
+  }
+  if (!Array.isArray(rows)) return {};
+  const aliases = {};
+  for (const row of rows) {
+    if (!Array.isArray(row)) continue;
+    const [uid, string] = row;
+    if (typeof uid !== "string" || !uid || aliases[uid]) continue;
+    const text = aliasFromBlock(string);
+    if (text) aliases[uid] = text;
+  }
+  return aliases;
 }
 
 function graphName() {
@@ -430,6 +524,7 @@ export function createHost({ lifecycle }) {
       peers: [],
     };
     snap.peers = typedParentUids(snap, modelSettings).map((parentUid) => normalizePeer(parentUid, pull(api, PEER_PULL, parentUid)));
+    snap.aliases = aliasesOf(api, snap);
     return snap;
   }
 
@@ -593,6 +688,49 @@ export function createHost({ lifecycle }) {
     return [...byUid.values()];
   }
 
+  function recents() {
+    const api = roamApi()?.data;
+    if (!api?.q) return { pages: [], drawings: [] };
+    const ask = (query, label) => {
+      try {
+        const rows = api.q(query) ?? [];
+        return Array.isArray(rows) ? rows : [];
+      } catch (error) {
+        console.error(label, error);
+        return [];
+      }
+    };
+    const pages = [];
+    for (const row of ask(RECENT_PAGES_QUERY, "[compass] recents pages failed")) {
+      if (!Array.isArray(row)) continue;
+      const [uid, title, edit, create] = row;
+      if (typeof uid !== "string" || !uid || typeof title !== "string") continue;
+      if (!Number.isFinite(edit) || !Number.isFinite(create)) continue;
+      pages.push({ uid, title, editTime: edit, createTime: create });
+    }
+    const candidates = [];
+    for (const row of ask(RECENT_DRAWINGS_QUERY, "[compass] recents drawings failed")) {
+      if (!Array.isArray(row)) continue;
+      const [uid, edit] = row;
+      if (typeof uid !== "string" || !uid || !Number.isFinite(edit)) continue;
+      candidates.push({ uid, editTime: edit });
+    }
+    candidates.sort((a, b) => b.editTime - a.editTime);
+    const drawings = [];
+    for (const item of candidates.slice(0, 8)) {
+      let title = "Drawing";
+      try {
+        const pulled = api.pull?.("[:block/string]", entityString(item.uid));
+        const named = drawingTitle(pulled?.[":block/string"]);
+        if (named) title = named;
+      } catch (error) {
+        console.error("[compass] recents drawing pull failed", error);
+      }
+      drawings.push({ uid: item.uid, editTime: item.editTime, title });
+    }
+    return { pages, drawings };
+  }
+
   lifecycle.add(() => closeSidecar());
   lifecycle.add(() => unwatch());
   lifecycle.add(() => { alive = false; });
@@ -602,6 +740,7 @@ export function createHost({ lifecycle }) {
     watch,
     unwatch,
     titles,
+    recents,
     openPageUid,
     mainUid,
     focusedBlock,

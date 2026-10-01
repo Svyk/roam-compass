@@ -55,6 +55,12 @@ function count(value, fallback) {
   return Math.floor(number);
 }
 
+const SORT_MODES = new Set(["connections", "name", "edited", "created"]);
+
+function sortMode(value) {
+  return SORT_MODES.has(value) ? value : "connections";
+}
+
 export function modelSettings(raw = {}) {
   const lists = {};
   for (const role of ROLES) lists[role] = splitNames(raw[role] ?? MODEL_DEFAULTS[role]);
@@ -65,6 +71,7 @@ export function modelSettings(raw = {}) {
     siblings: flag(raw.siblings, true),
     badges: flag(raw.badges, true),
     maxPerZone: count(raw.maxPerZone, 12),
+    sort: sortMode(raw.sort),
   };
 }
 
@@ -225,12 +232,44 @@ function outlineIndex(outline, resolveRegion) {
   return { index, rows };
 }
 
-function compareNodes(a, b) {
-  if (a.strength !== b.strength) return b.strength - a.strength;
+function finiteTime(value) {
+  return Number.isFinite(value) ? value : 0;
+}
+
+function aliasOf(entity, aliases) {
+  const named = entity?.nameAlias;
+  if (typeof named === "string" && named !== "") return named;
+  const listed = aliases?.[entity?.uid];
+  if (typeof listed === "string" && listed !== "") return listed;
+  return "";
+}
+
+function compareTitle(a, b) {
   const at = a.title.toLowerCase();
   const bt = b.title.toLowerCase();
   if (at !== bt) return at < bt ? -1 : 1;
   return a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0;
+}
+
+// connections keeps strength, then title, then uid. name uses the alias when it is set.
+// A missing time is 0 and sorts after any positive time.
+function compareNodes(a, b, sort) {
+  if (sort === "name") {
+    const an = (a.alias || a.title).toLowerCase();
+    const bn = (b.alias || b.title).toLowerCase();
+    if (an !== bn) return an < bn ? -1 : 1;
+    return a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0;
+  }
+  if (sort === "edited" || sort === "created") {
+    const key = sort === "edited" ? "editTime" : "createTime";
+    const at = finiteTime(a[key]);
+    const bt = finiteTime(b[key]);
+    if ((at === 0) !== (bt === 0)) return at === 0 ? 1 : -1;
+    if (at !== bt) return bt - at;
+    return compareTitle(a, b);
+  }
+  if (a.strength !== b.strength) return b.strength - a.strength;
+  return compareTitle(a, b);
 }
 
 function pickRole(evidence) {
@@ -415,6 +454,9 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
       kind: kindOf(entity),
       title: titleOf(entity, resolveRegion) || uid,
       string: typeof entity?.string === "string" ? entity.string : "",
+      alias: aliasOf(entity, source.aliases),
+      editTime: finiteTime(entity?.editTime),
+      createTime: finiteTime(entity?.createTime),
       role: picked.role,
       zone: ZONE_OF[picked.role],
       strength: picked.strength,
@@ -442,6 +484,9 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
         kind: kindOf(entity),
         title: titleOf(entity, resolveRegion) || entity.uid,
         string: typeof entity.string === "string" ? entity.string : "",
+        alias: aliasOf(entity, source.aliases),
+        editTime: finiteTime(entity?.editTime),
+        createTime: finiteTime(entity?.createTime),
         role: "sibling",
         zone: "siblings",
         strength: 0,
@@ -484,7 +529,7 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
   const overflow = {};
   const kept = [];
   for (const zone of ZONES) {
-    const members = nodes.filter((node) => node.zone === zone).sort(compareNodes);
+    const members = nodes.filter((node) => node.zone === zone).sort((a, b) => compareNodes(a, b, settings.sort));
     const limit = expanded.has(zone) ? Math.max(settings.maxPerZone, 200) : settings.maxPerZone;
     kept.push(...members.slice(0, limit));
     if (members.length > settings.maxPerZone) {

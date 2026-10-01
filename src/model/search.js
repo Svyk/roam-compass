@@ -36,3 +36,53 @@ export function rankTitles(entries, input, limit = 20) {
   ranked.sort((a, b) => a.score - b.score || a.title.length - b.title.length || (a.title < b.title ? -1 : 1));
   return ranked.slice(0, limit).map(({ uid, title }) => ({ uid, title }));
 }
+
+function shownTitle(row) {
+  return row.title ?? row.uid;
+}
+
+function hasUid(row) {
+  return row?.uid != null && row.uid !== "";
+}
+
+export function emptyQueryRows({ pins = [], today = null, pages = [], drawings = [], limit = 8 } = {}) {
+  const seen = new Set();
+  const rows = [];
+
+  for (const pin of pins ?? []) {
+    if (!hasUid(pin) || seen.has(pin.uid)) continue;
+    seen.add(pin.uid);
+    rows.push({ uid: pin.uid, title: shownTitle(pin), kind: "pin" });
+  }
+
+  if (hasUid(today) && !seen.has(today.uid)) {
+    seen.add(today.uid);
+    rows.push({ uid: today.uid, title: shownTitle(today), kind: "today" });
+  }
+
+  const recent = [];
+  for (const row of [...(pages ?? []), ...(drawings ?? [])]) {
+    if (!hasUid(row) || !Number.isFinite(row.editTime)) continue;
+    recent.push(row);
+  }
+  recent.sort((a, b) => {
+    if (a.editTime !== b.editTime) return b.editTime - a.editTime;
+    const left = shownTitle(a);
+    const right = shownTitle(b);
+    if (left < right) return -1;
+    if (left > right) return 1;
+    if (a.uid < b.uid) return -1;
+    if (a.uid > b.uid) return 1;
+    return 0;
+  });
+
+  let kept = 0;
+  for (const row of recent) {
+    if (kept >= limit) break;
+    if (seen.has(row.uid)) continue;
+    seen.add(row.uid);
+    rows.push({ uid: row.uid, title: shownTitle(row), kind: "recent" });
+    kept += 1;
+  }
+  return rows;
+}

@@ -21,6 +21,7 @@ const SETTING_IDS = [
   "compass-related-drawings",
   "compass-max-zone",
   "compass-pins",
+  "compass-sort",
 ];
 
 const SWITCH_IDS = [
@@ -172,7 +173,8 @@ test("extension exports the Roam lifecycle contract and survives repeated unload
     assert.deepEqual(api.settings.get("compass-pins"), []);
     assert.deepEqual(api.panel.settings.map((row) => row.id), SETTING_IDS);
     for (const row of api.panel.settings) {
-      assert.equal(row.action.type, SWITCH_IDS.includes(row.id) ? "switch" : "input");
+      const type = row.id === "compass-sort" ? "select" : SWITCH_IDS.includes(row.id) ? "switch" : "input";
+      assert.equal(row.action.type, type);
     }
     await api.panel.settings.find((row) => row.id === "compass-outline").action.onChange({
       target: { checked: true },

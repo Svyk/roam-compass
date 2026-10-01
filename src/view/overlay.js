@@ -2,8 +2,9 @@ import { topicRefUid, uidFromHash } from "../host.js";
 import { attributeForRole, buildNeighborhood, createPlexusOpener, DROP_ROLE, drawingLinkEdges, inverseRole, isDrawingLike, plexusKind, plexusRegionLabels } from "../model/neighborhood.js";
 import { layout, sideAt } from "../model/layout.js";
 import { rankDrawings } from "../model/related.js";
-import { rankTitles } from "../model/search.js";
+import { emptyQueryRows, rankTitles } from "../model/search.js";
 import { readCompassSettings, SETTING_IDS, writeSetting } from "../settings.js";
+import { markHover } from "./hover-dim.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SIDE_NAME = { north: "Parents", south: "Children", west: "Friends", east: "Challengers", siblings: "Siblings" };
@@ -280,6 +281,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   let statusTimer = null;
   let searchTimer = null;
   let titleCache = null;
+  let recentCache = null;
   let activeResult = 0;
   const thumbUrls = new Map();
   const thumbRenderTried = new Set();
@@ -292,6 +294,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   let hoverToken = 0;
   let hoverUid = null;
   let hoverUrl = null;
+  let hoverNode = null;
+  let hoverX = 0;
+  let hoverY = 0;
   const partUrls = new Set();
   const rawOpenInMain = host.openInMain.bind(host);
   host.openInMain = (uid, kind) => {
@@ -482,6 +487,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     host.watch(uid, scheduleReload);
     load({ navigate: changed });
     updateButtons();
+    if (searchInput.value.trim()) runSearch();
+    else showEmptyQuery();
   }
 
   function goBack() {
@@ -503,9 +510,12 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     reloadTimer = cancel(reloadTimer);
     clickTimer = cancel(clickTimer);
     titleCache = null;
+    recentCache = null;
     pointer = null;
     hideFloating();
     clearHover();
+    markHover(root, null);
+    hoverNode = null;
     endDrag();
     setStatus("");
   }
@@ -1019,7 +1029,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
         element.setAttribute("aria-label", `Center: ${hood.center.title}`);
         element.title = hood.center.title;
       } else {
-        element.replaceChildren(el("span", "compass-node-title", node.title));
+        const visible = typeof node.alias === "string" && node.alias ? node.alias : node.title;
+        element.replaceChildren(el("span", "compass-node-title", visible));
         const why = node.label ? ` — ${node.label}` : "";
         element.setAttribute("aria-label", `${node.title}, ${SIDE_NAME[box.zone]}${why}`);
         element.title = `${node.title}${why}`;
@@ -1600,6 +1611,59 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     activeResult = 0;
   }
 
+  function cachedRecents() {
+    if (recentCache) return recentCache;
+    try {
+      recentCache = host.recents();
+    } catch (error) {
+      console.error("[compass] recents", error);
+      recentCache = { pages: [], drawings: [] };
+    }
+    if (!recentCache || typeof recentCache !== "object") recentCache = { pages: [], drawings: [] };
+    return recentCache;
+  }
+
+  function todayPage(pages) {
+    const scope = globalThis.window ?? globalThis;
+    const dateToPageUid = (scope.roamAlphaAPI ?? globalThis.roamAlphaAPI)?.util?.dateToPageUid;
+    if (typeof dateToPageUid !== "function") return null;
+    let uid;
+    try {
+      uid = dateToPageUid(new Date());
+    } catch (error) {
+      console.error("[compass] today", error);
+      return null;
+    }
+    if (typeof uid !== "string") return null;
+    const match = (pages ?? []).find((row) => row?.uid === uid);
+    const title = typeof match?.title === "string" && match.title ? match.title : uid;
+    return { uid, title };
+  }
+
+  function showEmptyQuery() {
+    const cache = cachedRecents();
+    const rows = emptyQueryRows({
+      pins: settings?.pins ?? [],
+      today: todayPage(cache.pages),
+      pages: cache.pages,
+      drawings: cache.drawings,
+      limit: 8,
+    });
+    if (!rows.length) {
+      hideResults();
+      return;
+    }
+    results.replaceChildren();
+    activeResult = 0;
+    for (const [index, row] of rows.entries()) {
+      const item = button(`compass-result${index === 0 ? " compass-result-active" : ""}`, row.title);
+      item.dataset.uid = row.uid;
+      item.setAttribute("role", "option");
+      results.append(item);
+    }
+    results.hidden = false;
+  }
+
   function markResult() {
     const items = [...results.querySelectorAll(".compass-result")];
     items.forEach((item, index) => item.classList.toggle("compass-result-active", index === activeResult));
@@ -1609,7 +1673,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   function runSearch() {
     const text = searchInput.value.trim();
     if (!text) {
-      hideResults();
+      showEmptyQuery();
       return;
     }
     if (!titleCache) titleCache = host.titles();
@@ -1689,6 +1753,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
 
   function onKey(event) {
     if (root.hidden) return;
+    if ((event.key === "Control" || event.key === "Meta") && hoverNode?.dataset?.uid) {
+      showHover(hoverNode.dataset.uid, hoverX, hoverY);
+    }
     // Keys typed in Roam itself (the sidecar, a block) belong to Roam.
     if (!root.contains(event.target) && event.target !== document.body) return;
     const typing = event.target === searchInput;
@@ -1738,6 +1805,11 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     }
   }
 
+  function onKeyUp(event) {
+    if (event.key !== "Control" && event.key !== "Meta") return;
+    clearHover();
+  }
+
   // ---- wiring ----
 
   lifecycle.node(root, document.body);
@@ -1766,11 +1838,18 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   lifecycle.event(stage, "pointerover", (event) => {
     const node = event.target.closest?.(".compass-node");
     if (!node?.dataset.uid) return;
-    showHover(node.dataset.uid, event.clientX, event.clientY);
+    markHover(root, node);
+    hoverNode = node;
+    hoverX = event.clientX;
+    hoverY = event.clientY;
+    if (event.ctrlKey || event.metaKey) showHover(node.dataset.uid, event.clientX, event.clientY);
+    else clearHover();
   });
   lifecycle.event(stage, "pointerout", (event) => {
     if (event.relatedTarget?.closest?.(".compass-node")) return;
     clearHover();
+    markHover(root, null);
+    hoverNode = null;
   });
   lifecycle.event(globalThis, "hashchange", () => { void onHashChange(); });
   lifecycle.event(pinRow, "click", (event) => {
@@ -1803,6 +1882,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   lifecycle.event(globalThis, "pointercancel", onPointerUp);
   lifecycle.event(globalThis, "resize", () => { if (!root.hidden) placeFrame(); });
   lifecycle.event(document, "keydown", onKey);
+  lifecycle.event(document, "keyup", onKeyUp);
   lifecycle.event(globalThis, "roam-plexus:ready", onPlexusReady);
   lifecycle.event(globalThis, "roam-plexus:unload", onPlexusUnload);
   subscribePlexus();

@@ -1,4 +1,4 @@
-/* Compass v0.5.0 | MIT | generated; edit src/ */
+/* Compass v0.6.0 | MIT | generated; edit src/ */
 
 // src/lifecycle.js
 function isPromiseLike(value) {
@@ -334,6 +334,10 @@ function count(value, fallback) {
   if (value == null || value === "" || !Number.isFinite(number) || number < 1) return fallback;
   return Math.floor(number);
 }
+var SORT_MODES = /* @__PURE__ */ new Set(["connections", "name", "edited", "created"]);
+function sortMode(value) {
+  return SORT_MODES.has(value) ? value : "connections";
+}
 function modelSettings(raw = {}) {
   const lists = {};
   for (const role of ROLES) lists[role] = splitNames(raw[role] ?? MODEL_DEFAULTS[role]);
@@ -343,7 +347,8 @@ function modelSettings(raw = {}) {
     links: flag(raw.links, true),
     siblings: flag(raw.siblings, true),
     badges: flag(raw.badges, true),
-    maxPerZone: count(raw.maxPerZone, 12)
+    maxPerZone: count(raw.maxPerZone, 12),
+    sort: sortMode(raw.sort)
   };
 }
 function sameName(a, b) {
@@ -428,11 +433,11 @@ function isNode(entity) {
 function labelsText(labels) {
   return (labels ?? []).map((label) => `${label.attribute}: ${label.text}`);
 }
-function walk(blocks, visit, depth = 0, parentUid = null) {
+function walk(blocks, visit2, depth = 0, parentUid = null) {
   for (const block of blocks ?? []) {
     if (!block?.uid) continue;
-    visit(block, depth, parentUid);
-    walk(block.children, visit, depth + 1, block.uid);
+    visit2(block, depth, parentUid);
+    walk(block.children, visit2, depth + 1, block.uid);
   }
 }
 function resolveTokens(tokens, refs) {
@@ -472,12 +477,39 @@ function outlineIndex(outline, resolveRegion) {
   });
   return { index, rows };
 }
-function compareNodes(a, b) {
-  if (a.strength !== b.strength) return b.strength - a.strength;
+function finiteTime(value) {
+  return Number.isFinite(value) ? value : 0;
+}
+function aliasOf(entity, aliases) {
+  const named = entity?.nameAlias;
+  if (typeof named === "string" && named !== "") return named;
+  const listed = aliases?.[entity?.uid];
+  if (typeof listed === "string" && listed !== "") return listed;
+  return "";
+}
+function compareTitle(a, b) {
   const at = a.title.toLowerCase();
   const bt = b.title.toLowerCase();
   if (at !== bt) return at < bt ? -1 : 1;
   return a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0;
+}
+function compareNodes(a, b, sort) {
+  if (sort === "name") {
+    const an = (a.alias || a.title).toLowerCase();
+    const bn = (b.alias || b.title).toLowerCase();
+    if (an !== bn) return an < bn ? -1 : 1;
+    return a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0;
+  }
+  if (sort === "edited" || sort === "created") {
+    const key = sort === "edited" ? "editTime" : "createTime";
+    const at = finiteTime(a[key]);
+    const bt = finiteTime(b[key]);
+    if (at === 0 !== (bt === 0)) return at === 0 ? 1 : -1;
+    if (at !== bt) return bt - at;
+    return compareTitle(a, b);
+  }
+  if (a.strength !== b.strength) return b.strength - a.strength;
+  return compareTitle(a, b);
 }
 function pickRole(evidence) {
   const top = Math.max(...evidence.map((item) => STRENGTH[item.kind] ?? 0));
@@ -645,6 +677,9 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
       kind: kindOf(entity),
       title: titleOf(entity, resolveRegion) || uid,
       string: typeof entity?.string === "string" ? entity.string : "",
+      alias: aliasOf(entity, source.aliases),
+      editTime: finiteTime(entity?.editTime),
+      createTime: finiteTime(entity?.createTime),
       role: picked.role,
       zone: ZONE_OF[picked.role],
       strength: picked.strength,
@@ -671,6 +706,9 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
         kind: kindOf(entity),
         title: titleOf(entity, resolveRegion) || entity.uid,
         string: typeof entity.string === "string" ? entity.string : "",
+        alias: aliasOf(entity, source.aliases),
+        editTime: finiteTime(entity?.editTime),
+        createTime: finiteTime(entity?.createTime),
         role: "sibling",
         zone: "siblings",
         strength: 0,
@@ -712,7 +750,7 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
   const overflow = {};
   const kept = [];
   for (const zone of ZONES) {
-    const members = nodes.filter((node) => node.zone === zone).sort(compareNodes);
+    const members = nodes.filter((node) => node.zone === zone).sort((a, b) => compareNodes(a, b, settings.sort));
     const limit = expanded.has(zone) ? Math.max(settings.maxPerZone, 200) : settings.maxPerZone;
     kept.push(...members.slice(0, limit));
     if (members.length > settings.maxPerZone) {
@@ -817,26 +855,26 @@ function planMove({ source, fromAttribute, toAttribute, value, newUid }) {
 }
 
 // src/host.js
-var LABELS = "{:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string]}]}";
+var LABELS = "{:harc/_e [{:harc/a [:node/title :edit/time :create/time]} {:harc/v [:block/uid :node/title :edit/time :create/time :block/string :harc/v-string]}]}";
 var SOURCE = "[:block/uid :block/string :block/order {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order]}]";
-var CENTER_PULL = `[:block/uid :node/title :block/string :block/order
- {:block/refs [:block/uid :node/title :block/string]}
- {:block/page [:block/uid :node/title]}
- {:block/_children [:block/uid :node/title :block/string {:block/children [:block/uid :block/string :block/order]}]}
+var CENTER_PULL = `[:block/uid :node/title :edit/time :create/time :block/string :block/order
+ {:block/refs [:block/uid :node/title :edit/time :create/time :block/string]}
+ {:block/page [:block/uid :node/title :edit/time :create/time]}
+ {:block/_children [:block/uid :node/title :edit/time :create/time :block/string {:block/children [:block/uid :block/string :block/order]}]}
  {:harc/_e [:block/uid
-   {:harc/a [:node/title]}
-   {:harc/v [:block/uid :node/title :block/string :harc/v-string]}
+   {:harc/a [:node/title :edit/time :create/time]}
+   {:harc/v [:block/uid :node/title :edit/time :create/time :block/string :harc/v-string]}
    {:harc/a-source ${SOURCE}}
    ${LABELS}]}
  {:harc/_v [:block/uid
-   {:harc/e [:block/uid :node/title :block/string]}
-   {:harc/a [:node/title]}
+   {:harc/e [:block/uid :node/title :edit/time :create/time :block/string]}
+   {:harc/a [:node/title :edit/time :create/time]}
    {:harc/a-source ${SOURCE}}
    {:harc/v-source [:block/uid]}
    ${LABELS}]}
  {:block/_refs [:block/uid :block/string
-   {:block/page [:block/uid :node/title]}
-   {:block/refs [:block/uid :node/title :block/string]}]}]`;
+   {:block/page [:block/uid :node/title :edit/time :create/time]}
+   {:block/refs [:block/uid :node/title :edit/time :create/time :block/string]}]}]`;
 var OUTLINE_PULL = "[:block/uid :block/string :block/order {:block/refs [:block/uid :node/title :block/string]} {:block/children ...}]";
 var PEER_PULL = `[:block/uid
  {:harc/_v [{:harc/a [:node/title]} {:harc/e [:block/uid :node/title :block/string]}]}
@@ -855,12 +893,17 @@ var DRAWING_REF_QUERY = `[:find ?uid ?want ?time
  [?b :block/string ?s]
  [(clojure.string/includes? ?s "excalidraw")]
  [?b :edit/time ?time]]`;
-var PREFIX_QUERY = `[:find ?uid ?title
+var PREFIX_QUERY = `[:find ?uid ?title ?edit ?create
  :in $ ?prefix
  :where
   [?page :node/title ?title]
   [(clojure.string/starts-with? ?title ?prefix)]
-  [?page :block/uid ?uid]]`;
+  [?page :block/uid ?uid]
+  [?page :edit/time ?edit]
+  [?page :create/time ?create]]`;
+var ALIAS_QUERY = `[:find ?uid ?s :in $ [?uid ...] :where [?p :block/uid ?uid] [?p :block/children ?c] [?c :block/string ?s] [(clojure.string/includes? ?s "Name::")]]`;
+var RECENT_PAGES_QUERY = "[:find ?uid ?title ?edit ?create :where [?e :node/title ?title] [?e :block/uid ?uid] [?e :edit/time ?edit] [?e :create/time ?create]]";
+var RECENT_DRAWINGS_QUERY = `[:find ?uid ?edit :where [?b :block/uid ?uid] [?b :block/string ?s] [(clojure.string/includes? ?s "excalidraw")] [?b :edit/time ?edit]]`;
 var MENTION_CAP = 500;
 var NAMESPACE_CAP = 200;
 var DAILY_UID = /^(\d{2})-(\d{2})-(\d{4})$/;
@@ -885,17 +928,29 @@ function topicRefUid(entity) {
   if (entity.title === "excalidraw") return null;
   return uid;
 }
+function withTimes(entity, node) {
+  if (Number.isFinite(node[":edit/time"])) entity.editTime = node[":edit/time"];
+  if (Number.isFinite(node[":create/time"])) entity.createTime = node[":create/time"];
+  return entity;
+}
 function entityOf(node) {
   const uid = node?.[":block/uid"];
   if (typeof uid !== "string" || !uid) return null;
-  if (typeof node[":node/title"] === "string") return { uid, title: node[":node/title"] };
+  if (typeof node[":node/title"] === "string") return withTimes({ uid, title: node[":node/title"] }, node);
   if (typeof node[":block/string"] === "string") {
     const entity = { uid, string: node[":block/string"] };
     if (Number.isFinite(node[":block/order"])) entity.order = node[":block/order"];
-    return entity;
+    return withTimes(entity, node);
   }
   if (node[":harc/v-string"] != null) return { uid, text: String(node[":harc/v-string"]) };
   return { uid };
+}
+function aliasFromBlock(string) {
+  const parsed = parseAttribute(string);
+  if (!parsed || parsed.name.toLowerCase() !== "name") return "";
+  const text = plainText(parsed.tail, 80);
+  if (!text || text === "(( ))") return "";
+  return text;
 }
 function displayText(node) {
   if (node?.[":harc/v-string"] != null) return String(node[":harc/v-string"]);
@@ -1074,19 +1129,25 @@ function prefixPages(data, prefix) {
     console.error("[compass] namespace query failed", error);
     return [];
   }
+  if (!Array.isArray(rows)) return [];
   const pages = [];
-  for (const [uid, title] of rows) {
+  for (const row of rows) {
+    if (!Array.isArray(row)) continue;
+    const [uid, title, edit, create] = row;
     if (typeof uid !== "string" || typeof title !== "string") continue;
     const rest = title.slice(prefix.length);
     if (!rest || rest.includes("/")) continue;
-    pages.push({ uid, title });
+    const page = { uid, title };
+    if (Number.isFinite(edit)) page.editTime = edit;
+    if (Number.isFinite(create)) page.createTime = create;
+    pages.push(page);
   }
   pages.sort((a, b) => a.title < b.title ? -1 : a.title > b.title ? 1 : 0);
   return pages.slice(0, NAMESPACE_CAP);
 }
 function pageByTitle(data, title) {
   try {
-    const found = data.pull("[:block/uid :node/title]", `[:node/title "${title.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`);
+    const found = data.pull("[:block/uid :node/title :edit/time :create/time]", `[:node/title "${title.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`);
     return entityOf(found);
   } catch {
     return null;
@@ -1107,10 +1168,74 @@ function daysOf(data, uid) {
   const around = adjacentDayUids(uid);
   if (!around) return null;
   const page = (dayUid) => {
-    const found = entityOf(pull(data, "[:block/uid :node/title]", dayUid));
+    const found = entityOf(pull(data, "[:block/uid :node/title :edit/time :create/time]", dayUid));
     return found?.title ? found : null;
   };
   return { previous: page(around.previous), next: page(around.next) };
+}
+function pageUidsOf(snap) {
+  const uids = [];
+  const seen = /* @__PURE__ */ new Set();
+  const add = (entity) => {
+    if (typeof entity?.title !== "string") return;
+    const uid = entity.uid;
+    if (typeof uid !== "string" || !uid || seen.has(uid)) return;
+    seen.add(uid);
+    uids.push(uid);
+  };
+  for (const harc of snap.out ?? []) {
+    for (const value of harc.values ?? []) add(value);
+  }
+  for (const harc of snap.in ?? []) add(harc.entity);
+  for (const mention of snap.mentions ?? []) {
+    add(mention.page);
+    for (const ref of mention.refs ?? []) add(ref);
+  }
+  if (snap.namespace) {
+    add(snap.namespace.parent);
+    for (const page of snap.namespace.children ?? []) add(page);
+    for (const page of snap.namespace.siblings ?? []) add(page);
+  }
+  if (snap.days) {
+    add(snap.days.previous);
+    add(snap.days.next);
+  }
+  const walk2 = (blocks) => {
+    for (const block of blocks ?? []) {
+      for (const ref of block?.refs ?? []) add(ref);
+      walk2(block?.children);
+    }
+  };
+  walk2(snap.outline);
+  for (const ref of snap.center?.refs ?? []) add(ref);
+  add(snap.center?.page);
+  for (const peer of snap.peers ?? []) {
+    for (const row of peer?.incoming ?? []) add(row?.entity);
+    for (const row of peer?.outgoing ?? []) add(row?.value);
+  }
+  if (snap.center?.kind === "page") add(snap.center);
+  return uids;
+}
+function aliasesOf(data, snap) {
+  const uids = pageUidsOf(snap);
+  if (!uids.length || typeof data.q !== "function") return {};
+  let rows = [];
+  try {
+    rows = data.q(ALIAS_QUERY, uids) ?? [];
+  } catch (error) {
+    console.error("[compass] aliases failed", error);
+    return {};
+  }
+  if (!Array.isArray(rows)) return {};
+  const aliases = {};
+  for (const row of rows) {
+    if (!Array.isArray(row)) continue;
+    const [uid, string] = row;
+    if (typeof uid !== "string" || !uid || aliases[uid]) continue;
+    const text = aliasFromBlock(string);
+    if (text) aliases[uid] = text;
+  }
+  return aliases;
 }
 function graphName() {
   const name = roamApi()?.graph?.name;
@@ -1194,6 +1319,7 @@ function createHost({ lifecycle }) {
       peers: []
     };
     snap.peers = typedParentUids(snap, modelSettings2).map((parentUid) => normalizePeer(parentUid, pull(api, PEER_PULL, parentUid)));
+    snap.aliases = aliasesOf(api, snap);
     return snap;
   }
   function titles() {
@@ -1337,6 +1463,48 @@ function createHost({ lifecycle }) {
     }
     return [...byUid.values()];
   }
+  function recents() {
+    const api = roamApi()?.data;
+    if (!api?.q) return { pages: [], drawings: [] };
+    const ask = (query, label) => {
+      try {
+        const rows = api.q(query) ?? [];
+        return Array.isArray(rows) ? rows : [];
+      } catch (error) {
+        console.error(label, error);
+        return [];
+      }
+    };
+    const pages = [];
+    for (const row of ask(RECENT_PAGES_QUERY, "[compass] recents pages failed")) {
+      if (!Array.isArray(row)) continue;
+      const [uid, title, edit, create] = row;
+      if (typeof uid !== "string" || !uid || typeof title !== "string") continue;
+      if (!Number.isFinite(edit) || !Number.isFinite(create)) continue;
+      pages.push({ uid, title, editTime: edit, createTime: create });
+    }
+    const candidates = [];
+    for (const row of ask(RECENT_DRAWINGS_QUERY, "[compass] recents drawings failed")) {
+      if (!Array.isArray(row)) continue;
+      const [uid, edit] = row;
+      if (typeof uid !== "string" || !uid || !Number.isFinite(edit)) continue;
+      candidates.push({ uid, editTime: edit });
+    }
+    candidates.sort((a, b) => b.editTime - a.editTime);
+    const drawings = [];
+    for (const item of candidates.slice(0, 8)) {
+      let title = "Drawing";
+      try {
+        const pulled = api.pull?.("[:block/string]", entityString(item.uid));
+        const named = drawingTitle(pulled?.[":block/string"]);
+        if (named) title = named;
+      } catch (error) {
+        console.error("[compass] recents drawing pull failed", error);
+      }
+      drawings.push({ uid: item.uid, editTime: item.editTime, title });
+    }
+    return { pages, drawings };
+  }
   lifecycle.add(() => closeSidecar());
   lifecycle.add(() => unwatch());
   lifecycle.add(() => {
@@ -1347,6 +1515,7 @@ function createHost({ lifecycle }) {
     watch,
     unwatch,
     titles,
+    recents,
     openPageUid,
     mainUid,
     focusedBlock,
@@ -1574,6 +1743,49 @@ function rankTitles(entries, input, limit = 20) {
   ranked.sort((a, b) => a.score - b.score || a.title.length - b.title.length || (a.title < b.title ? -1 : 1));
   return ranked.slice(0, limit).map(({ uid, title }) => ({ uid, title }));
 }
+function shownTitle(row) {
+  return row.title ?? row.uid;
+}
+function hasUid(row) {
+  return row?.uid != null && row.uid !== "";
+}
+function emptyQueryRows({ pins = [], today = null, pages = [], drawings = [], limit = 8 } = {}) {
+  const seen = /* @__PURE__ */ new Set();
+  const rows = [];
+  for (const pin of pins ?? []) {
+    if (!hasUid(pin) || seen.has(pin.uid)) continue;
+    seen.add(pin.uid);
+    rows.push({ uid: pin.uid, title: shownTitle(pin), kind: "pin" });
+  }
+  if (hasUid(today) && !seen.has(today.uid)) {
+    seen.add(today.uid);
+    rows.push({ uid: today.uid, title: shownTitle(today), kind: "today" });
+  }
+  const recent = [];
+  for (const row of [...pages ?? [], ...drawings ?? []]) {
+    if (!hasUid(row) || !Number.isFinite(row.editTime)) continue;
+    recent.push(row);
+  }
+  recent.sort((a, b) => {
+    if (a.editTime !== b.editTime) return b.editTime - a.editTime;
+    const left = shownTitle(a);
+    const right = shownTitle(b);
+    if (left < right) return -1;
+    if (left > right) return 1;
+    if (a.uid < b.uid) return -1;
+    if (a.uid > b.uid) return 1;
+    return 0;
+  });
+  let kept = 0;
+  for (const row of recent) {
+    if (kept >= limit) break;
+    if (seen.has(row.uid)) continue;
+    seen.add(row.uid);
+    rows.push({ uid: row.uid, title: shownTitle(row), kind: "recent" });
+    kept += 1;
+  }
+  return rows;
+}
 
 // src/settings.js
 var SETTING_IDS = Object.freeze({
@@ -1593,7 +1805,8 @@ var SETTING_IDS = Object.freeze({
   pins: "compass-pins",
   drawings: "compass-drawings",
   follow: "compass-follow",
-  relatedDrawings: "compass-related-drawings"
+  relatedDrawings: "compass-related-drawings",
+  sort: "compass-sort"
 });
 var DEFAULTS = Object.freeze({
   "compass-north": MODEL_DEFAULTS.parent,
@@ -1612,7 +1825,8 @@ var DEFAULTS = Object.freeze({
   "compass-pins": [],
   "compass-drawings": true,
   "compass-follow": false,
-  "compass-related-drawings": true
+  "compass-related-drawings": true,
+  "compass-sort": "connections"
 });
 var SWITCHES = /* @__PURE__ */ new Set([
   SETTING_IDS.links,
@@ -1624,6 +1838,7 @@ var SWITCHES = /* @__PURE__ */ new Set([
   SETTING_IDS.follow,
   SETTING_IDS.relatedDrawings
 ]);
+var SORTS = Object.freeze(["connections", "name", "edited", "created"]);
 var ROWS = [
   [SETTING_IDS.north, "Parents (north)", "Attributes whose value sits above the center. The first one is written when you drag a node north."],
   [SETTING_IDS.south, "Children (south)", "Attributes whose value sits below. Any attribute not listed anywhere also lands here."],
@@ -1641,8 +1856,12 @@ var ROWS = [
   [SETTING_IDS.follow, "Follow main window", "Recentre when the main window opens another page or block. Off skips that. A pin, typing, or a Compass navigation also skips it."],
   [SETTING_IDS.relatedDrawings, "Related drawings", "When Plexus exposes linksOf, list drawings that share block or link refs with the centre."],
   [SETTING_IDS.maxZone, "Nodes per side", "How many nodes a side shows before it offers Show all."],
-  [SETTING_IDS.pins, "Pins", "JSON list of {uid, title}. Use the Pin button instead of editing this."]
+  [SETTING_IDS.pins, "Pins", "JSON list of {uid, title}. Use the Pin button instead of editing this."],
+  [SETTING_IDS.sort, "Sort nodes", "Order inside a side: connections, name, edited, or created."]
 ];
+function readSort(value) {
+  return SORTS.includes(value) ? value : "connections";
+}
 function flag2(value, fallback) {
   if (value == null || value === "") return fallback;
   if (value === true || value === "on" || value === "true" || value === 1) return true;
@@ -1685,7 +1904,8 @@ function readCompassSettings(extensionAPI) {
       links: flag2(read(SETTING_IDS.links), true),
       siblings: flag2(read(SETTING_IDS.siblings), true),
       badges: flag2(read(SETTING_IDS.badges), true),
-      maxPerZone: read(SETTING_IDS.maxZone)
+      maxPerZone: read(SETTING_IDS.maxZone),
+      sort: readSort(read(SETTING_IDS.sort))
     },
     sidecar: flag2(read(SETTING_IDS.sidecar), true),
     outline: flag2(read(SETTING_IDS.outline), false),
@@ -1708,6 +1928,19 @@ async function initializeSettings(extensionAPI) {
     if (extensionAPI.settings.get(id) == null) await extensionAPI.settings.set(id, value);
   }
 }
+function settingAction(id, persist) {
+  if (id === SETTING_IDS.sort) {
+    return {
+      type: "select",
+      items: ["connections", "name", "edited", "created"],
+      onChange: (event) => persist(id, parseInput(id, event?.target?.value))
+    };
+  }
+  if (SWITCHES.has(id)) {
+    return { type: "switch", onChange: (event) => persist(id, Boolean(event?.target?.checked)) };
+  }
+  return { type: "input", onChange: (event) => persist(id, parseInput(id, event?.target?.value)) };
+}
 function parseInput(id, raw) {
   if (id !== SETTING_IDS.pins) return raw ?? "";
   const text = String(raw ?? "").trim();
@@ -1729,9 +1962,41 @@ function createSettingsPanel({ extensionAPI, onChange } = {}) {
       id,
       name,
       description,
-      action: SWITCHES.has(id) ? { type: "switch", onChange: (event) => persist(id, Boolean(event?.target?.checked)) } : { type: "input", onChange: (event) => persist(id, parseInput(id, event?.target?.value)) }
+      action: settingAction(id, persist)
     }))
   };
+}
+
+// src/view/hover-dim.js
+var MARKS = ["compass-node-hot", "compass-node-dim", "compass-edge-hot", "compass-edge-dim"];
+function visit(root, selector, apply) {
+  for (const element of root?.querySelectorAll?.(selector) ?? []) apply(element);
+}
+function clearElement(element) {
+  for (const name of MARKS) element.classList.toggle(name, false);
+}
+function markHover(root, node) {
+  const uid = node?.dataset?.uid;
+  if (!uid) {
+    root?.classList.toggle("compass-dimming", false);
+    visit(root, ".compass-node", clearElement);
+    visit(root, ".compass-edge", clearElement);
+    return;
+  }
+  root?.classList.toggle("compass-dimming", true);
+  const center = node.classList.contains("compass-node-center");
+  node.classList.toggle("compass-node-hot", true);
+  node.classList.toggle("compass-node-dim", false);
+  visit(root, ".compass-node", (element) => {
+    if (element === node) return;
+    element.classList.toggle("compass-node-hot", false);
+    element.classList.toggle("compass-node-dim", true);
+  });
+  visit(root, ".compass-edge", (element) => {
+    const hot = center || element.dataset?.uid === uid;
+    element.classList.toggle("compass-edge-hot", hot);
+    element.classList.toggle("compass-edge-dim", !hot);
+  });
 }
 
 // src/view/overlay.js
@@ -1999,6 +2264,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   let statusTimer = null;
   let searchTimer = null;
   let titleCache = null;
+  let recentCache = null;
   let activeResult = 0;
   const thumbUrls = /* @__PURE__ */ new Map();
   const thumbRenderTried = /* @__PURE__ */ new Set();
@@ -2011,6 +2277,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   let hoverToken = 0;
   let hoverUid = null;
   let hoverUrl = null;
+  let hoverNode = null;
+  let hoverX = 0;
+  let hoverY = 0;
   const partUrls = /* @__PURE__ */ new Set();
   const rawOpenInMain = host.openInMain.bind(host);
   host.openInMain = (uid, kind) => {
@@ -2177,6 +2446,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     host.watch(uid, scheduleReload);
     load({ navigate: changed });
     updateButtons();
+    if (searchInput.value.trim()) runSearch();
+    else showEmptyQuery();
   }
   function goBack() {
     if (!back.length) return;
@@ -2195,9 +2466,12 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     reloadTimer = cancel(reloadTimer);
     clickTimer = cancel(clickTimer);
     titleCache = null;
+    recentCache = null;
     pointer = null;
     hideFloating();
     clearHover();
+    markHover(root, null);
+    hoverNode = null;
     endDrag();
     setStatus("");
   }
@@ -2682,7 +2956,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
         element.setAttribute("aria-label", `Center: ${hood.center.title}`);
         element.title = hood.center.title;
       } else {
-        element.replaceChildren(el("span", "compass-node-title", node.title));
+        const visible = typeof node.alias === "string" && node.alias ? node.alias : node.title;
+        element.replaceChildren(el("span", "compass-node-title", visible));
         const why = node.label ? ` — ${node.label}` : "";
         element.setAttribute("aria-label", `${node.title}, ${SIDE_NAME[box.zone]}${why}`);
         element.title = `${node.title}${why}`;
@@ -3216,6 +3491,56 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     results.replaceChildren();
     activeResult = 0;
   }
+  function cachedRecents() {
+    if (recentCache) return recentCache;
+    try {
+      recentCache = host.recents();
+    } catch (error) {
+      console.error("[compass] recents", error);
+      recentCache = { pages: [], drawings: [] };
+    }
+    if (!recentCache || typeof recentCache !== "object") recentCache = { pages: [], drawings: [] };
+    return recentCache;
+  }
+  function todayPage(pages) {
+    const scope = globalThis.window ?? globalThis;
+    const dateToPageUid = (scope.roamAlphaAPI ?? globalThis.roamAlphaAPI)?.util?.dateToPageUid;
+    if (typeof dateToPageUid !== "function") return null;
+    let uid;
+    try {
+      uid = dateToPageUid(/* @__PURE__ */ new Date());
+    } catch (error) {
+      console.error("[compass] today", error);
+      return null;
+    }
+    if (typeof uid !== "string") return null;
+    const match = (pages ?? []).find((row) => row?.uid === uid);
+    const title = typeof match?.title === "string" && match.title ? match.title : uid;
+    return { uid, title };
+  }
+  function showEmptyQuery() {
+    const cache = cachedRecents();
+    const rows = emptyQueryRows({
+      pins: settings?.pins ?? [],
+      today: todayPage(cache.pages),
+      pages: cache.pages,
+      drawings: cache.drawings,
+      limit: 8
+    });
+    if (!rows.length) {
+      hideResults();
+      return;
+    }
+    results.replaceChildren();
+    activeResult = 0;
+    for (const [index, row] of rows.entries()) {
+      const item = button(`compass-result${index === 0 ? " compass-result-active" : ""}`, row.title);
+      item.dataset.uid = row.uid;
+      item.setAttribute("role", "option");
+      results.append(item);
+    }
+    results.hidden = false;
+  }
   function markResult() {
     const items = [...results.querySelectorAll(".compass-result")];
     items.forEach((item, index) => item.classList.toggle("compass-result-active", index === activeResult));
@@ -3224,7 +3549,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   function runSearch() {
     const text = searchInput.value.trim();
     if (!text) {
-      hideResults();
+      showEmptyQuery();
       return;
     }
     if (!titleCache) titleCache = host.titles();
@@ -3296,6 +3621,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   }
   function onKey(event) {
     if (root.hidden) return;
+    if ((event.key === "Control" || event.key === "Meta") && hoverNode?.dataset?.uid) {
+      showHover(hoverNode.dataset.uid, hoverX, hoverY);
+    }
     if (!root.contains(event.target) && event.target !== document.body) return;
     const typing = event.target === searchInput;
     if (event.key === "Escape") {
@@ -3343,6 +3671,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       }
     }
   }
+  function onKeyUp(event) {
+    if (event.key !== "Control" && event.key !== "Meta") return;
+    clearHover();
+  }
   lifecycle.node(root, document.body);
   lifecycle.event(closeButton, "click", () => close());
   lifecycle.event(backButton, "click", () => goBack());
@@ -3371,11 +3703,18 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   lifecycle.event(stage, "pointerover", (event) => {
     const node = event.target.closest?.(".compass-node");
     if (!node?.dataset.uid) return;
-    showHover(node.dataset.uid, event.clientX, event.clientY);
+    markHover(root, node);
+    hoverNode = node;
+    hoverX = event.clientX;
+    hoverY = event.clientY;
+    if (event.ctrlKey || event.metaKey) showHover(node.dataset.uid, event.clientX, event.clientY);
+    else clearHover();
   });
   lifecycle.event(stage, "pointerout", (event) => {
     if (event.relatedTarget?.closest?.(".compass-node")) return;
     clearHover();
+    markHover(root, null);
+    hoverNode = null;
   });
   lifecycle.event(globalThis, "hashchange", () => {
     void onHashChange();
@@ -3411,6 +3750,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (!root.hidden) placeFrame();
   });
   lifecycle.event(document, "keydown", onKey);
+  lifecycle.event(document, "keyup", onKeyUp);
   lifecycle.event(globalThis, "roam-plexus:ready", onPlexusReady);
   lifecycle.event(globalThis, "roam-plexus:unload", onPlexusUnload);
   subscribePlexus();

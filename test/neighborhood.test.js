@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { buildNeighborhood, createPlexusOpener, drawingLinkEdges, isDrawingLike, plexusKind, plexusOpenPlan, plexusRegionLabels, roleOf, modelSettings, typedParentUids } from "../src/model/neighborhood.js";
 
-const page = (uid, title) => ({ uid, title });
+const page = (uid, title, extra) => ({ uid, title, ...extra });
 
 function snap(overrides = {}) {
   return {
@@ -231,6 +231,52 @@ test("each side keeps its limit and reports what it holds back", () => {
   const all = buildNeighborhood(snap({ mentions }), { maxPerZone: 12 }, { expanded: new Set(["north"]) });
   assert.equal(all.nodes.length, 15);
   assert.deepEqual(all.overflow, { north: { shown: 15, total: 15 } });
+});
+
+test("two south links sort by the model and copy alias and times", () => {
+  const links = (alpha, bravo, extra = {}) => snap({
+    outline: [block("b1", "See [[Alpha]] and [[Bravo]]", [alpha, bravo])],
+    ...extra,
+  });
+  const titles = (hood) => hood.nodes.map((node) => node.title);
+
+  const plain = buildNeighborhood(links(page("a", "Alpha"), page("b", "Bravo")));
+  assert.deepEqual(titles(plain), ["Alpha", "Bravo"]);
+  assert.equal(plain.center.title, "Center");
+  assert.equal(plain.settings.sort, "connections");
+
+  const edited = buildNeighborhood(links(
+    page("a", "Alpha", { editTime: 10 }),
+    page("b", "Bravo", { editTime: 20 }),
+  ), { sort: "edited" });
+  assert.deepEqual(titles(edited), ["Bravo", "Alpha"]);
+  assert.equal(edited.nodes.find((node) => node.uid === "b").editTime, 20);
+  assert.equal(edited.nodes.find((node) => node.uid === "a").editTime, 10);
+  assert.equal(edited.nodes.find((node) => node.uid === "a").createTime, 0);
+  assert.equal(edited.center.title, "Center");
+
+  const named = buildNeighborhood(links(
+    page("a", "Alpha", { nameAlias: "Zed" }),
+    page("b", "Bravo"),
+  ), { sort: "name" });
+  assert.deepEqual(titles(named), ["Bravo", "Alpha"]);
+  assert.equal(named.nodes.find((node) => node.uid === "a").alias, "Zed");
+  assert.equal(named.center.title, "Center");
+
+  const nope = buildNeighborhood(links(
+    page("a", "Alpha", { editTime: 10, nameAlias: "Zed" }),
+    page("b", "Bravo", { editTime: 20 }),
+  ), { sort: "nope" });
+  assert.deepEqual(titles(nope), ["Alpha", "Bravo"]);
+  assert.equal(nope.settings.sort, "connections");
+  assert.equal(nope.center.title, "Center");
+
+  const fromSource = buildNeighborhood(links(
+    page("a", "Alpha"),
+    page("b", "Bravo"),
+    { aliases: { a: "From source" } },
+  ));
+  assert.equal(fromSource.nodes.find((node) => node.uid === "a").alias, "From source");
 });
 
 test("a block center sits under its page and parent block, with sibling blocks", () => {

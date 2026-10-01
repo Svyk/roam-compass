@@ -18,6 +18,7 @@ export const SETTING_IDS = Object.freeze({
   drawings: "compass-drawings",
   follow: "compass-follow",
   relatedDrawings: "compass-related-drawings",
+  sort: "compass-sort",
 });
 
 export const DEFAULTS = Object.freeze({
@@ -38,6 +39,7 @@ export const DEFAULTS = Object.freeze({
   "compass-drawings": true,
   "compass-follow": false,
   "compass-related-drawings": true,
+  "compass-sort": "connections",
 });
 
 const SWITCHES = new Set([
@@ -50,6 +52,8 @@ const SWITCHES = new Set([
   SETTING_IDS.follow,
   SETTING_IDS.relatedDrawings,
 ]);
+
+const SORTS = Object.freeze(["connections", "name", "edited", "created"]);
 
 const ROWS = [
   [SETTING_IDS.north, "Parents (north)", "Attributes whose value sits above the center. The first one is written when you drag a node north."],
@@ -69,7 +73,12 @@ const ROWS = [
   [SETTING_IDS.relatedDrawings, "Related drawings", "When Plexus exposes linksOf, list drawings that share block or link refs with the centre."],
   [SETTING_IDS.maxZone, "Nodes per side", "How many nodes a side shows before it offers Show all."],
   [SETTING_IDS.pins, "Pins", "JSON list of {uid, title}. Use the Pin button instead of editing this."],
+  [SETTING_IDS.sort, "Sort nodes", "Order inside a side: connections, name, edited, or created."],
 ];
+
+function readSort(value) {
+  return SORTS.includes(value) ? value : "connections";
+}
 
 function flag(value, fallback) {
   if (value == null || value === "") return fallback;
@@ -117,6 +126,7 @@ export function readCompassSettings(extensionAPI) {
       siblings: flag(read(SETTING_IDS.siblings), true),
       badges: flag(read(SETTING_IDS.badges), true),
       maxPerZone: read(SETTING_IDS.maxZone),
+      sort: readSort(read(SETTING_IDS.sort)),
     },
     sidecar: flag(read(SETTING_IDS.sidecar), true),
     outline: flag(read(SETTING_IDS.outline), false),
@@ -140,6 +150,20 @@ export async function initializeSettings(extensionAPI) {
   for (const [id, value] of Object.entries(DEFAULTS)) {
     if (extensionAPI.settings.get(id) == null) await extensionAPI.settings.set(id, value);
   }
+}
+
+function settingAction(id, persist) {
+  if (id === SETTING_IDS.sort) {
+    return {
+      type: "select",
+      items: ["connections", "name", "edited", "created"],
+      onChange: (event) => persist(id, parseInput(id, event?.target?.value)),
+    };
+  }
+  if (SWITCHES.has(id)) {
+    return { type: "switch", onChange: (event) => persist(id, Boolean(event?.target?.checked)) };
+  }
+  return { type: "input", onChange: (event) => persist(id, parseInput(id, event?.target?.value)) };
 }
 
 function parseInput(id, raw) {
@@ -167,9 +191,7 @@ export function createSettingsPanel({ extensionAPI, onChange } = {}) {
       id,
       name,
       description,
-      action: SWITCHES.has(id)
-        ? { type: "switch", onChange: (event) => persist(id, Boolean(event?.target?.checked)) }
-        : { type: "input", onChange: (event) => persist(id, parseInput(id, event?.target?.value)) },
+      action: settingAction(id, persist),
     })),
   };
 }

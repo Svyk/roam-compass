@@ -3,8 +3,10 @@ import test from "node:test";
 
 import {
   adjacentDayUids,
+  aliasFromBlock,
   CENTER_PULL,
   createHost,
+  entityOf,
   normalizeCenter,
   normalizeIn,
   normalizeMentions,
@@ -301,6 +303,136 @@ test("mainUid stays null when the main window has no page", async () => {
     const { mainUid } = await import("../src/host.js");
     assert.equal(await mainUid(), null);
   } finally {
+    delete globalThis.roamAlphaAPI;
+  }
+});
+
+test("entityOf keeps editTime and createTime from a page pull node", () => {
+  assert.deepEqual(entityOf({
+    ":block/uid": "p",
+    ":node/title": "Page",
+    ":edit/time": 12,
+    ":create/time": 3,
+  }), { uid: "p", title: "Page", editTime: 12, createTime: 3 });
+  assert.deepEqual(entityOf({
+    ":block/uid": "b",
+    ":block/string": "note",
+    ":block/order": 1,
+    ":edit/time": 9,
+    ":create/time": 4,
+  }), { uid: "b", string: "note", order: 1, editTime: 9, createTime: 4 });
+  assert.deepEqual(entityOf({
+    ":block/uid": "plain",
+    ":node/title": "Plain",
+    ":edit/time": "12",
+    ":create/time": Number.NaN,
+  }), { uid: "plain", title: "Plain" });
+});
+
+test("snapshot reads Name:: for a page linked from the outline", async () => {
+  let asked = null;
+  fakeRoam({
+    pulls(pattern) {
+      if (pattern === CENTER_PULL) return { ":block/uid": "center", ":node/title": "Center" };
+      if (pattern === OUTLINE_PULL) {
+        return {
+          ":block/children": [{
+            ":block/uid": "b1",
+            ":block/string": "[[Other]]",
+            ":block/order": 0,
+            ":block/refs": [rawPage("other", "Other")],
+          }],
+        };
+      }
+      return null;
+    },
+  });
+  globalThis.roamAlphaAPI.data.q = (query, uids) => {
+    if (typeof query === "string" && query.includes("Name::")) {
+      asked = uids;
+      return [["other", "Name:: AliasLabel"]];
+    }
+    return [];
+  };
+  const lifecycle = createLifecycle();
+  try {
+    const host = createHost({ lifecycle });
+    const snap = host.snapshot("center", {});
+    assert.ok(Array.isArray(asked) && asked.includes("other"));
+    assert.equal(snap.aliases.other, "AliasLabel");
+    const node = buildNeighborhood(snap, {}).nodes.find((item) => item.uid === "other");
+    assert.equal(node.alias, "AliasLabel");
+    assert.equal(node.title, "Other");
+  } finally {
+    await lifecycle.dispose();
+    delete globalThis.roamAlphaAPI;
+  }
+});
+
+test("aliasFromBlock keeps a Name tail and drops every other block", () => {
+  assert.equal(aliasFromBlock("Name:: Hello"), "Hello");
+  assert.equal(aliasFromBlock("Aliases:: Hello"), "");
+  assert.equal(aliasFromBlock("  [[Name]]:: [[Wide]]"), "Wide");
+  assert.equal(aliasFromBlock("See Name:: buried after words"), "");
+});
+
+test("recents returns pages and a drawing title", async () => {
+  let queries = 0;
+  let pulls = 0;
+  globalThis.roamAlphaAPI = {
+    data: {
+      q(query) {
+        queries += 1;
+        if (query.includes("excalidraw")) return [["d1", 40]];
+        return [
+          ["p1", "Alpha", 20, 10],
+          ["p2", "Beta", 30, 5],
+        ];
+      },
+      pull(pattern) {
+        pulls += 1;
+        assert.equal(pattern, "[:block/string]");
+        return { ":block/string": "short note" };
+      },
+    },
+  };
+  const lifecycle = createLifecycle();
+  try {
+    const host = createHost({ lifecycle });
+    assert.deepEqual(host.recents(), {
+      pages: [
+        { uid: "p1", title: "Alpha", editTime: 20, createTime: 10 },
+        { uid: "p2", title: "Beta", editTime: 30, createTime: 5 },
+      ],
+      drawings: [{ uid: "d1", editTime: 40, title: "Drawing" }],
+    });
+    host.recents();
+    assert.equal(queries, 4);
+    assert.equal(pulls, 2);
+  } finally {
+    await lifecycle.dispose();
+    delete globalThis.roamAlphaAPI;
+  }
+});
+
+test("snapshot when q throws still returns a snap whose aliases is {}", async () => {
+  fakeRoam({
+    pulls(pattern) {
+      if (pattern === CENTER_PULL) return { ":block/uid": "page-uid", ":node/title": "Page" };
+      return null;
+    },
+  });
+  globalThis.roamAlphaAPI.data.q = () => {
+    throw new Error("query down");
+  };
+  const lifecycle = createLifecycle();
+  try {
+    const host = createHost({ lifecycle });
+    const snap = host.snapshot("page-uid", {});
+    assert.equal(snap.center.title, "Page");
+    assert.deepEqual(snap.aliases, {});
+  } finally {
+    await lifecycle.dispose();
     delete globalThis.roamAlphaAPI;
   }
 });

@@ -293,6 +293,20 @@
   opacity: 0.35;
 }
 
+.compass-root.compass-dimming .compass-node-dim {
+  opacity: 0.35;
+}
+
+.compass-root.compass-dimming .compass-edge-dim .compass-edge-line,
+.compass-root.compass-dimming .compass-edge-dim .compass-edge-label {
+  opacity: 0.25;
+}
+
+.compass-root.compass-dimming .compass-node-hot,
+.compass-root.compass-dimming .compass-edge-hot .compass-edge-line {
+  opacity: 1;
+}
+
 .compass-root .compass-node-title {
   min-width: 0;
   overflow: hidden;
