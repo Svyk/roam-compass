@@ -1,4 +1,4 @@
-/* Compass v0.6.0 | MIT | generated; edit src/ */
+/* Compass v0.7.0 | MIT | generated; edit src/ */
 
 // src/lifecycle.js
 function isPromiseLike(value) {
@@ -83,6 +83,137 @@ function createLifecycle() {
       if (errors.length) throw new AggregateError(errors, "One or more extension cleanups failed");
     }
   };
+}
+
+// src/model/batch7.js
+var REGION_PREFIX = "{{[[plexus-region]]";
+var DRAWING_PREFIXES = ["{{[[excalidraw]]}}", "{{excalidraw}}"];
+var URL_RUN = /https?:\/\/[^\s)]+/gi;
+function blockText(node) {
+  return typeof node?.string === "string" ? node.string.trimStart() : "";
+}
+function isRegion(node) {
+  return blockText(node).startsWith(REGION_PREFIX);
+}
+function isDrawing(node) {
+  if (isRegion(node)) return false;
+  const text = blockText(node);
+  return DRAWING_PREFIXES.some((prefix) => text.startsWith(prefix));
+}
+function chipKeeps(node, flags) {
+  const region = isRegion(node);
+  const drawing = isDrawing(node);
+  if (flags.pages && node.kind === "page") return true;
+  if (flags.blocks && node.kind === "block" && !drawing && !region) return true;
+  if (flags.drawings && drawing) return true;
+  if (flags.regions && region) return true;
+  return false;
+}
+function keywordHits(node, keyword) {
+  const needle = String(keyword ?? "").trim().toLowerCase();
+  if (!needle) return true;
+  const title = typeof node.title === "string" ? node.title.toLowerCase() : "";
+  const alias = typeof node.alias === "string" ? node.alias.toLowerCase() : "";
+  return title.includes(needle) || alias.includes(needle);
+}
+function hiddenUids(nodes, opts = {}) {
+  const flags = {
+    pages: opts.pages ?? true,
+    blocks: opts.blocks ?? true,
+    drawings: opts.drawings ?? true,
+    regions: opts.regions ?? true
+  };
+  if (!Array.isArray(nodes)) return [];
+  const hidden = [];
+  for (const node of nodes) {
+    if (!node || typeof node !== "object") continue;
+    if (!chipKeeps(node, flags) || !keywordHits(node, opts.keyword ?? "")) hidden.push(node.uid);
+  }
+  return hidden;
+}
+function hostOf(raw) {
+  let hostname;
+  try {
+    hostname = new URL(raw).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+  if (hostname.startsWith("www.")) hostname = hostname.slice(4);
+  return hostname;
+}
+function urlGroups(strings, { hosts = 4, perHost = 4 } = {}) {
+  const order = [];
+  const grouped = /* @__PURE__ */ new Map();
+  if (!Array.isArray(strings)) return [];
+  for (const item of strings) {
+    if (typeof item !== "string") continue;
+    URL_RUN.lastIndex = 0;
+    let match;
+    while (match = URL_RUN.exec(item)) {
+      const host = hostOf(match[0]);
+      if (!host) continue;
+      let urls = grouped.get(host);
+      if (!urls) {
+        if (order.length >= hosts) continue;
+        urls = [];
+        grouped.set(host, urls);
+        order.push(host);
+      }
+      if (urls.length >= perHost) continue;
+      urls.push(match[0]);
+    }
+  }
+  return order.map((host) => ({ host, urls: grouped.get(host) }));
+}
+var CROSS_QUERY = "[:find ?suid ?duid :in $ [?uid ...] :where [?src :block/uid ?uid] [?src :block/children ?ch] [?ch :block/refs ?dst] [?src :block/uid ?suid] [?dst :block/uid ?duid]]";
+function crossEdges(rows, uids, cap = 40) {
+  const allowed = uids instanceof Set ? uids : new Set(Array.isArray(uids) ? uids : []);
+  const limit = cap ?? 40;
+  const seen = /* @__PURE__ */ new Map();
+  const edges = [];
+  if (!Array.isArray(rows)) return [];
+  for (const row of rows) {
+    if (edges.length >= limit) break;
+    if (!Array.isArray(row) || row.length !== 2) continue;
+    const [source, target] = row;
+    if (!allowed.has(source) || !allowed.has(target) || source === target) continue;
+    let targets = seen.get(source);
+    if (!targets) {
+      targets = /* @__PURE__ */ new Set();
+      seen.set(source, targets);
+    }
+    if (targets.has(target)) continue;
+    targets.add(target);
+    edges.push({ source, target });
+  }
+  return edges;
+}
+function isEmptyPage(kind, childCount) {
+  return kind === "page" && childCount === 0;
+}
+var ZONE_ATTR = Object.freeze({
+  north: "Parent",
+  south: "Child",
+  west: "Friend",
+  east: "Challenger"
+});
+function planZoneCreate({ existingDrawingUid } = {}) {
+  if (typeof existingDrawingUid === "string" && existingDrawingUid.length > 0) {
+    return { create: false, drawingUid: existingDrawingUid };
+  }
+  return { create: true, drawingUid: null };
+}
+function refused(reason) {
+  return { ops: [], reason };
+}
+function planAttributeWrite({ attribute, title, existing } = {}) {
+  if (typeof attribute !== "string" || attribute.trim() === "") return refused("attribute");
+  if (typeof title !== "string" || title.includes("[") || title.includes("]")) return refused("title");
+  const ref = `[[${title}]]`;
+  if (existing == null) return { ops: [{ op: "create", string: `${attribute}:: ${ref}` }] };
+  const current = typeof existing.string === "string" ? existing.string : String(existing.string ?? "");
+  if (current.includes(ref)) return refused("have");
+  return { ops: [{ op: "update", uid: existing.uid, string: `${current.trim()} ${ref}` }] };
 }
 
 // src/model/text.js
@@ -795,13 +926,13 @@ var FORBIDDEN = [":harc", ":entity/attrs", ":attr/proxy"];
 function same(a, b) {
   return String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
 }
-function refused(reason) {
+function refused2(reason) {
   return { ops: [], reason };
 }
 function safe(ops) {
   for (const op of ops) {
     if (FORBIDDEN.some((token) => String(op.string ?? "").includes(token))) {
-      return refused("forbidden");
+      return refused2("forbidden");
     }
   }
   return { ops, reason: null };
@@ -811,21 +942,21 @@ function refsIn(string) {
   return shape.kind === "refs" ? shape.values : [];
 }
 function planMove({ source, fromAttribute, toAttribute, value, newUid }) {
-  if (!source?.uid || typeof source.string !== "string") return refused("missing");
+  if (!source?.uid || typeof source.string !== "string") return refused2("missing");
   const name = String(toAttribute ?? "").trim();
-  if (!name || name.includes("::") || /[[\]\n]/.test(name)) return refused("no-attribute");
+  if (!name || name.includes("::") || /[[\]\n]/.test(name)) return refused2("no-attribute");
   const parsed = parseAttribute(source.string);
-  if (!parsed || !same(parsed.name, fromAttribute)) return refused("changed");
-  if (isReadOnlyAttribute(parsed.name) || isReadOnlyAttribute(name)) return refused("read-only");
-  if (same(parsed.name, name)) return refused("same");
+  if (!parsed || !same(parsed.name, fromAttribute)) return refused2("changed");
+  if (isReadOnlyAttribute(parsed.name) || isReadOnlyAttribute(name)) return refused2("read-only");
+  if (same(parsed.name, name)) return refused2("same");
   const renamed = `${name}::${parsed.tail}`;
   const after = { parentUid: source.parentUid, order: Number.isFinite(source.order) ? source.order + 1 : "last" };
   const shape = tailShape(parsed.tail);
   if (shape.kind === "refs") {
     const token2 = shape.values.find((item) => tokenMatches(item, value));
-    if (!token2) return refused("missing-value");
+    if (!token2) return refused2("missing-value");
     if (shape.values.length === 1) return safe([{ op: "update", uid: source.uid, string: renamed }]);
-    if (!after.parentUid) return refused("no-parent");
+    if (!after.parentUid) return refused2("no-parent");
     const offset = parsed.prefix.length;
     const shifted = { ...token2, start: token2.start + offset, end: token2.end + offset };
     return safe([
@@ -833,13 +964,13 @@ function planMove({ source, fromAttribute, toAttribute, value, newUid }) {
       { op: "create", parentUid: after.parentUid, order: after.order, uid: newUid, string: `${name}:: ${refMarkup(value)}` }
     ]);
   }
-  if (shape.kind !== "bare") return refused("text-value");
+  if (shape.kind !== "bare") return refused2("text-value");
   const children = [...source.children ?? []].filter((child) => child?.uid).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const values = children.filter((child) => !parseAttribute(child.string));
   const holder = values.find((child) => child.uid === value?.uid || refsIn(child.string).some((item) => tokenMatches(item, value)));
-  if (!holder) return refused("missing-value");
+  if (!holder) return refused2("missing-value");
   if (values.length === 1) return safe([{ op: "update", uid: source.uid, string: renamed }]);
-  if (!after.parentUid) return refused("no-parent");
+  if (!after.parentUid) return refused2("no-parent");
   const holderRefs = refsIn(holder.string);
   if (holder.uid === value?.uid || holderRefs.length <= 1) {
     return safe([
@@ -902,6 +1033,9 @@ var PREFIX_QUERY = `[:find ?uid ?title ?edit ?create
   [?page :edit/time ?edit]
   [?page :create/time ?create]]`;
 var ALIAS_QUERY = `[:find ?uid ?s :in $ [?uid ...] :where [?p :block/uid ?uid] [?p :block/children ?c] [?c :block/string ?s] [(clojure.string/includes? ?s "Name::")]]`;
+var CHILD_COUNT_QUERY = "[:find ?uid (count ?c) :in $ [?uid ...] :where [?p :block/uid ?uid] [?p :block/children ?c]]";
+var DRAWING_ON_PAGE_QUERY = "[:find ?uid ?s :in $ ?title :where [?p :node/title ?title] [?p :block/children ?b] [?b :block/uid ?uid] [?b :block/string ?s]]";
+var ATTR_PULL = "[:block/uid {:block/children [:block/uid :block/string :block/order]}]";
 var RECENT_PAGES_QUERY = "[:find ?uid ?title ?edit ?create :where [?e :node/title ?title] [?e :block/uid ?uid] [?e :edit/time ?edit] [?e :create/time ?create]]";
 var RECENT_DRAWINGS_QUERY = `[:find ?uid ?edit :where [?b :block/uid ?uid] [?b :block/string ?s] [(clojure.string/includes? ?s "excalidraw")] [?b :edit/time ?edit]]`;
 var MENTION_CAP = 500;
@@ -1237,6 +1371,11 @@ function aliasesOf(data, snap) {
   }
   return aliases;
 }
+function isDrawingBlockString(string) {
+  const text = typeof string === "string" ? string.trimStart() : "";
+  if (text.startsWith("{{[[plexus-region]]")) return false;
+  return text.startsWith("{{[[excalidraw]]}}") || text.startsWith("{{excalidraw}}");
+}
 function graphName() {
   const name = roamApi()?.graph?.name;
   return typeof name === "string" && name ? name : "graph";
@@ -1426,6 +1565,84 @@ function createHost({ lifecycle }) {
     queue = run.then(() => void 0, () => void 0);
     return run;
   }
+  function childCounts(uids) {
+    const api = roamApi()?.data;
+    const list = Array.isArray(uids) ? uids.filter((uid) => typeof uid === "string" && uid) : [];
+    if (!list.length || typeof api?.q !== "function") return {};
+    const counts = Object.fromEntries(list.map((uid) => [uid, 0]));
+    let rows = [];
+    try {
+      rows = api.q(CHILD_COUNT_QUERY, list) ?? [];
+    } catch (error) {
+      console.error("[compass] child counts", error);
+      return {};
+    }
+    if (!Array.isArray(rows)) return counts;
+    for (const row of rows) {
+      if (!Array.isArray(row)) continue;
+      const [uid, count2] = row;
+      if (typeof uid === "string" && Object.prototype.hasOwnProperty.call(counts, uid)) counts[uid] = Number(count2) || 0;
+    }
+    return counts;
+  }
+  function crossRows(uids) {
+    const api = roamApi()?.data;
+    const list = Array.isArray(uids) ? uids.filter((uid) => typeof uid === "string" && uid) : [];
+    if (!list.length || typeof api?.q !== "function") return [];
+    try {
+      const rows = api.q(CROSS_QUERY, list) ?? [];
+      return Array.isArray(rows) ? rows : [];
+    } catch (error) {
+      console.error("[compass] cross links", error);
+      return [];
+    }
+  }
+  function findDrawingBlock(title) {
+    const api = roamApi()?.data;
+    if (typeof title !== "string" || !title.trim() || typeof api?.q !== "function") return null;
+    let rows = [];
+    try {
+      rows = api.q(DRAWING_ON_PAGE_QUERY, `Drawings/${title}`) ?? [];
+    } catch (error) {
+      console.error("[compass] drawing lookup", error);
+      return null;
+    }
+    if (!Array.isArray(rows)) return null;
+    for (const row of rows) {
+      if (!Array.isArray(row)) continue;
+      const [uid, string] = row;
+      if (typeof uid === "string" && uid && isDrawingBlockString(string)) return uid;
+    }
+    return null;
+  }
+  function writeZoneAttribute({ centerUid, zone, title } = {}) {
+    const attribute = ZONE_ATTR[zone];
+    if (!attribute) return Promise.resolve({ ok: false, reason: "zone" });
+    if (typeof centerUid !== "string" || !centerUid) return Promise.resolve({ ok: false, reason: "missing" });
+    const task = () => withLock(`compass:${graphName()}:${centerUid}`, async () => {
+      const api = data();
+      const pulled = pull(api, ATTR_PULL, centerUid);
+      let existing = null;
+      for (const child of asList(pulled?.[":block/children"])) {
+        const string = child?.[":block/string"];
+        const parsed = parseAttribute(string);
+        if (parsed?.name === attribute && typeof child?.[":block/uid"] === "string") {
+          existing = { uid: child[":block/uid"], string };
+          break;
+        }
+      }
+      const plan = planAttributeWrite({ attribute, title, existing });
+      if (!plan.ops.length) return { ok: false, reason: plan.reason };
+      for (const op of plan.ops) {
+        if (op.op === "create") await applyOp(api, { op: "create", string: op.string, parentUid: centerUid, order: "last" });
+        else await applyOp(api, op);
+      }
+      return { ok: true };
+    });
+    const run = queue.then(task, task);
+    queue = run.then(() => void 0, () => void 0);
+    return run;
+  }
   function drawingRows(centreUid, refUids) {
     const api = roamApi()?.data;
     if (!api?.q) return [];
@@ -1525,6 +1742,10 @@ function createHost({ lifecycle }) {
     releaseSidecar,
     closeSidecar,
     move,
+    childCounts,
+    crossRows,
+    findDrawingBlock,
+    writeZoneAttribute,
     drawingRows,
     blockContextMenu() {
       return roamApi()?.ui?.blockContextMenu ?? null;
@@ -1806,7 +2027,8 @@ var SETTING_IDS = Object.freeze({
   drawings: "compass-drawings",
   follow: "compass-follow",
   relatedDrawings: "compass-related-drawings",
-  sort: "compass-sort"
+  sort: "compass-sort",
+  crossLinks: "compass-cross-links"
 });
 var DEFAULTS = Object.freeze({
   "compass-north": MODEL_DEFAULTS.parent,
@@ -1826,7 +2048,8 @@ var DEFAULTS = Object.freeze({
   "compass-drawings": true,
   "compass-follow": false,
   "compass-related-drawings": true,
-  "compass-sort": "connections"
+  "compass-sort": "connections",
+  "compass-cross-links": false
 });
 var SWITCHES = /* @__PURE__ */ new Set([
   SETTING_IDS.links,
@@ -1836,7 +2059,8 @@ var SWITCHES = /* @__PURE__ */ new Set([
   SETTING_IDS.outline,
   SETTING_IDS.drawings,
   SETTING_IDS.follow,
-  SETTING_IDS.relatedDrawings
+  SETTING_IDS.relatedDrawings,
+  SETTING_IDS.crossLinks
 ]);
 var SORTS = Object.freeze(["connections", "name", "edited", "created"]);
 var ROWS = [
@@ -1857,7 +2081,8 @@ var ROWS = [
   [SETTING_IDS.relatedDrawings, "Related drawings", "When Plexus exposes linksOf, list drawings that share block or link refs with the centre."],
   [SETTING_IDS.maxZone, "Nodes per side", "How many nodes a side shows before it offers Show all."],
   [SETTING_IDS.pins, "Pins", "JSON list of {uid, title}. Use the Pin button instead of editing this."],
-  [SETTING_IDS.sort, "Sort nodes", "Order inside a side: connections, name, edited, or created."]
+  [SETTING_IDS.sort, "Sort nodes", "Order inside a side: connections, name, edited, or created."],
+  [SETTING_IDS.crossLinks, "Cross links", "Faint edges between neighbours that reference each other. Off until you turn this on."]
 ];
 function readSort(value) {
   return SORTS.includes(value) ? value : "connections";
@@ -1912,7 +2137,8 @@ function readCompassSettings(extensionAPI) {
     drawings: flag2(read(SETTING_IDS.drawings), true),
     follow: flag2(read(SETTING_IDS.follow), false),
     relatedDrawings: flag2(read(SETTING_IDS.relatedDrawings), true),
-    pins: readPins(read(SETTING_IDS.pins))
+    pins: readPins(read(SETTING_IDS.pins)),
+    crossLinks: flag2(read(SETTING_IDS.crossLinks), false)
   };
 }
 async function writeSetting(extensionAPI, id, value) {
@@ -2206,12 +2432,47 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   const fitButton = button("compass-fit", "Fit", "Fit the neighborhood");
   const refreshButton = button("compass-refresh", "Refresh", "Read the graph again");
   const linkedButton = button("compass-linked", "Show linked window", "Open this page in the main window");
+  const lensButtons = {};
+  for (const [key, label] of [["pages", "Pages"], ["blocks", "Blocks"], ["drawings", "Drawings"], ["regions", "Regions"]]) {
+    const chip = button("compass-lens", label);
+    chip.dataset.lens = key;
+    chip.setAttribute("aria-pressed", "true");
+    lensButtons[key] = chip;
+  }
+  const lensKeyword = el("input", "compass-lens-keyword");
+  lensKeyword.type = "search";
+  lensKeyword.placeholder = "Filter";
+  lensKeyword.setAttribute("aria-label", "Filter nodes");
+  const crossButton = button("compass-cross", "Cross links", "Faint edges between neighbours");
+  crossButton.setAttribute("aria-pressed", "false");
+  const linksButton = button("compass-with-links", "With links", "Snapshot text includes page links");
+  linksButton.setAttribute("aria-pressed", "false");
+  const sendButton = button("compass-send", "Send to drawing", "Commit this neighborhood to the open drawing");
+  sendButton.hidden = true;
   const status = el("span", "compass-status");
   status.setAttribute("role", "status");
   const closeButton = button("compass-close", "Close", "Close (Esc)");
-  bar.append(backButton, forwardButton, find, pinButton, outlineButton, fitButton, refreshButton, linkedButton, status, closeButton);
+  bar.append(
+    backButton,
+    forwardButton,
+    find,
+    pinButton,
+    outlineButton,
+    fitButton,
+    refreshButton,
+    linkedButton,
+    ...Object.values(lensButtons),
+    lensKeyword,
+    crossButton,
+    linksButton,
+    sendButton,
+    status,
+    closeButton
+  );
   const pinRow = el("div", "compass-pins");
   pinRow.hidden = true;
+  const urls = el("div", "compass-urls");
+  urls.hidden = true;
   const stage = el("div", "compass-stage");
   stage.tabIndex = 0;
   const world = el("div", "compass-world");
@@ -2228,6 +2489,20 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     hints[side] = hint;
     stage.append(hint);
   }
+  const zoneAdds = {};
+  for (const side of ["north", "south", "west", "east"]) {
+    const add = button(`compass-zone-add compass-zone-add-${side}`, "+", `Add to the ${side}`);
+    add.dataset.zone = side;
+    zoneAdds[side] = add;
+    stage.append(add);
+  }
+  const zoneCounts = {};
+  for (const side of ["north", "south", "west", "east", "siblings"]) {
+    const label = el("span", `compass-zone-count compass-zone-count-${side}`);
+    label.hidden = true;
+    zoneCounts[side] = label;
+    stage.append(label);
+  }
   stage.prepend(world);
   const menu = el("div", "compass-menu");
   menu.hidden = true;
@@ -2240,7 +2515,17 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   hover.hidden = true;
   const related = el("div", "compass-related");
   related.hidden = true;
-  root.append(bar, pinRow, stage, menu, details, ghost, hover, related);
+  const zonePopEl = el("div", "compass-zone-pop");
+  zonePopEl.hidden = true;
+  zonePopEl.setAttribute("role", "dialog");
+  zonePopEl.setAttribute("aria-label", "Add a related page");
+  const zoneInput = el("input", "compass-zone-input");
+  zoneInput.setAttribute("aria-label", "Find a page or name a drawing");
+  const zoneResults = el("div", "compass-zone-results");
+  const zoneCreate = button("compass-zone-create", "Create drawing here");
+  zoneCreate.disabled = true;
+  zonePopEl.append(zoneInput, zoneResults, zoneCreate);
+  root.append(bar, pinRow, urls, stage, menu, details, ghost, hover, related, zonePopEl);
   const nodeEls = /* @__PURE__ */ new Map();
   const chipEls = /* @__PURE__ */ new Map();
   const timers = /* @__PURE__ */ new Set();
@@ -2280,6 +2565,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   let hoverNode = null;
   let hoverX = 0;
   let hoverY = 0;
+  let lens = { pages: true, blocks: true, drawings: true, regions: true, keyword: "" };
+  let emptyCounts = {};
+  let linksMode = false;
+  let zoneTarget = null;
   const partUrls = /* @__PURE__ */ new Set();
   const rawOpenInMain = host.openInMain.bind(host);
   host.openInMain = (uid, kind) => {
@@ -2384,6 +2673,13 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (!snapshot || !settings) return;
     hood = buildNeighborhood(snapshot, settings.model, { expanded: expandedFor(current), regionLabel: plexusRegionLabels(plexus()) });
     nodeByUid = new Map(hood.nodes.map((node) => [node.uid, node]));
+    try {
+      const pageUids = hood.nodes.filter((node) => node.kind === "page").map((node) => node.uid);
+      emptyCounts = typeof host.childCounts === "function" ? host.childCounts(pageUids) ?? {} : {};
+    } catch (error) {
+      console.error("[compass] child counts", error);
+      emptyCounts = {};
+    }
   }
   function load({ navigate = false } = {}) {
     if (!current || root.hidden || lifecycle.disposed) return;
@@ -2425,6 +2721,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     pinButton.textContent = pinned ? "Unpin" : "Pin";
     pinButton.setAttribute("aria-pressed", pinned ? "true" : "false");
     outlineButton.setAttribute("aria-pressed", settings?.outline ? "true" : "false");
+    crossButton.setAttribute("aria-pressed", settings?.crossLinks ? "true" : "false");
+    sendButton.hidden = plexus()?.isAvailable?.() !== true;
   }
   function reveal() {
     if (!root.hidden) return;
@@ -2474,6 +2772,12 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     hoverNode = null;
     endDrag();
     setStatus("");
+    lens = { pages: true, blocks: true, drawings: true, regions: true, keyword: "" };
+    lensKeyword.value = "";
+    for (const chip of Object.values(lensButtons)) chip.setAttribute("aria-pressed", "true");
+    linksMode = false;
+    linksButton.setAttribute("aria-pressed", "false");
+    emptyCounts = {};
   }
   function recenter(uid) {
     if (!uid || root.hidden || lifecycle.disposed) return;
@@ -2787,6 +3091,179 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       edgeLayer.append(group);
     }
   }
+  function edgeBetween(a, b) {
+    return { d: `M${a.x},${a.y} L${b.x},${b.y}` };
+  }
+  function renderCross(boxes) {
+    if (!settings?.crossLinks || typeof host.crossRows !== "function") return;
+    const uids = hood.nodes.map((node) => node.uid);
+    let rows = [];
+    try {
+      rows = host.crossRows(uids);
+    } catch (error) {
+      console.error("[compass] cross links", error);
+      return;
+    }
+    for (const edge of crossEdges(rows, uids, 40)) {
+      const from = boxes.get(edge.source);
+      const to = boxes.get(edge.target);
+      if (!from || !to) continue;
+      const shape = edgeBetween(from, to);
+      const group = svg("g", "compass-edge compass-cross");
+      group.dataset.source = edge.source;
+      group.dataset.target = edge.target;
+      const line = svg("path", "compass-edge-line");
+      line.setAttribute("d", shape.d);
+      group.append(line);
+      edgeLayer.append(group);
+    }
+  }
+  function markCross(uid) {
+    for (const edge of edgeLayer.querySelectorAll(".compass-cross")) {
+      edge.classList.toggle("compass-edge-hot", Boolean(uid) && (edge.dataset.source === uid || edge.dataset.target === uid));
+    }
+  }
+  function renderZoneCounts(hidden) {
+    for (const side of ["north", "south", "west", "east", "siblings"]) {
+      const members = hood.nodes.filter((node) => node.zone === side);
+      const label = zoneCounts[side];
+      const total = members.length;
+      label.hidden = total === 0;
+      label.textContent = `${members.filter((node) => !hidden.has(node.uid)).length}/${total}`;
+    }
+  }
+  function outlineStrings(nodes, out) {
+    if (!Array.isArray(nodes)) return;
+    for (const node of nodes) {
+      if (typeof node?.string === "string") out.push(node.string);
+      outlineStrings(node.children, out);
+    }
+  }
+  function renderUrls() {
+    urls.replaceChildren();
+    const strings = [];
+    outlineStrings(snapshot?.outline, strings);
+    if (hood?.center?.plexus === "drawing") {
+      const api = plexus();
+      if (typeof api?.linksOf === "function") {
+        try {
+          for (const row of api.linksOf(current) ?? []) {
+            if (typeof row?.ref === "string") strings.push(row.ref);
+            if (typeof row?.text === "string") strings.push(row.text);
+          }
+        } catch (error) {
+          console.error("[compass] urls", error);
+        }
+      }
+    }
+    const groups = urlGroups(strings);
+    urls.hidden = groups.length === 0;
+    for (const group of groups) {
+      const block = el("div", "compass-url-host", group.host);
+      for (const url of group.urls) {
+        const link = el("a", "compass-url", url);
+        link.href = url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        block.append(link);
+      }
+      urls.append(block);
+    }
+  }
+  function hideZonePop() {
+    zonePopEl.hidden = true;
+    zoneInput.value = "";
+    zoneResults.replaceChildren();
+    zoneCreate.disabled = true;
+    zoneTarget = null;
+  }
+  function openZonePop(zone, clientX, clientY) {
+    hideFloating();
+    zoneTarget = zone;
+    zonePopEl.hidden = false;
+    placeFloating(zonePopEl, clientX, clientY);
+    zoneInput.focus();
+  }
+  function paintZoneResults(text) {
+    if (!titleCache) titleCache = host.titles();
+    const found = rankTitles(titleCache, text, 20);
+    zoneResults.replaceChildren();
+    for (const row of found) {
+      const item = button("compass-result", row.title);
+      item.dataset.uid = row.uid;
+      item.dataset.title = row.title;
+      zoneResults.append(item);
+    }
+    zoneCreate.disabled = text.trim() === "";
+  }
+  async function writeZone(zone, title) {
+    if (!zone || !current || !title) return;
+    let result;
+    try {
+      result = await host.writeZoneAttribute({ centerUid: current, zone, title });
+    } catch (error) {
+      console.error("[compass] zone", error);
+      setStatus("The write failed.");
+      return;
+    }
+    if (!result?.ok) {
+      if (result?.reason === "have") setStatus("That relation is already there.");
+      else if (result?.reason === "title") setStatus("That title cannot be written as a link.");
+      else setStatus("The write failed.");
+      return;
+    }
+    load();
+  }
+  async function createDrawingHere() {
+    const zone = zoneTarget;
+    const name = zoneInput.value.trim();
+    hideZonePop();
+    if (!zone || !name || !current) return;
+    let existing = null;
+    try {
+      existing = host.findDrawingBlock(name);
+    } catch (error) {
+      console.error("[compass] drawing lookup", error);
+    }
+    const plan = planZoneCreate({ existingDrawingUid: existing });
+    if (plan.create) {
+      const api = plexus();
+      if (typeof api?.create !== "function") {
+        setStatus("Plexus is needed");
+        return;
+      }
+      try {
+        await api.create({ title: name });
+      } catch (error) {
+        console.error("[compass] create drawing", error);
+        setStatus("Plexus could not create the drawing.");
+        return;
+      }
+    }
+    await writeZone(zone, `Drawings/${name}`);
+  }
+  async function sendToDrawing() {
+    if (!hood) return;
+    const nodes = [
+      { uid: hood.center.uid, title: hood.center.title, zone: "center" },
+      ...hood.nodes.map((node) => ({ uid: node.uid, title: node.title, zone: node.zone }))
+    ];
+    const edges = hood.nodes.map((node) => ({ source: hood.center.uid, target: node.uid }));
+    const mode = linksMode ? "links" : "plain";
+    const api = plexus();
+    if (typeof api?.dropSubgraph !== "function") {
+      setStatus("Plexus is needed");
+      return;
+    }
+    try {
+      await api.dropSubgraph({ nodes, edges, mode });
+      setStatus("Sent to the open drawing.");
+    } catch (error) {
+      const message = String(error?.message || error);
+      if (/not open/i.test(message)) setStatus("Open a drawing first.");
+      else setStatus("Could not send the snapshot.");
+    }
+  }
   function renderRelated() {
     related.replaceChildren();
     related.hidden = true;
@@ -2958,6 +3435,11 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       } else {
         const visible = typeof node.alias === "string" && node.alias ? node.alias : node.title;
         element.replaceChildren(el("span", "compass-node-title", visible));
+        if (isEmptyPage(node.kind, emptyCounts[node.uid])) {
+          const start = button("compass-start", "Start writing");
+          start.dataset.uid = node.uid;
+          element.append(start);
+        }
         const why = node.label ? ` — ${node.label}` : "";
         element.setAttribute("aria-label", `${node.title}, ${SIDE_NAME[box.zone]}${why}`);
         element.title = `${node.title}${why}`;
@@ -2985,6 +3467,18 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     renderChips();
     renderEdges(boxes);
     drawLinkEdges(boxes);
+    renderCross(boxes);
+    const hidden = new Set(hiddenUids(hood.nodes, lens));
+    for (const node of hood.nodes) {
+      const element = nodeEls.get(node.uid);
+      if (!element) continue;
+      element.classList.toggle("compass-fade", hidden.has(node.uid));
+      const empty2 = isEmptyPage(node.kind, emptyCounts[node.uid]);
+      element.classList.toggle("compass-empty-page", empty2);
+      if (empty2) element.title = "Empty page";
+    }
+    renderZoneCounts(hidden);
+    renderUrls();
     renderRelated();
     empty.hidden = hood.nodes.length > 0;
     if (!empty.hidden) {
@@ -3155,6 +3649,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     details.hidden = true;
     details.replaceChildren();
     hideResults();
+    hideZonePop();
   }
   function placeFloating(element, clientX, clientY) {
     const rect = root.getBoundingClientRect();
@@ -3208,6 +3703,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     menuItem("Open in main window", () => openMain(uid));
     const pinned = (settings?.pins ?? []).some((pin) => pin.uid === uid);
     if (nodeKind(uid) === "page" || isCenter) menuItem(pinned ? "Unpin" : "Pin", () => togglePin(uid));
+    if (node && isEmptyPage(node.kind, emptyCounts[node.uid])) menuItem("Start writing", () => openMain(uid));
     if (node) menuItem("Why is this here?", () => showDetails(uid, clientX, clientY));
     if (node?.writable) {
       for (const side of ["north", "south", "west", "east"]) {
@@ -3335,11 +3831,13 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   function onPointerDown(event) {
     if (root.hidden || event.button !== 0 || pointer) return;
     const target = event.target;
+    if (!zonePopEl.hidden && !zonePopEl.contains(target) && !target.closest?.(".compass-zone-add")) hideZonePop();
     if (!menu.hidden && !menu.contains(target)) hideFloating();
     if (!details.hidden && !details.contains(target)) {
       details.hidden = true;
       details.replaceChildren();
     }
+    if (target.closest?.(".compass-zone-add, .compass-start, .compass-zone-pop")) return;
     if (!stage.contains(target) || target.closest?.(".compass-chip, .compass-caret, .compass-row")) return;
     const element = target.closest?.(".compass-node");
     if (element && !element.classList.contains("compass-node-center")) {
@@ -3406,6 +3904,19 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   function onStageClick(event) {
     if (suppressClick) return;
     const target = event.target;
+    const add = target.closest?.(".compass-zone-add");
+    if (add) {
+      event.preventDefault();
+      openZonePop(add.dataset.zone, event.clientX, event.clientY);
+      return;
+    }
+    const start = target.closest?.(".compass-start");
+    if (start) {
+      event.preventDefault();
+      event.stopPropagation();
+      void openMain(start.dataset.uid);
+      return;
+    }
     const part = target.closest?.(".compass-part");
     if (part) {
       event.preventDefault();
@@ -3460,7 +3971,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   function onStageDoubleClick(event) {
     clickTimer = cancel(clickTimer);
     const target = event.target;
-    if (target.closest?.(".compass-part, .compass-caret, .compass-chip")) return;
+    if (target.closest?.(".compass-part, .compass-caret, .compass-chip, .compass-start, .compass-zone-add")) return;
     const row = target.closest?.(".compass-row[data-uid]");
     const element = target.closest?.(".compass-node");
     if (!row && !element) return;
@@ -3625,9 +4136,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       showHover(hoverNode.dataset.uid, hoverX, hoverY);
     }
     if (!root.contains(event.target) && event.target !== document.body) return;
-    const typing = event.target === searchInput;
+    const typing = event.target === searchInput || event.target === zoneInput || event.target === lensKeyword;
     if (event.key === "Escape") {
-      if (!menu.hidden || !details.hidden || !results.hidden) hideFloating();
+      if (!menu.hidden || !details.hidden || !results.hidden || !zonePopEl.hidden) hideFloating();
       else close();
       event.preventDefault();
       return;
@@ -3681,6 +4192,49 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   lifecycle.event(forwardButton, "click", () => goForward());
   lifecycle.event(pinButton, "click", guard(() => togglePin()));
   lifecycle.event(outlineButton, "click", guard(() => toggleOutline()));
+  for (const [key, chip] of Object.entries(lensButtons)) {
+    lifecycle.event(chip, "click", () => {
+      lens[key] = !lens[key];
+      chip.setAttribute("aria-pressed", lens[key] ? "true" : "false");
+      render();
+    });
+  }
+  lifecycle.event(lensKeyword, "input", () => {
+    lens.keyword = lensKeyword.value;
+    render();
+  });
+  lifecycle.event(crossButton, "click", guard(async () => {
+    if (!settings) settings = readSettings();
+    if (!settings) return;
+    const next = settings.crossLinks !== true;
+    settings.crossLinks = next;
+    crossButton.setAttribute("aria-pressed", next ? "true" : "false");
+    await writeSetting(extensionAPI, SETTING_IDS.crossLinks, next);
+    render();
+  }));
+  lifecycle.event(linksButton, "click", () => {
+    linksMode = !linksMode;
+    linksButton.setAttribute("aria-pressed", linksMode ? "true" : "false");
+  });
+  lifecycle.event(sendButton, "click", guard(() => sendToDrawing()));
+  lifecycle.event(zoneInput, "input", () => paintZoneResults(zoneInput.value));
+  lifecycle.event(zoneInput, "keydown", (event) => {
+    if (event.key === "Enter" && !zoneCreate.disabled) {
+      event.preventDefault();
+      void createDrawingHere();
+    }
+  });
+  lifecycle.event(zoneResults, "click", (event) => {
+    const item = event.target.closest?.(".compass-result");
+    if (!item) return;
+    const zone = zoneTarget;
+    const title = item.dataset.title || item.textContent;
+    hideZonePop();
+    void writeZone(zone, title);
+  });
+  lifecycle.event(zoneCreate, "click", () => {
+    void createDrawingHere();
+  });
   lifecycle.event(fitButton, "click", () => fit(true));
   lifecycle.event(refreshButton, "click", () => load());
   lifecycle.event(linkedButton, "click", guard(() => {
@@ -3709,11 +4263,13 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     hoverY = event.clientY;
     if (event.ctrlKey || event.metaKey) showHover(node.dataset.uid, event.clientX, event.clientY);
     else clearHover();
+    markCross(node.dataset.uid);
   });
   lifecycle.event(stage, "pointerout", (event) => {
     if (event.relatedTarget?.closest?.(".compass-node")) return;
     clearHover();
     markHover(root, null);
+    markCross(null);
     hoverNode = null;
   });
   lifecycle.event(globalThis, "hashchange", () => {

@@ -19,6 +19,7 @@ export const SETTING_IDS = Object.freeze({
   follow: "compass-follow",
   relatedDrawings: "compass-related-drawings",
   sort: "compass-sort",
+  crossLinks: "compass-cross-links",
 });
 
 export const DEFAULTS = Object.freeze({
@@ -40,6 +41,7 @@ export const DEFAULTS = Object.freeze({
   "compass-follow": false,
   "compass-related-drawings": true,
   "compass-sort": "connections",
+  "compass-cross-links": false,
 });
 
 const SWITCHES = new Set([
@@ -51,6 +53,7 @@ const SWITCHES = new Set([
   SETTING_IDS.drawings,
   SETTING_IDS.follow,
   SETTING_IDS.relatedDrawings,
+  SETTING_IDS.crossLinks,
 ]);
 
 const SORTS = Object.freeze(["connections", "name", "edited", "created"]);
@@ -74,6 +77,7 @@ const ROWS = [
   [SETTING_IDS.maxZone, "Nodes per side", "How many nodes a side shows before it offers Show all."],
   [SETTING_IDS.pins, "Pins", "JSON list of {uid, title}. Use the Pin button instead of editing this."],
   [SETTING_IDS.sort, "Sort nodes", "Order inside a side: connections, name, edited, or created."],
+  [SETTING_IDS.crossLinks, "Cross links", "Faint edges between neighbours that reference each other. Off until you turn this on."],
 ];
 
 function readSort(value) {
@@ -134,6 +138,7 @@ export function readCompassSettings(extensionAPI) {
     follow: flag(read(SETTING_IDS.follow), false),
     relatedDrawings: flag(read(SETTING_IDS.relatedDrawings), true),
     pins: readPins(read(SETTING_IDS.pins)),
+    crossLinks: flag(read(SETTING_IDS.crossLinks), false),
   };
 }
 

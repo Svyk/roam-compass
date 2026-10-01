@@ -22,6 +22,7 @@ const SETTING_IDS = [
   "compass-max-zone",
   "compass-pins",
   "compass-sort",
+  "compass-cross-links",
 ];
 
 const SWITCH_IDS = [
@@ -33,6 +34,7 @@ const SWITCH_IDS = [
   "compass-drawings",
   "compass-follow",
   "compass-related-drawings",
+  "compass-cross-links",
 ];
 
 function versionHost() {

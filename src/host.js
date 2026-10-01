@@ -1,3 +1,4 @@
+import { CROSS_QUERY, ZONE_ATTR, planAttributeWrite } from "./model/batch7.js";
 import { typedParentUids } from "./model/neighborhood.js";
 import { planMove } from "./model/rewrite.js";
 import { drawingTitle, parseAttribute, plainText } from "./model/text.js";
@@ -55,6 +56,9 @@ const PREFIX_QUERY = `[:find ?uid ?title ?edit ?create
   [?page :edit/time ?edit]
   [?page :create/time ?create]]`;
 const ALIAS_QUERY = `[:find ?uid ?s :in $ [?uid ...] :where [?p :block/uid ?uid] [?p :block/children ?c] [?c :block/string ?s] [(clojure.string/includes? ?s "Name::")]]`;
+const CHILD_COUNT_QUERY = "[:find ?uid (count ?c) :in $ [?uid ...] :where [?p :block/uid ?uid] [?p :block/children ?c]]";
+const DRAWING_ON_PAGE_QUERY = "[:find ?uid ?s :in $ ?title :where [?p :node/title ?title] [?p :block/children ?b] [?b :block/uid ?uid] [?b :block/string ?s]]";
+const ATTR_PULL = "[:block/uid {:block/children [:block/uid :block/string :block/order]}]";
 const RECENT_PAGES_QUERY = "[:find ?uid ?title ?edit ?create :where [?e :node/title ?title] [?e :block/uid ?uid] [?e :edit/time ?edit] [?e :create/time ?create]]";
 const RECENT_DRAWINGS_QUERY = `[:find ?uid ?edit :where [?b :block/uid ?uid] [?b :block/string ?s] [(clojure.string/includes? ?s "excalidraw")] [?b :edit/time ?edit]]`;
 
@@ -434,6 +438,12 @@ function aliasesOf(data, snap) {
   return aliases;
 }
 
+function isDrawingBlockString(string) {
+  const text = typeof string === "string" ? string.trimStart() : "";
+  if (text.startsWith("{{[[plexus-region]]")) return false;
+  return text.startsWith("{{[[excalidraw]]}}") || text.startsWith("{{excalidraw}}");
+}
+
 function graphName() {
   const name = roamApi()?.graph?.name;
   return typeof name === "string" && name ? name : "graph";
@@ -650,6 +660,88 @@ export function createHost({ lifecycle }) {
     return run;
   }
 
+  function childCounts(uids) {
+    const api = roamApi()?.data;
+    const list = Array.isArray(uids) ? uids.filter((uid) => typeof uid === "string" && uid) : [];
+    if (!list.length || typeof api?.q !== "function") return {};
+    const counts = Object.fromEntries(list.map((uid) => [uid, 0]));
+    let rows = [];
+    try {
+      rows = api.q(CHILD_COUNT_QUERY, list) ?? [];
+    } catch (error) {
+      console.error("[compass] child counts", error);
+      return {};
+    }
+    if (!Array.isArray(rows)) return counts;
+    for (const row of rows) {
+      if (!Array.isArray(row)) continue;
+      const [uid, count] = row;
+      if (typeof uid === "string" && Object.prototype.hasOwnProperty.call(counts, uid)) counts[uid] = Number(count) || 0;
+    }
+    return counts;
+  }
+
+  function crossRows(uids) {
+    const api = roamApi()?.data;
+    const list = Array.isArray(uids) ? uids.filter((uid) => typeof uid === "string" && uid) : [];
+    if (!list.length || typeof api?.q !== "function") return [];
+    try {
+      const rows = api.q(CROSS_QUERY, list) ?? [];
+      return Array.isArray(rows) ? rows : [];
+    } catch (error) {
+      console.error("[compass] cross links", error);
+      return [];
+    }
+  }
+
+  function findDrawingBlock(title) {
+    const api = roamApi()?.data;
+    if (typeof title !== "string" || !title.trim() || typeof api?.q !== "function") return null;
+    let rows = [];
+    try {
+      rows = api.q(DRAWING_ON_PAGE_QUERY, `Drawings/${title}`) ?? [];
+    } catch (error) {
+      console.error("[compass] drawing lookup", error);
+      return null;
+    }
+    if (!Array.isArray(rows)) return null;
+    for (const row of rows) {
+      if (!Array.isArray(row)) continue;
+      const [uid, string] = row;
+      if (typeof uid === "string" && uid && isDrawingBlockString(string)) return uid;
+    }
+    return null;
+  }
+
+  function writeZoneAttribute({ centerUid, zone, title } = {}) {
+    const attribute = ZONE_ATTR[zone];
+    if (!attribute) return Promise.resolve({ ok: false, reason: "zone" });
+    if (typeof centerUid !== "string" || !centerUid) return Promise.resolve({ ok: false, reason: "missing" });
+    const task = () => withLock(`compass:${graphName()}:${centerUid}`, async () => {
+      const api = data();
+      const pulled = pull(api, ATTR_PULL, centerUid);
+      let existing = null;
+      for (const child of asList(pulled?.[":block/children"])) {
+        const string = child?.[":block/string"];
+        const parsed = parseAttribute(string);
+        if (parsed?.name === attribute && typeof child?.[":block/uid"] === "string") {
+          existing = { uid: child[":block/uid"], string };
+          break;
+        }
+      }
+      const plan = planAttributeWrite({ attribute, title, existing });
+      if (!plan.ops.length) return { ok: false, reason: plan.reason };
+      for (const op of plan.ops) {
+        if (op.op === "create") await applyOp(api, { op: "create", string: op.string, parentUid: centerUid, order: "last" });
+        else await applyOp(api, op);
+      }
+      return { ok: true };
+    });
+    const run = queue.then(task, task);
+    queue = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
   function drawingRows(centreUid, refUids) {
     const api = roamApi()?.data;
     if (!api?.q) return [];
@@ -750,6 +842,10 @@ export function createHost({ lifecycle }) {
     releaseSidecar,
     closeSidecar,
     move,
+    childCounts,
+    crossRows,
+    findDrawingBlock,
+    writeZoneAttribute,
     drawingRows,
     blockContextMenu() {
       return roamApi()?.ui?.blockContextMenu ?? null;

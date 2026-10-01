@@ -4,6 +4,17 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-01
+
+### Added
+
+- An empty page is drawn dashed. Its hover text is Empty page. Start writing opens that page.
+- Outline URLs group by host, four hosts and four URLs each.
+- The zone plus picks a page or a drawing name. The four sides write Parent, Child, Friend, and Challenger. An existing drawing is reused. Otherwise Plexus creates the drawing. The editor stays closed.
+- Send to drawing commits the neighborhood onto the open drawing. With links stays off until toggled.
+- Pages, Blocks, Drawings, and Regions start on, with a keyword field. Turning one off fades those nodes. The nodes stay on the graph.
+- Cross links stay off until toggled. The edges are faint and stop at 40.
+
 ## [0.6.0] - 2026-10-01
 
 ### Added

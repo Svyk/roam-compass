@@ -689,3 +689,158 @@
   font-size: 12px;
   text-align: left;
 }
+
+.compass-root .compass-node.compass-fade {
+  opacity: 0.15;
+}
+
+.compass-root .compass-node.compass-empty-page {
+  border-style: dashed;
+}
+
+.compass-root .compass-edge.compass-cross .compass-edge-line {
+  opacity: 0.28;
+}
+
+.compass-root .compass-edge.compass-cross.compass-edge-hot .compass-edge-line {
+  opacity: 0.9;
+}
+
+.compass-root .compass-lens[aria-pressed="false"] {
+  opacity: 0.45;
+}
+
+.compass-root .compass-lens-keyword {
+  width: 120px;
+  box-sizing: border-box;
+  border: 1px solid var(--compass-line);
+  border-radius: 4px;
+  padding: 3px 8px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+}
+
+.compass-root .compass-zone-add {
+  position: absolute;
+  z-index: 4;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 14px;
+}
+
+.compass-root .compass-zone-add-north {
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.compass-root .compass-zone-add-south {
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.compass-root .compass-zone-add-west {
+  top: 50%;
+  left: 8px;
+  transform: translateY(-50%);
+}
+
+.compass-root .compass-zone-add-east {
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+}
+
+.compass-root .compass-zone-count {
+  position: absolute;
+  z-index: 4;
+  font-size: 11px;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.compass-root .compass-zone-count-north {
+  top: 14px;
+  left: calc(50% + 22px);
+}
+
+.compass-root .compass-zone-count-south {
+  bottom: 14px;
+  left: calc(50% + 22px);
+}
+
+.compass-root .compass-zone-count-west {
+  top: calc(50% + 20px);
+  left: 12px;
+}
+
+.compass-root .compass-zone-count-east {
+  top: calc(50% + 20px);
+  right: 12px;
+}
+
+.compass-root .compass-zone-count-siblings {
+  right: 12px;
+  bottom: 40px;
+}
+
+.compass-root .compass-zone-count[hidden] {
+  display: none;
+}
+
+.compass-root .compass-urls {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--compass-line);
+  font-size: 12px;
+}
+
+.compass-root .compass-urls[hidden] {
+  display: none;
+}
+
+.compass-root .compass-url-host {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: baseline;
+}
+
+.compass-root .compass-url {
+  color: var(--compass-accent);
+}
+
+.compass-root .compass-zone-pop {
+  position: absolute;
+  z-index: 10;
+  box-sizing: border-box;
+  min-width: 220px;
+  max-width: 360px;
+  padding: 6px;
+  border: 1px solid var(--compass-line);
+  border-radius: 6px;
+  background: var(--compass-paper);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
+.compass-root .compass-zone-pop[hidden] {
+  display: none;
+}
+
+.compass-root .compass-zone-input {
+  box-sizing: border-box;
+  width: 100%;
+  margin-bottom: 4px;
+  border: 1px solid var(--compass-line);
+  border-radius: 4px;
+  padding: 3px 8px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+}
