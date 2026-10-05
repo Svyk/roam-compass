@@ -26,6 +26,13 @@ export function boardPlan(api, centerUid) {
   }
 }
 
+// One board opens. Several boards pick. This does not call PlexusDiagram.
+export function showBoardPlan(boards) {
+  if (!Array.isArray(boards) || boards.length === 0) return { mode: "none" };
+  if (boards.length === 1) return { mode: "open", board: boards[0] };
+  return { mode: "picker", boards };
+}
+
 export function cardPlan(api, boardUid, cap) {
   if (!api || typeof api.cardsOf !== "function") return [];
   try {

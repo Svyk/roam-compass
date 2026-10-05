@@ -17,11 +17,23 @@ function stampVersion(version) {
 
 function installRoamCompass(win, overlay) {
   const api = Object.freeze({
+    apiVersion: 1,
     isAvailable() {
       return true;
     },
     focus(uid) {
       if (typeof overlay?.focusUid === "function") overlay.focusUid(uid);
+    },
+    open(uid, options) {
+      const sidecar = options?.sidecar === true;
+      if (typeof overlay?.focusUid === "function") overlay.focusUid(uid, sidecar ? { sidecar: true } : undefined);
+      if (typeof overlay?.hideResults === "function") overlay.hideResults();
+    },
+    focusBlock(uid) {
+      if (typeof overlay?.focusUid === "function") overlay.focusUid(uid);
+    },
+    isOpen() {
+      return typeof overlay?.isOpen === "function" ? overlay.isOpen() === true : false;
     },
   });
   win.RoamCompass = api;

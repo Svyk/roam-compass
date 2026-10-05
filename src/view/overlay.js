@@ -1,6 +1,6 @@
 import { topicRefUid, uidFromHash } from "../host.js";
 import { attributeForRole, buildNeighborhood, createPlexusOpener, DROP_ROLE, drawingLinkEdges, inverseRole, isDrawingLike, plexusKind, plexusRegionLabels } from "../model/neighborhood.js";
-import { boardPlan, cardPlan, connectionEdges, openArgs } from "../model/boards.js";
+import { boardPlan, cardPlan, connectionEdges, openArgs, showBoardPlan } from "../model/boards.js";
 import { layout, sideAt } from "../model/layout.js";
 import { rankDrawings } from "../model/related.js";
 import { crossEdges, hiddenUids, isEmptyPage, planZoneCreate, urlGroups } from "../model/batch7.js";
@@ -224,8 +224,13 @@ export function mountOverlay({ extensionAPI, lifecycle, host }) {
       repullIfOpen() {},
       toggle() { return Promise.resolve(); },
       focusPage() { return Promise.resolve(); },
-      focusBlock() { return Promise.resolve(); },
+      focusBlock(uid) {
+        view.focusUid(uid);
+        return Promise.resolve();
+      },
       focusUid() {},
+      isOpen() { return false; },
+      hideResults() {},
     };
     return { ...view, installCommands: () => registerCommands({ extensionAPI, lifecycle, host, view }) };
   }
@@ -386,6 +391,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   let emptyCounts = {};
   let linksMode = false;
   let zoneTarget = null;
+  // One open can force the sidecar flag the next load already syncs. Not a new loop.
+  let forceSidecar = false;
   const partUrls = new Set();
   const rawOpenInMain = host.openInMain.bind(host);
   host.openInMain = (uid, kind) => {
@@ -546,7 +553,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     renderPins();
     if (snapshot.missing) setStatus("Nothing in this graph has that uid.", true);
     const uid = current;
-    void host.syncSidecar(uid, settings.sidecar)
+    const sidecar = forceSidecar === true || settings.sidecar === true;
+    forceSidecar = false;
+    void host.syncSidecar(uid, sidecar)
       .catch((error) => console.error("[compass] sidecar", error))
       .then(() => {
         placeFrame();
@@ -585,8 +594,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     placeFrame();
   }
 
-  function focusUid(uid, { record = true } = {}) {
+  function focusUid(uid, options = {}) {
+    const record = options.record !== false;
     if (!uid) return;
+    if (options.sidecar === true) forceSidecar = true;
     hideFloating();
     if (record && current && current !== uid) {
       back.push(current);
@@ -716,6 +727,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   async function focusPage() {
     const uid = await host.openPageUid();
     if (uid) focusUid(uid);
+  }
+
+  function isOpen() {
+    return root.hidden !== true;
   }
 
   async function focusBlock(uid) {
@@ -1690,6 +1705,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const node = nodeByUid.get(uid);
     const isCenter = uid === hood?.center?.uid;
     if (!isCenter) menuItem("Focus here", () => focusUid(uid));
+    addShowOnBoard(uid);
     if (node?.style === "card" && openBoardUid && typeof diagramApi()?.open === "function") {
       menuItem("Open on board", () => {
         const api = diagramApi();
@@ -1718,6 +1734,51 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     }
     placeFloating(menu, clientX, clientY);
     menu.querySelector("button")?.focus();
+  }
+
+  function boardsHolding(uid) {
+    const api = diagramApi();
+    if (!api || !uid) return [];
+    try {
+      const found = api.boardsWith(uid);
+      return Array.isArray(found) ? found : [];
+    } catch (error) {
+      console.error("[compass] board", error);
+      return [];
+    }
+  }
+
+  function openShownBoard(board) {
+    const api = diagramApi();
+    if (!board?.uid || typeof api?.open !== "function") return;
+    compassNavUntil = Date.now() + 800;
+    try {
+      Promise.resolve(api.open(board.uid, { card: board.card }))
+        .catch((error) => console.error("[compass] board", error));
+    } catch (error) {
+      console.error("[compass] board", error);
+    }
+  }
+
+  function addShowOnBoard(uid) {
+    const plan = showBoardPlan(boardsHolding(uid));
+    if (plan.mode === "open") {
+      menuItem("Show on board…", () => openShownBoard(plan.board));
+      return;
+    }
+    if (plan.mode !== "picker") return;
+    const opener = button("compass-menu-item", "Show on board…");
+    opener.setAttribute("role", "menuitem");
+    opener.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      menu.replaceChildren();
+      for (const board of plan.boards) {
+        const title = typeof board?.title === "string" && board.title ? board.title : "Untitled board";
+        menuItem(title, () => openShownBoard(board));
+      }
+    });
+    menu.append(opener);
   }
 
   function showDetails(uid, clientX, clientY) {
@@ -2365,6 +2426,6 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   applyCamera(false);
   updateButtons();
 
-  const view = { repullIfOpen, toggle, focusPage, focusBlock, focusUid };
+  const view = { repullIfOpen, toggle, focusPage, focusBlock, focusUid, isOpen, hideResults };
   return { ...view, installCommands: () => registerCommands({ extensionAPI, lifecycle, host, view }) };
 }

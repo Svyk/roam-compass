@@ -1,4 +1,4 @@
-/* Compass v0.8.0 | MIT | generated; edit src/ */
+/* Compass v0.9.0 | MIT | generated; edit src/ */
 
 // src/lifecycle.js
 function isPromiseLike(value) {
@@ -1820,6 +1820,11 @@ function boardPlan(api, centerUid) {
     return [];
   }
 }
+function showBoardPlan(boards) {
+  if (!Array.isArray(boards) || boards.length === 0) return { mode: "none" };
+  if (boards.length === 1) return { mode: "open", board: boards[0] };
+  return { mode: "picker", boards };
+}
 function cardPlan(api, boardUid, cap) {
   if (!api || typeof api.cardsOf !== "function") return [];
   try {
@@ -2558,10 +2563,16 @@ function mountOverlay({ extensionAPI, lifecycle, host }) {
       focusPage() {
         return Promise.resolve();
       },
-      focusBlock() {
+      focusBlock(uid) {
+        view.focusUid(uid);
         return Promise.resolve();
       },
       focusUid() {
+      },
+      isOpen() {
+        return false;
+      },
+      hideResults() {
       }
     };
     return { ...view, installCommands: () => registerCommands({ extensionAPI, lifecycle, host, view }) };
@@ -2730,6 +2741,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   let emptyCounts = {};
   let linksMode = false;
   let zoneTarget = null;
+  let forceSidecar = false;
   const partUrls = /* @__PURE__ */ new Set();
   const rawOpenInMain = host.openInMain.bind(host);
   host.openInMain = (uid, kind) => {
@@ -2873,7 +2885,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     renderPins();
     if (snapshot.missing) setStatus("Nothing in this graph has that uid.", true);
     const uid = current;
-    void host.syncSidecar(uid, settings.sidecar).catch((error) => console.error("[compass] sidecar", error)).then(() => {
+    const sidecar = forceSidecar === true || settings.sidecar === true;
+    forceSidecar = false;
+    void host.syncSidecar(uid, sidecar).catch((error) => console.error("[compass] sidecar", error)).then(() => {
       placeFrame();
       later(placeFrame, 350);
     });
@@ -2905,8 +2919,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     root.hidden = false;
     placeFrame();
   }
-  function focusUid(uid, { record = true } = {}) {
+  function focusUid(uid, options = {}) {
+    const record = options.record !== false;
     if (!uid) return;
+    if (options.sidecar === true) forceSidecar = true;
     hideFloating();
     if (record && current && current !== uid) {
       back.push(current);
@@ -3027,6 +3043,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   async function focusPage() {
     const uid = await host.openPageUid();
     if (uid) focusUid(uid);
+  }
+  function isOpen() {
+    return root.hidden !== true;
   }
   async function focusBlock(uid) {
     const target = uid || host.focusedBlock();
@@ -3950,6 +3969,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const node = nodeByUid.get(uid);
     const isCenter = uid === hood?.center?.uid;
     if (!isCenter) menuItem("Focus here", () => focusUid(uid));
+    addShowOnBoard(uid);
     if (node?.style === "card" && openBoardUid && typeof diagramApi()?.open === "function") {
       menuItem("Open on board", () => {
         const api = diagramApi();
@@ -3977,6 +3997,47 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     }
     placeFloating(menu, clientX, clientY);
     menu.querySelector("button")?.focus();
+  }
+  function boardsHolding(uid) {
+    const api = diagramApi();
+    if (!api || !uid) return [];
+    try {
+      const found = api.boardsWith(uid);
+      return Array.isArray(found) ? found : [];
+    } catch (error) {
+      console.error("[compass] board", error);
+      return [];
+    }
+  }
+  function openShownBoard(board) {
+    const api = diagramApi();
+    if (!board?.uid || typeof api?.open !== "function") return;
+    compassNavUntil = Date.now() + 800;
+    try {
+      Promise.resolve(api.open(board.uid, { card: board.card })).catch((error) => console.error("[compass] board", error));
+    } catch (error) {
+      console.error("[compass] board", error);
+    }
+  }
+  function addShowOnBoard(uid) {
+    const plan = showBoardPlan(boardsHolding(uid));
+    if (plan.mode === "open") {
+      menuItem("Show on board…", () => openShownBoard(plan.board));
+      return;
+    }
+    if (plan.mode !== "picker") return;
+    const opener = button("compass-menu-item", "Show on board…");
+    opener.setAttribute("role", "menuitem");
+    opener.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      menu.replaceChildren();
+      for (const board of plan.boards) {
+        const title = typeof board?.title === "string" && board.title ? board.title : "Untitled board";
+        menuItem(title, () => openShownBoard(board));
+      }
+    });
+    menu.append(opener);
   }
   function showDetails(uid, clientX, clientY) {
     hideFloating();
@@ -4590,7 +4651,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   });
   applyCamera(false);
   updateButtons();
-  const view = { repullIfOpen, toggle, focusPage, focusBlock, focusUid };
+  const view = { repullIfOpen, toggle, focusPage, focusBlock, focusUid, isOpen, hideResults };
   return { ...view, installCommands: () => registerCommands({ extensionAPI, lifecycle, host, view }) };
 }
 
@@ -4605,11 +4666,23 @@ function stampVersion(version) {
 }
 function installRoamCompass(win, overlay) {
   const api = Object.freeze({
+    apiVersion: 1,
     isAvailable() {
       return true;
     },
     focus(uid) {
       if (typeof overlay?.focusUid === "function") overlay.focusUid(uid);
+    },
+    open(uid, options) {
+      const sidecar = options?.sidecar === true;
+      if (typeof overlay?.focusUid === "function") overlay.focusUid(uid, sidecar ? { sidecar: true } : void 0);
+      if (typeof overlay?.hideResults === "function") overlay.hideResults();
+    },
+    focusBlock(uid) {
+      if (typeof overlay?.focusUid === "function") overlay.focusUid(uid);
+    },
+    isOpen() {
+      return typeof overlay?.isOpen === "function" ? overlay.isOpen() === true : false;
     }
   });
   win.RoamCompass = api;

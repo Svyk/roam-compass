@@ -4,6 +4,12 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-05
+
+### Added
+
+- Compass can open on a page or a block, and say whether it is open. From a page, Show on board opens the one board that holds it, or asks which board when there are two.
+
 ## [0.8.0] - 2026-10-05
 
 ### Added

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { boardPlan, cardPlan, connectionLabel, isBoardLike, openArgs } from "../src/model/boards.js";
+import { boardPlan, cardPlan, connectionLabel, isBoardLike, openArgs, showBoardPlan } from "../src/model/boards.js";
 
 test("isBoardLike is a diagram macro", () => {
   assert.equal(isBoardLike("{{[[diagram]]}}"), true);
@@ -80,6 +80,35 @@ test("connectionLabel is the text between Plexus arrows", () => {
   assert.equal(connectionLabel("no arrow here"), "");
   assert.equal(connectionLabel(""), "");
   assert.equal(connectionLabel(null), "");
+});
+
+test("showBoardPlan is none when boards are empty or missing", () => {
+  assert.deepEqual(showBoardPlan(), { mode: "none" });
+  assert.deepEqual(showBoardPlan(undefined), { mode: "none" });
+  assert.deepEqual(showBoardPlan(null), { mode: "none" });
+  assert.deepEqual(showBoardPlan([]), { mode: "none" });
+  assert.deepEqual(showBoardPlan({}), { mode: "none" });
+});
+
+test("showBoardPlan opens one board and keeps its card", () => {
+  const board = { uid: "board-1", title: "One", page: "page-uid", card: "card-9" };
+  const plan = showBoardPlan([board]);
+  assert.deepEqual(plan, { mode: "open", board });
+  assert.equal(plan.board, board);
+  assert.equal(plan.board.card, "card-9");
+  assert.notEqual(plan.board.card, plan.board.page);
+});
+
+test("showBoardPlan returns a picker when there is more than one board", () => {
+  const boards = [
+    { uid: "b1", title: "One", page: "page-uid", card: "card-9" },
+    { uid: "b2", title: "Two", page: "page-uid", card: "card-9" },
+    { uid: "b3", title: "Three", page: "page-uid", card: "card-8" },
+  ];
+  const plan = showBoardPlan(boards);
+  assert.deepEqual(plan, { mode: "picker", boards });
+  assert.equal(plan.boards, boards);
+  assert.equal(plan.boards.every((board) => board.card !== board.page), true);
 });
 
 test("openArgs keeps the board uid distinct from the card", () => {
