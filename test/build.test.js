@@ -37,9 +37,10 @@ test("build emits deterministic, matching browser ESM artifacts with a default e
   assert.doesNotMatch(rootJs, /sourceMappingURL/);
   assert.doesNotMatch(rootJs, /^import\s/m);
   assert.match(rootJs, /export\s*\{[\s\S]*default/);
+  const packageMetadata = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   const rebuilt = await bundleEntry({
     rootDirectory: rootPath,
-    banner: "/* Compass v0.7.0 | MIT | generated; edit src/ */",
+    banner: `/* Compass v${packageMetadata.version} | MIT | generated; edit src/ */`,
   });
   assert.equal(rebuilt, rootJs);
 

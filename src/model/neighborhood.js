@@ -334,6 +334,56 @@ function regionResolver(resolve) {
   };
 }
 
+function shapedExtra(raw, zone, role, style) {
+  const uid = raw?.uid;
+  if (typeof uid !== "string" || !uid) return null;
+  const title = typeof raw.title === "string" && raw.title ? raw.title : uid;
+  return {
+    uid,
+    kind: raw.kind || "page",
+    title,
+    string: typeof raw.string === "string" ? raw.string : "",
+    alias: "",
+    editTime: 0,
+    createTime: 0,
+    role,
+    zone,
+    strength: 2,
+    style,
+    evidence: [{ kind: style, role }],
+    label: typeof raw.label === "string" ? raw.label : (style === "board" ? "On board" : ""),
+    writable: null,
+    via: null,
+  };
+}
+
+function appendExtras(kept, raws, zone, role, style, cap, centerUid) {
+  if (!Array.isArray(raws)) return;
+  const seen = new Set(kept.map((node) => node.uid));
+  if (centerUid) seen.add(centerUid);
+  const limit = Number.isFinite(cap) ? cap : raws.length;
+  let added = 0;
+  for (const raw of raws) {
+    if (added >= limit) break;
+    const node = shapedExtra(raw, zone, role, style);
+    if (!node || node.uid === centerUid) continue;
+    const existing = kept.find((item) => item.uid === node.uid);
+    if (existing) {
+      existing.style = style;
+      existing.zone = zone;
+      existing.role = role;
+      existing.label = node.label;
+      existing.evidence = node.evidence;
+      added += 1;
+      continue;
+    }
+    if (seen.has(node.uid)) continue;
+    seen.add(node.uid);
+    kept.push(node);
+    added += 1;
+  }
+}
+
 export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
   const settings = modelSettings(rawSettings);
   const source = snapshot ?? {};
@@ -536,6 +586,8 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
       overflow[zone] = { shown: Math.min(limit, members.length), total: members.length };
     }
   }
+  appendExtras(kept, options.boards, "west", "friend", "board", settings.maxPerZone, centerUid);
+  appendExtras(kept, options.cards, "south", "child", "card", settings.maxPerZone, centerUid);
   const keptUids = new Set(kept.map((node) => node.uid));
   for (const node of kept) if (node.via && !keptUids.has(node.via)) node.via = null;
 

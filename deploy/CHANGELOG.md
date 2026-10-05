@@ -4,6 +4,12 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-05
+
+### Added
+
+- With Plexus Diagram loaded, a page shows the boards it sits on, each with a thumbnail. Click a board to list its cards. A labelled connection keeps its label. Open on board opens that board and pulses the card. With Plexus Diagram unloaded, those nodes stay off. The Boards setting turns this off.
+
 ## [0.7.0] - 2026-10-01
 
 ### Added

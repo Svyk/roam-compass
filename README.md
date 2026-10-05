@@ -54,10 +54,11 @@ The new attribute is the first name in that side's list. Dragging a plain link o
 - **Show all** under a crowded side lifts its limit.
 - Drag the background to pan, scroll to zoom, **Fit** to see everything. Esc closes.
 - The **Sidecar** setting keeps the center open in the right sidebar. Compass only closes sidebar windows it opened.
+- With Plexus Diagram loaded, boards that contain this page sit on the west with a thumbnail. Click one to show its cards. Right-click a card and choose Open on board to open that board and pulse the card. The Boards setting turns this off.
 
 ## Settings
 
-The Parents, Children, Friends, Challengers, Previous, and Next settings are comma-separated attribute names, matched without case. Hidden lists attributes to leave out. Switches turn off plain links, siblings, text badges, the sidecar, and the outline.
+The Parents, Children, Friends, Challengers, Previous, and Next settings are comma-separated attribute names, matched without case. Hidden lists attributes to leave out. Switches turn off plain links, siblings, text badges, the sidecar, the outline, and boards.
 
 ## Install
 

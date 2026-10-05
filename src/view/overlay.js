@@ -1,5 +1,6 @@
 import { topicRefUid, uidFromHash } from "../host.js";
 import { attributeForRole, buildNeighborhood, createPlexusOpener, DROP_ROLE, drawingLinkEdges, inverseRole, isDrawingLike, plexusKind, plexusRegionLabels } from "../model/neighborhood.js";
+import { boardPlan, cardPlan, connectionEdges, openArgs } from "../model/boards.js";
 import { layout, sideAt } from "../model/layout.js";
 import { rankDrawings } from "../model/related.js";
 import { crossEdges, hiddenUids, isEmptyPage, planZoneCreate, urlGroups } from "../model/batch7.js";
@@ -20,6 +21,42 @@ const PAGE_REF = /^\[\[(.+)\]\]$/;
 function plexus() {
   const api = globalThis.window?.RoamPlexus;
   return api && api.apiVersion >= 1 ? api : null;
+}
+
+function diagramApi() {
+  const api = globalThis.window?.PlexusDiagram;
+  return api && typeof api.boardsWith === "function" ? api : null;
+}
+
+function asBlocks(value) {
+  if (Array.isArray(value)) return value;
+  return value && typeof value === "object" ? [value] : [];
+}
+
+function readConnectionChildren(boardUid) {
+  const pull = globalThis.roamAlphaAPI?.data?.pull;
+  if (typeof pull !== "function" || !boardUid) return [];
+  let raw = null;
+  try {
+    raw = pull("[:block/uid {:block/children [:block/uid :block/string {:block/children [:block/uid :block/string]}]}]", [":block/uid", boardUid]);
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const child of asBlocks(raw?.[":block/children"])) {
+    out.push(child);
+    for (const grand of asBlocks(child?.[":block/children"])) out.push(grand);
+  }
+  return out;
+}
+
+function blockRefOf(uid) {
+  const pull = globalThis.roamAlphaAPI?.data?.pull;
+  if (typeof pull !== "function" || !uid) return "";
+  let raw = null;
+  try { raw = pull("[:block/string]", [":block/uid", uid]); } catch { raw = null; }
+  const match = String(raw?.[":block/string"] ?? "").trim().match(/^\(\(([^)]+)\)\)$/);
+  return match ? match[1] : "";
 }
 
 const REASONS = {
@@ -315,6 +352,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   let current = null;
   let snapshot = null;
   let hood = null;
+  let openBoardUid = null;
   let geometry = null;
   let settings = null;
   let nodeByUid = new Map();
@@ -466,7 +504,21 @@ function mountReal({ extensionAPI, lifecycle, host }) {
 
   function rebuild() {
     if (!snapshot || !settings) return;
-    hood = buildNeighborhood(snapshot, settings.model, { expanded: expandedFor(current), regionLabel: plexusRegionLabels(plexus()) });
+    const diagram = settings.boards === false ? null : diagramApi();
+    const cap = Number(settings.model?.maxPerZone);
+    const limit = Number.isFinite(cap) && cap > 0 ? cap : 12;
+    let boards = [];
+    let cards = [];
+    if (diagram && current) {
+      boards = boardPlan(diagram, current);
+      if (openBoardUid) cards = cardPlan(diagram, openBoardUid, limit);
+    }
+    hood = buildNeighborhood(snapshot, settings.model, {
+      expanded: expandedFor(current),
+      regionLabel: plexusRegionLabels(plexus()),
+      boards,
+      cards,
+    });
     nodeByUid = new Map(hood.nodes.map((node) => [node.uid, node]));
     try {
       const pageUids = hood.nodes.filter((node) => node.kind === "page").map((node) => node.uid);
@@ -542,6 +594,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       forward.length = 0;
     }
     const changed = current !== uid;
+    if (changed) openBoardUid = null;
     current = uid;
     reveal();
     host.watch(uid, scheduleReload);
@@ -763,6 +816,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   }
 
   function attachThumb(element, node) {
+    if (node?.style === "board") {
+      attachDiagramThumb(element, node);
+      return;
+    }
     const held = thumbUrls.get(node.uid);
     const api = plexus();
     if (!settings?.drawings || !isDrawingLike(node) || !api || typeof api.thumbnail !== "function") {
@@ -1156,10 +1213,36 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     hover.style.top = `${clientY + 12}px`;
   }
 
+  function attachDiagramThumb(element, node) {
+    const api = diagramApi();
+    if (settings?.boards === false || !api || typeof api.thumbnail !== "function") {
+      dropThumb(node.uid);
+      return;
+    }
+    const held = thumbUrls.get(node.uid);
+    if (held && held.string === "board") {
+      showThumb(element, node.uid, "board", held.url);
+      return;
+    }
+    dropThumb(node.uid);
+    const accept = (blob) => {
+      if (!blob || lifecycle.disposed || !element.isConnected || nodeEls.get(node.uid) !== element) return false;
+      if (element.querySelector(".compass-node-thumb")) return true;
+      const url = typeof blob === "string" ? blob : globalThis.URL.createObjectURL(blob);
+      showThumb(element, node.uid, "board", url);
+      return true;
+    };
+    let pending = null;
+    try { pending = api.thumbnail(node.uid, { maxWidth: THUMB_WIDTH }); } catch { pending = null; }
+    Promise.resolve(pending).then((blob) => { accept(blob); }).catch((error) => console.error("[compass] board thumb", error));
+  }
+
   function showHover(uid, clientX, clientY) {
     const node = uid === hood?.center?.uid ? snapshot?.center : nodeByUid.get(uid);
-    const api = plexus();
-    if (!node || !isDrawingLike(node) || typeof api?.thumbnail !== "function") {
+    const boardNode = node?.style === "board";
+    const api = boardNode ? diagramApi() : plexus();
+    const allowed = boardNode ? settings?.boards !== false : Boolean(node && isDrawingLike(node));
+    if (!node || !allowed || typeof api?.thumbnail !== "function") {
       if (hoverUid) clearHover();
       return;
     }
@@ -1423,6 +1506,42 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     };
   }
 
+  function drawCardLinks(boxes) {
+    if (!openBoardUid) return;
+    let kids = [];
+    try { kids = readConnectionChildren(openBoardUid); } catch { kids = []; }
+    const alias = new Map();
+    for (const node of hood?.nodes || []) {
+      if (node.style !== "card") continue;
+      alias.set(node.uid, node.uid);
+      const target = blockRefOf(node.uid);
+      if (target) alias.set(target, node.uid);
+    }
+    const endOf = (token) => boxes.get(token) || boxes.get(alias.get(token));
+    for (const edge of connectionEdges(kids)) {
+      const from = endOf(edge.from);
+      const to = endOf(edge.to);
+      if (!from || !to || from === to) continue;
+      const shape = { d: `M${from.x},${from.y} L${to.x},${to.y}`, mid: [(from.x + to.x) / 2, (from.y + to.y) / 2] };
+      const group = svg("g", "compass-edge");
+      group.dataset.uid = edge.to;
+      group.dataset.style = "card";
+      const hit = svg("path", "compass-edge-hit");
+      hit.setAttribute("d", shape.d);
+      const line = svg("path", "compass-edge-line");
+      line.setAttribute("d", shape.d);
+      group.append(hit, line);
+      if (edge.label) {
+        const text = svg("text", "compass-edge-label");
+        text.setAttribute("x", String(shape.mid[0]));
+        text.setAttribute("y", String(shape.mid[1] - 4));
+        text.textContent = edge.label.length > 48 ? `${edge.label.slice(0, 47)}…` : edge.label;
+        group.append(text);
+      }
+      edgeLayer.append(group);
+    }
+  }
+
   function renderEdges(boxes) {
     edgeLayer.replaceChildren();
     const rowBoxes = new Map(geometry.rows.map((row) => [row.uid, row]));
@@ -1444,6 +1563,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       }
       edgeLayer.append(group);
     };
+    drawCardLinks(boxes);
     for (const node of hood.nodes) {
       const box = boxes.get(node.uid);
       if (!box) continue;
@@ -1570,6 +1690,19 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const node = nodeByUid.get(uid);
     const isCenter = uid === hood?.center?.uid;
     if (!isCenter) menuItem("Focus here", () => focusUid(uid));
+    if (node?.style === "card" && openBoardUid && typeof diagramApi()?.open === "function") {
+      menuItem("Open on board", () => {
+        const api = diagramApi();
+        const args = openArgs(openBoardUid, uid, false);
+        compassNavUntil = Date.now() + 800;
+        try {
+          Promise.resolve(api.open(args.boardUid, { card: args.card, sidebar: args.sidebar }))
+            .catch((error) => console.error("[compass] board", error));
+        } catch (error) {
+          console.error("[compass] board", error);
+        }
+      });
+    }
     menuItem("Open in sidebar", () => openSidebar(uid));
     menuItem("Open in main window", () => openMain(uid));
     const pinned = (settings?.pins ?? []).some((pin) => pin.uid === uid);
@@ -1846,6 +1979,12 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     }
     const uid = row ? row.dataset.uid : element.dataset.uid;
     if (!row && element.classList.contains("compass-node-center")) return;
+    if (!row && nodeByUid.get(uid)?.style === "board") {
+      openBoardUid = uid;
+      rebuild();
+      render();
+      return;
+    }
     if (event.shiftKey) {
       void openSidebar(uid, row ? "block" : nodeKind(uid));
       return;

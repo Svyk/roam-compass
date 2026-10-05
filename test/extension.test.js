@@ -17,6 +17,7 @@ const SETTING_IDS = [
   "compass-sidecar",
   "compass-outline",
   "compass-drawings",
+  "compass-boards",
   "compass-follow",
   "compass-related-drawings",
   "compass-max-zone",
@@ -32,6 +33,7 @@ const SWITCH_IDS = [
   "compass-sidecar",
   "compass-outline",
   "compass-drawings",
+  "compass-boards",
   "compass-follow",
   "compass-related-drawings",
   "compass-cross-links",
@@ -171,6 +173,7 @@ test("extension exports the Roam lifecycle contract and survives repeated unload
     assert.equal(api.settings.get("compass-outline"), false);
     assert.equal(api.settings.get("compass-follow"), false);
     assert.equal(api.settings.get("compass-related-drawings"), true);
+    assert.equal(api.settings.get("compass-boards"), true);
     assert.equal(api.settings.get("compass-max-zone"), "12");
     assert.deepEqual(api.settings.get("compass-pins"), []);
     assert.deepEqual(api.panel.settings.map((row) => row.id), SETTING_IDS);
