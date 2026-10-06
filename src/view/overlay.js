@@ -50,13 +50,17 @@ function readConnectionChildren(boardUid) {
   return out;
 }
 
-function blockRefOf(uid) {
+// The card block is the ref it stands for: ((uid)) or [[Page]]. The title is what a page-ref edge names.
+function embeddedTarget(uid) {
   const pull = globalThis.roamAlphaAPI?.data?.pull;
   if (typeof pull !== "function" || !uid) return "";
   let raw = null;
   try { raw = pull("[:block/string]", [":block/uid", uid]); } catch { raw = null; }
-  const match = String(raw?.[":block/string"] ?? "").trim().match(/^\(\(([^)]+)\)\)$/);
-  return match ? match[1] : "";
+  const text = String(raw?.[":block/string"] ?? "").trim();
+  const block = /^\(\(([^)]+)\)\)$/.exec(text);
+  if (block) return block[1];
+  const page = /^(?:#)?\[\[(.+)\]\]$/.exec(text);
+  return page ? page[1] : "";
 }
 
 const REASONS = {
@@ -1529,8 +1533,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     for (const node of hood?.nodes || []) {
       if (node.style !== "card") continue;
       alias.set(node.uid, node.uid);
-      const target = blockRefOf(node.uid);
+      const target = embeddedTarget(node.uid);
       if (target) alias.set(target, node.uid);
+      if (node.kind === "page" && node.title) alias.set(node.title, node.uid);
     }
     const endOf = (token) => boxes.get(token) || boxes.get(alias.get(token));
     for (const edge of connectionEdges(kids)) {

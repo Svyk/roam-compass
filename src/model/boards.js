@@ -68,7 +68,20 @@ export function openArgs(boardUid, cardUid, sidebar) {
   return { boardUid, card: cardUid, sidebar: sidebar === true };
 }
 
-const BLOCK_REF = /\(\(([^)]+)\)\)/g;
+// Block refs and page refs, in string order. A `{{[[macro]]}}` name is not a page.
+function connectionEnds(text) {
+  const ends = [];
+  const refs = /\[\[([^[\]]*)\]\]|\(\(([^)]*)\)\)/g;
+  for (const match of text.matchAll(refs)) {
+    const at = match.index ?? 0;
+    if (match[1] != null) {
+      if (text[at - 1] === "{") continue;
+      if (match[1]) ends.push(match[1]);
+    } else if (match[2]) ends.push(match[2]);
+    if (ends.length >= 2) break;
+  }
+  return ends;
+}
 
 // Connection children are read by the overlay. This only splits the string.
 function childText(child) {
@@ -85,9 +98,9 @@ export function connectionEdges(children) {
   for (const child of list) {
     const text = childText(child);
     if (!text) continue;
-    const uids = [...text.matchAll(BLOCK_REF)].map((match) => match[1]);
-    if (uids.length < 2) continue;
-    out.push({ from: uids[0], to: uids[1], label: connectionLabel(text) });
+    const ends = connectionEnds(text);
+    if (ends.length < 2) continue;
+    out.push({ from: ends[0], to: ends[1], label: connectionLabel(text) });
   }
   return out;
 }

@@ -4,6 +4,12 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-06
+
+### Fixed
+
+- A connection written with page refs (`[[A]] → label → [[B]]`) draws its edge. Block refs still draw. A page ref mixed with a block ref draws when both resolve. One end draws nothing. The label between the arrows stays.
+
 ## [0.9.0] - 2026-10-05
 
 ### Added

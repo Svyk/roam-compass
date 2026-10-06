@@ -69,3 +69,22 @@ test("connection children become one labelled edge", () => {
     { from: "cardA", to: "cardB", label: "annotates" },
   ]);
 });
+
+test("page refs, block refs, and a mix become edges; one end does not", () => {
+  const edges = connectionEdges([
+    { string: "[[Page A]] → cites → [[Page B]]" },
+    { string: "((cardA)) → annotates → ((cardB))" },
+    { string: "[[Page A]] → cites → ((cardB))" },
+    { string: "((cardA)) → annotates → [[Page B]]" },
+    { string: "[[Page A]] → leftover" },
+    { string: "((only))" },
+    { string: "[[Page A]]" },
+    "[[Only]] → nowhere",
+  ]);
+  assert.deepEqual(edges, [
+    { from: "Page A", to: "Page B", label: "cites" },
+    { from: "cardA", to: "cardB", label: "annotates" },
+    { from: "Page A", to: "cardB", label: "cites" },
+    { from: "cardA", to: "Page B", label: "annotates" },
+  ]);
+});

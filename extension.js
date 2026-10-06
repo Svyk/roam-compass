@@ -1,4 +1,4 @@
-/* Compass v0.9.0 | MIT | generated; edit src/ */
+/* Compass v0.9.1 | MIT | generated; edit src/ */
 
 // src/lifecycle.js
 function isPromiseLike(value) {
@@ -1856,7 +1856,19 @@ function connectionLabel(value) {
 function openArgs(boardUid, cardUid, sidebar) {
   return { boardUid, card: cardUid, sidebar: sidebar === true };
 }
-var BLOCK_REF = /\(\(([^)]+)\)\)/g;
+function connectionEnds(text) {
+  const ends = [];
+  const refs = /\[\[([^[\]]*)\]\]|\(\(([^)]*)\)\)/g;
+  for (const match of text.matchAll(refs)) {
+    const at = match.index ?? 0;
+    if (match[1] != null) {
+      if (text[at - 1] === "{") continue;
+      if (match[1]) ends.push(match[1]);
+    } else if (match[2]) ends.push(match[2]);
+    if (ends.length >= 2) break;
+  }
+  return ends;
+}
 function childText(child) {
   if (typeof child === "string") return child;
   if (!child || typeof child !== "object") return "";
@@ -1870,9 +1882,9 @@ function connectionEdges(children) {
   for (const child of list) {
     const text = childText(child);
     if (!text) continue;
-    const uids = [...text.matchAll(BLOCK_REF)].map((match) => match[1]);
-    if (uids.length < 2) continue;
-    out.push({ from: uids[0], to: uids[1], label: connectionLabel(text) });
+    const ends = connectionEnds(text);
+    if (ends.length < 2) continue;
+    out.push({ from: ends[0], to: ends[1], label: connectionLabel(text) });
   }
   return out;
 }
@@ -2362,7 +2374,7 @@ var CLICK_DELAY = 230;
 var HISTORY_CAP = 100;
 var THUMB_WIDTH = 160;
 var HOVER_WIDTH = 480;
-var BLOCK_REF2 = /^\(\(([^)]+)\)\)$/;
+var BLOCK_REF = /^\(\(([^)]+)\)\)$/;
 var PAGE_REF = /^\[\[(.+)\]\]$/;
 function plexus() {
   const api = globalThis.window?.RoamPlexus;
@@ -2392,7 +2404,7 @@ function readConnectionChildren(boardUid) {
   }
   return out;
 }
-function blockRefOf(uid) {
+function embeddedTarget(uid) {
   const pull2 = globalThis.roamAlphaAPI?.data?.pull;
   if (typeof pull2 !== "function" || !uid) return "";
   let raw = null;
@@ -2401,8 +2413,11 @@ function blockRefOf(uid) {
   } catch {
     raw = null;
   }
-  const match = String(raw?.[":block/string"] ?? "").trim().match(/^\(\(([^)]+)\)\)$/);
-  return match ? match[1] : "";
+  const text = String(raw?.[":block/string"] ?? "").trim();
+  const block = /^\(\(([^)]+)\)\)$/.exec(text);
+  if (block) return block[1];
+  const page = /^(?:#)?\[\[(.+)\]\]$/.exec(text);
+  return page ? page[1] : "";
 }
 var REASONS = {
   changed: "That block changed in Roam. Compass reloaded it; try again.",
@@ -3174,7 +3189,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   }
   function resolveRef(ref) {
     if (typeof ref !== "string") return null;
-    const block = BLOCK_REF2.exec(ref);
+    const block = BLOCK_REF.exec(ref);
     if (block?.[1]) return block[1];
     const page = PAGE_REF.exec(ref);
     if (!page?.[1]) return null;
@@ -3807,8 +3822,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     for (const node of hood?.nodes || []) {
       if (node.style !== "card") continue;
       alias.set(node.uid, node.uid);
-      const target = blockRefOf(node.uid);
+      const target = embeddedTarget(node.uid);
       if (target) alias.set(target, node.uid);
+      if (node.kind === "page" && node.title) alias.set(node.title, node.uid);
     }
     const endOf = (token) => boxes.get(token) || boxes.get(alias.get(token));
     for (const edge of connectionEdges(kids)) {
