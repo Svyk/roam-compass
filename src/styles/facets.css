@@ -1,1 +1,444 @@
 /* facets */
+.compass-root {
+  --compass-zone-north: #2563eb;
+  --compass-zone-south: #16a34a;
+  --compass-zone-west: #d97706;
+  --compass-zone-east: #dc2626;
+  --compass-zone-siblings: #64748b;
+  --compass-error-accent: #dc2626;
+}
+
+.compass-root[data-tone="dark"] {
+  --compass-zone-north: #60a5fa;
+  --compass-zone-south: #4ade80;
+  --compass-zone-west: #fbbf24;
+  --compass-zone-east: #f87171;
+  --compass-zone-siblings: #94a3b8;
+  --compass-error-accent: #f87171;
+}
+
+.compass-root .compass-facets {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+}
+
+.compass-root .compass-facets-regions {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 0;
+}
+
+.compass-root .compass-facet-region {
+  --compass-facet-color: var(--compass-accent);
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--compass-facet-color) 30%, var(--compass-faint));
+  border-top: 3px solid var(--compass-facet-color);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--compass-facet-color) 6%, var(--compass-paper));
+  pointer-events: none;
+}
+
+.compass-root[data-tone="dark"] .compass-facet-region {
+  border-color: color-mix(in srgb, var(--compass-facet-color) 38%, var(--compass-faint));
+  border-top-color: var(--compass-facet-color);
+  background: color-mix(in srgb, var(--compass-facet-color) 11%, var(--compass-paper));
+}
+
+.compass-root .compass-facet-region.compass-facet-region-status {
+  border: 1px dashed var(--compass-line);
+  border-top: 1px dashed var(--compass-line);
+  background: color-mix(in srgb, var(--compass-ink) 4%, var(--compass-paper));
+}
+
+.compass-root[data-tone="dark"] .compass-facet-region.compass-facet-region-status {
+  background: color-mix(in srgb, var(--compass-ink) 6%, var(--compass-paper));
+}
+
+.compass-root .compass-facet-region .compass-region-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  box-sizing: border-box;
+  height: 28px;
+  padding: 4px 12px 0;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--compass-ink);
+}
+
+.compass-root .compass-facet-region .compass-region-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.compass-root .compass-facet-region .compass-region-count {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--compass-ink) 10%, var(--compass-paper));
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.compass-root .compass-facets-edges {
+  z-index: 1;
+  pointer-events: none;
+}
+
+.compass-root .compass-facets-edges .compass-edge-line {
+  stroke: var(--compass-faint);
+  stroke-width: 1.1;
+  opacity: 0.55;
+}
+
+.compass-root.compass-dimming .compass-facets-edges .compass-edge-hot .compass-edge-line {
+  stroke: var(--compass-accent);
+  stroke-width: 1.75;
+  opacity: 0.95;
+}
+
+.compass-root .compass-facets .compass-node {
+  z-index: 2;
+  transition: background-color 140ms ease, opacity 160ms ease;
+}
+
+.compass-root .compass-facets .compass-node.compass-node-center {
+  z-index: 3;
+}
+
+.compass-root .compass-facets .compass-node-center .compass-center-head {
+  height: 100%;
+}
+
+.compass-root .compass-facets .compass-facet-card {
+  border: 1px solid var(--compass-line);
+  border-left: 3.5px solid var(--compass-line);
+  background: var(--compass-paper);
+  cursor: pointer;
+}
+
+.compass-root .compass-facets .compass-facet-card:hover {
+  background: var(--compass-hover);
+}
+
+.compass-root .compass-facets .compass-facet-card[data-zone="north"] {
+  border-left-color: var(--compass-zone-north);
+}
+
+.compass-root .compass-facets .compass-facet-card[data-zone="south"] {
+  border-left-color: var(--compass-zone-south);
+}
+
+.compass-root .compass-facets .compass-facet-card[data-zone="west"] {
+  border-left-color: var(--compass-zone-west);
+}
+
+.compass-root .compass-facets .compass-facet-card[data-zone="east"] {
+  border-left-color: var(--compass-zone-east);
+}
+
+.compass-root .compass-facets .compass-facet-card[data-zone="siblings"] {
+  border-left-color: var(--compass-zone-siblings);
+}
+
+.compass-root .compass-facet-more {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border: 1px dashed var(--compass-line);
+  border-radius: 6px;
+  background: var(--compass-paper);
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.compass-root .compass-facet-more:hover {
+  opacity: 1;
+  border-color: var(--compass-accent);
+  background: var(--compass-hover);
+}
+
+.compass-root .compass-facets-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  max-width: 420px;
+}
+
+.compass-root .compass-facets-header-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px 3px 10px;
+  border: 1px solid var(--compass-faint);
+  border-radius: 6px;
+  background: var(--compass-paper);
+}
+
+.compass-root .compass-facets-title {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.compass-root .compass-facets-help-toggle,
+.compass-root .compass-facets-gear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-color: var(--compass-faint);
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.compass-root .compass-facets-help-toggle[aria-pressed="true"] {
+  border-color: var(--compass-accent);
+  color: var(--compass-accent);
+}
+
+.compass-root .compass-facets-gear-icon {
+  display: block;
+}
+
+.compass-root .compass-facets-help {
+  margin: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--compass-faint);
+  border-radius: 5px;
+  background: var(--compass-paper);
+  font-size: 11.5px;
+  line-height: 1.35;
+  white-space: nowrap;
+  opacity: 0.9;
+}
+
+.compass-root .compass-facets-empty {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 320px;
+  margin: 0;
+  font-size: 13px;
+  text-align: center;
+  opacity: 0.75;
+}
+
+/* Preset editor dialog */
+.compass-root .compass-facets-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--compass-ink) 28%, transparent);
+}
+
+.compass-root .compass-facets-backdrop[hidden] {
+  display: none;
+}
+
+.compass-root .compass-facets-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  max-height: min(600px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--compass-line);
+  border-radius: 8px;
+  background: var(--compass-paper);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28);
+}
+
+.compass-root .compass-facets-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--compass-faint);
+}
+
+.compass-root .compass-facets-dialog-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.compass-root .compass-facets-dialog-close {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-color: transparent;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.compass-root .compass-facets-dialog-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.compass-root .compass-facets-dialog-sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 250px;
+  flex: none;
+  padding: 12px;
+  border-right: 1px solid var(--compass-faint);
+  overflow: auto;
+}
+
+.compass-root .compass-facets-dialog-editor {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  padding: 12px 14px;
+  overflow: auto;
+}
+
+.compass-root .compass-facets-section-label {
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  opacity: 0.65;
+}
+
+.compass-root .compass-facets-preset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.compass-root .compass-facets-preset-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px 8px;
+  border: 1px solid var(--compass-faint);
+  border-radius: 6px;
+}
+
+.compass-root .compass-facets-preset-row.is-selected {
+  border-color: var(--compass-accent);
+  background: color-mix(in srgb, var(--compass-accent) 7%, var(--compass-paper));
+}
+
+.compass-root .compass-facets-preset-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.compass-root .compass-facets-preset-select {
+  min-width: 0;
+  padding: 1px 4px;
+  border-color: transparent;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.compass-root .compass-facets-preset-badge {
+  flex: none;
+  font-size: 10px;
+  opacity: 0.65;
+}
+
+.compass-root .compass-facets-preset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.compass-root .compass-facets-preset-actions button {
+  padding: 1px 6px;
+  font-size: 11px;
+}
+
+.compass-root .compass-facets-json {
+  flex: 1;
+  min-height: 220px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--compass-line);
+  border-radius: 6px;
+  color: var(--compass-ink);
+  background: color-mix(in srgb, var(--compass-ink) 3%, var(--compass-paper));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.compass-root .compass-facets-json:focus-visible {
+  outline: 2px solid var(--compass-accent);
+  outline-offset: 1px;
+}
+
+.compass-root .compass-facets-errors {
+  margin: 8px 0 0;
+  padding: 6px 10px 6px 24px;
+  border: 1px solid color-mix(in srgb, var(--compass-error-accent) 55%, var(--compass-line));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--compass-error-accent) 8%, var(--compass-paper));
+  color: var(--compass-ink);
+  font-size: 12px;
+}
+
+.compass-root .compass-facets-errors[hidden] {
+  display: none;
+}
+
+.compass-root .compass-facets-error {
+  margin: 2px 0;
+}
+
+.compass-root .compass-facets-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.compass-root .compass-facets-save {
+  border-color: var(--compass-accent);
+  font-weight: 600;
+}
