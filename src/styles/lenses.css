@@ -1,1 +1,546 @@
 /* lenses */
+.compass-root .compass-node[class~="compass-lensed"]:not(.compass-node-center) {
+  background-color: var(--compass-lens-fill, var(--compass-paper));
+  border-color: var(--compass-lens-border, var(--compass-line));
+  color: var(--compass-lens-text, inherit);
+}
+
+.compass-root .compass-node[data-style="typed"][class~="compass-lensed"]:not(.compass-node-center) {
+  border-color: var(--compass-lens-border, var(--compass-accent));
+}
+
+.compass-root .compass-node[data-style="sibling"][class~="compass-lensed"]:not(.compass-node-center) {
+  border-color: var(--compass-lens-border, var(--compass-faint));
+}
+
+.compass-root .compass-node[class~="compass-lensed"]:not(.compass-node-center):hover {
+  background-color: color-mix(in srgb, var(--compass-ink) 7%, var(--compass-lens-fill, var(--compass-paper)));
+}
+
+.compass-root .compass-vl-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.compass-root .compass-vl-btn[aria-expanded="true"] {
+  border-color: var(--compass-accent);
+  background: color-mix(in srgb, var(--compass-accent) 12%, var(--compass-paper));
+  font-weight: 600;
+}
+
+.compass-root .compass-vl-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--compass-accent);
+  color: var(--compass-paper);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.compass-root .compass-vl-badge[hidden] {
+  display: none;
+}
+
+.compass-root .compass-vl-panel {
+  position: absolute;
+  z-index: 9;
+  width: 320px;
+  max-width: calc(100% - 16px);
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid var(--compass-line);
+  border-radius: 8px;
+  background: var(--compass-paper);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  font-size: 13px;
+}
+
+.compass-root .compass-vl-panel[hidden] {
+  display: none;
+}
+
+.compass-root .compass-vl-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--compass-faint);
+  background: var(--compass-paper);
+}
+
+.compass-root .compass-vl-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.compass-root .compass-vl-close {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  line-height: 1;
+}
+
+.compass-root .compass-vl-section {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--compass-faint);
+}
+
+.compass-root .compass-vl-section:last-child {
+  border-bottom: 0;
+}
+
+.compass-root .compass-vl-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.compass-root .compass-vl-heading {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.compass-root .compass-vl-seg {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.compass-root .compass-vl-seg button,
+.compass-root .compass-qf-chip {
+  padding: 3px 7px;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.compass-root .compass-vl-seg button[aria-pressed="true"],
+.compass-root .compass-qf-chip[aria-pressed="true"] {
+  border-color: var(--compass-accent);
+  background: color-mix(in srgb, var(--compass-accent) 13%, var(--compass-paper));
+  font-weight: 600;
+}
+
+.compass-root .compass-qf-chip[aria-pressed="false"] {
+  border-color: var(--compass-faint);
+  opacity: 0.68;
+}
+
+.compass-root .compass-qf-chip[aria-pressed="false"]:hover {
+  opacity: 1;
+}
+
+.compass-root .compass-vl-facets-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.compass-root .compass-vl-facets-row[hidden] {
+  display: none;
+}
+
+.compass-root .compass-vl-panel input[type="text"],
+.compass-root .compass-vl-panel input[type="search"],
+.compass-root .compass-vl-panel select,
+.compass-root .compass-vl-panel textarea {
+  box-sizing: border-box;
+  border: 1px solid var(--compass-line);
+  border-radius: 4px;
+  padding: 4px 7px;
+  color: var(--compass-ink);
+  background: var(--compass-paper);
+  font: inherit;
+  font-size: 12px;
+}
+
+.compass-root .compass-vl-panel input[type="text"]:focus-visible,
+.compass-root .compass-vl-panel input[type="search"]:focus-visible,
+.compass-root .compass-vl-panel select:focus-visible,
+.compass-root .compass-vl-panel textarea:focus-visible {
+  outline: 2px solid var(--compass-accent);
+  outline-offset: 1px;
+}
+
+.compass-root .compass-vl-preset-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.compass-root .compass-vl-preset-select[hidden] {
+  display: none;
+}
+
+.compass-root .compass-vl-preset-edit {
+  flex: none;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.compass-root .compass-qf-keyword {
+  width: 100%;
+  margin-bottom: 6px;
+}
+
+.compass-root .compass-qf-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.compass-root .compass-qf-types {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.compass-root .compass-qf-types[hidden] {
+  display: none;
+}
+
+.compass-root .compass-qf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.compass-root .compass-qf-count {
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.72;
+}
+
+.compass-root .compass-qf-clear {
+  padding: 1px 6px;
+  font-size: 11px;
+}
+
+.compass-root .compass-qf-radios {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.compass-root .compass-qf-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.compass-root .compass-qf-radio input {
+  margin: 0;
+  accent-color: var(--compass-accent);
+}
+
+.compass-root .compass-gl-empty {
+  margin: 0 0 8px;
+  font-size: 12px;
+  opacity: 0.72;
+}
+
+.compass-root .compass-gl-empty[hidden] {
+  display: none;
+}
+
+.compass-root .compass-gl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.compass-root .compass-gl-list[hidden] {
+  display: none;
+}
+
+.compass-root .compass-gl-item {
+  padding: 6px 8px;
+  border: 1px solid var(--compass-faint);
+  border-radius: 6px;
+}
+
+.compass-root .compass-gl-item-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.compass-root .compass-gl-toggle-label {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.compass-root .compass-gl-toggle-label input {
+  flex: none;
+  margin: 0;
+  accent-color: var(--compass-accent);
+}
+
+.compass-root .compass-gl-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.compass-root .compass-gl-tag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--compass-faint);
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.compass-root .compass-gl-swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--compass-line);
+  border-radius: 50%;
+}
+
+.compass-root .compass-gl-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+  padding-left: 20px;
+}
+
+.compass-root .compass-gl-item-actions button {
+  padding: 1px 6px;
+  font-size: 11px;
+}
+
+.compass-root .compass-gl-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.compass-root .compass-gl-footer[hidden] {
+  display: none;
+}
+
+.compass-root .compass-gl-footer button {
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+.compass-root .compass-gl-editor,
+.compass-root .compass-gl-import {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.compass-root .compass-gl-editor[hidden],
+.compass-root .compass-gl-import[hidden] {
+  display: none;
+}
+
+.compass-root .compass-gl-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.compass-root .compass-gl-field[hidden] {
+  display: none;
+}
+
+.compass-root .compass-gl-label {
+  font-size: 11px;
+  opacity: 0.78;
+}
+
+.compass-root .compass-gl-grid2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.compass-root .compass-gl-match-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.compass-root .compass-gl-match-bar select {
+  flex: 1 1 auto;
+}
+
+.compass-root .compass-gl-match-bar button {
+  flex: none;
+  padding: 3px 7px;
+  font-size: 12px;
+}
+
+.compass-root .compass-gl-conds {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.compass-root .compass-gl-cond {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid var(--compass-faint);
+  border-radius: 6px;
+}
+
+.compass-root .compass-gl-cond-top {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.compass-root .compass-gl-cond-top select {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.compass-root .compass-gl-cond-remove {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  line-height: 1;
+}
+
+.compass-root .compass-gl-cond input[hidden] {
+  display: none;
+}
+
+.compass-root .compass-gl-colors {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px 8px;
+  border: 1px solid var(--compass-faint);
+  border-radius: 6px;
+}
+
+.compass-root .compass-gl-colors[hidden] {
+  display: none;
+}
+
+.compass-root .compass-gl-color-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.compass-root .compass-gl-color-title {
+  min-width: 48px;
+}
+
+.compass-root .compass-gl-color-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.compass-root .compass-gl-color-picker {
+  width: 30px;
+  height: 22px;
+  padding: 1px;
+  border: 1px solid var(--compass-line);
+  border-radius: 4px;
+  background: var(--compass-paper);
+  cursor: pointer;
+}
+
+.compass-root .compass-gl-color-picker[data-none="true"] {
+  opacity: 0.4;
+}
+
+.compass-root .compass-gl-none {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.compass-root .compass-gl-none input {
+  margin: 0;
+  accent-color: var(--compass-accent);
+}
+
+.compass-root .compass-gl-errors {
+  margin: 0;
+  padding: 5px 8px 5px 22px;
+  border: 1px solid #d9534f;
+  border-radius: 5px;
+  color: #c23030;
+  font-size: 11px;
+}
+
+.compass-root[data-tone="dark"] .compass-gl-errors {
+  border-color: #ff7373;
+  color: #ff8a8a;
+}
+
+.compass-root .compass-gl-errors[hidden] {
+  display: none;
+}
+
+.compass-root .compass-gl-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.compass-root .compass-gl-save {
+  border-color: var(--compass-accent);
+  background: color-mix(in srgb, var(--compass-accent) 14%, var(--compass-paper));
+  font-weight: 600;
+}
+
+.compass-root .compass-gl-import textarea {
+  width: 100%;
+  min-height: 84px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
