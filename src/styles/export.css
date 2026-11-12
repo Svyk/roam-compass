@@ -1,1 +1,223 @@
 /* export */
+.compass-root.compass-export-measuring,
+.compass-root.compass-export-measuring * {
+  transition: none !important;
+  animation: none !important;
+}
+
+.compass-root .compass-export-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 24px;
+  background: color-mix(in srgb, var(--compass-ink) 28%, transparent);
+}
+
+.compass-root .compass-export-backdrop[hidden] {
+  display: none;
+}
+
+.compass-root .compass-export-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-sizing: border-box;
+  width: min(680px, 100%);
+  max-height: 100%;
+  padding: 16px 18px;
+  border: 1px solid var(--compass-line);
+  border-radius: 8px;
+  background: var(--compass-paper);
+  color: var(--compass-ink);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+
+.compass-root .compass-export-dialog-image {
+  width: min(760px, 100%);
+}
+
+.compass-root .compass-export-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.compass-root .compass-export-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.compass-root .compass-export-meta {
+  font-size: 12px;
+  opacity: 0.72;
+  white-space: nowrap;
+}
+
+.compass-root .compass-export-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.compass-root .compass-export-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.compass-root .compass-export-group-label {
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+.compass-root .compass-export-seg {
+  display: inline-flex;
+  border: 1px solid var(--compass-line);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.compass-root .compass-export-seg button {
+  border: 0;
+  border-right: 1px solid var(--compass-faint);
+  border-radius: 0;
+  padding: 4px 10px;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.compass-root .compass-export-seg button:last-child {
+  border-right: 0;
+}
+
+.compass-root .compass-export-seg button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--compass-accent) 16%, var(--compass-paper));
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--compass-accent);
+}
+
+.compass-root .compass-export-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.compass-root .compass-export-toggle[aria-pressed="true"] {
+  border-color: var(--compass-accent);
+  background: color-mix(in srgb, var(--compass-accent) 16%, var(--compass-paper));
+  font-weight: 600;
+}
+
+.compass-root .compass-export-preview {
+  flex: 1 1 auto;
+  min-height: 180px;
+  max-height: 400px;
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  border: 1px solid var(--compass-faint);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--compass-ink) 4%, var(--compass-paper));
+  color: var(--compass-ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre;
+  user-select: text;
+}
+
+.compass-root .compass-export-preview:focus-visible {
+  outline: 2px solid var(--compass-accent);
+  outline-offset: 2px;
+}
+
+.compass-root .compass-export-image-frame {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  max-height: 440px;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--compass-faint);
+  border-radius: 6px;
+  background-color: color-mix(in srgb, var(--compass-ink) 4%, var(--compass-paper));
+}
+
+.compass-root .compass-export-image-frame[data-transparent="true"] {
+  background-image:
+    linear-gradient(45deg, color-mix(in srgb, var(--compass-ink) 10%, transparent) 25%, transparent 25%),
+    linear-gradient(-45deg, color-mix(in srgb, var(--compass-ink) 10%, transparent) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, color-mix(in srgb, var(--compass-ink) 10%, transparent) 75%),
+    linear-gradient(-45deg, transparent 75%, color-mix(in srgb, var(--compass-ink) 10%, transparent) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+.compass-root .compass-export-image-preview {
+  display: block;
+  max-width: 100%;
+  max-height: 410px;
+  width: auto;
+  height: auto;
+  border-radius: 4px;
+  object-fit: contain;
+}
+
+.compass-root .compass-export-image-preview[hidden] {
+  display: none;
+}
+
+.compass-root .compass-export-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.compass-root .compass-export-warnings[hidden] {
+  display: none;
+}
+
+.compass-root .compass-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.compass-root .compass-export-actions button {
+  padding: 4px 12px;
+}
+
+.compass-root .compass-export-primary {
+  border-color: var(--compass-accent);
+  background: color-mix(in srgb, var(--compass-accent) 14%, var(--compass-paper));
+  font-weight: 600;
+}
+
+.compass-root .compass-export-primary:hover {
+  background: color-mix(in srgb, var(--compass-accent) 22%, var(--compass-paper));
+}
