@@ -67,6 +67,8 @@ const ENTITY_PULL = "[:block/uid :node/title :block/string]";
 const GUARD_PULL = "[:block/uid :block/string]";
 const PAGE_ATTRIBUTES_PULL = "[:block/uid {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string]}]}]";
 const PAGE_ATTRIBUTES_CAP = 200;
+const BLOCK_STRINGS_PULL = "[:block/uid :block/string]";
+const BLOCK_STRINGS_CAP = 50;
 const FORBIDDEN_WRITE_TOKENS = [":harc/", ":entity/attrs", ":attr/proxy"];
 
 const MENTION_CAP = 500;
@@ -967,6 +969,34 @@ export function createHost({ lifecycle }) {
     return out;
   }
 
+  function blockStrings(uids) {
+    if (!Array.isArray(uids)) return {};
+    const api = roamApi()?.data;
+    if (typeof api?.pull !== "function") return {};
+    const clean = [];
+    const seen = new Set();
+    for (const uid of uids) {
+      if (typeof uid !== "string" || !uid || seen.has(uid)) continue;
+      seen.add(uid);
+      clean.push(uid);
+      if (clean.length >= BLOCK_STRINGS_CAP) break;
+    }
+    const out = {};
+    for (const uid of clean) {
+      let pulled = null;
+      try {
+        pulled = api.pull(BLOCK_STRINGS_PULL, entityString(uid));
+      } catch (error) {
+        console.error("[compass] block strings", error);
+        continue;
+      }
+      const string = pulled?.[":block/string"];
+      if (typeof string !== "string") continue;
+      out[uid] = string;
+    }
+    return out;
+  }
+
   function applyPlan({ lockUid, guards = [], ops = [] } = {}) {
     const key = typeof lockUid === "string" && lockUid ? lockUid : "plan";
     const task = () => withLock(`compass:${graphName()}:${key}`, async () => {
@@ -1115,6 +1145,7 @@ export function createHost({ lifecycle }) {
     createPage,
     dailyPage,
     pageAttributes,
+    blockStrings,
     applyPlan,
     attributeBlock,
     sourceBlock,
