@@ -191,7 +191,8 @@ async function runScenario({ chromeBin, indexHtmlPath, outDir, name, theme, sett
   const jsonPath = resolve(outDir, `${name}${suffix}.json`);
   await rm(screenshotPath, { force: true });
 
-  const domRun = await runChrome(chromeBin, ["--dump-dom", pageUrl]);
+  let domRun = await runChrome(chromeBin, ["--dump-dom", pageUrl]);
+  if (domRun.timedOut) domRun = await runChrome(chromeBin, ["--dump-dom", pageUrl]);
   let result = null;
 
   if (domRun.timedOut) {
@@ -239,7 +240,12 @@ async function runScenario({ chromeBin, indexHtmlPath, outDir, name, theme, sett
     }
   }
 
-  const shotRun = await runChrome(chromeBin, [`--screenshot=${screenshotPath}`, pageUrl]);
+  // Under heavy machine load Chrome's screenshot process can exit early; the scenario already ran, so retry the picture once.
+  let shotRun = await runChrome(chromeBin, [`--screenshot=${screenshotPath}`, pageUrl]);
+  if (shotRun.timedOut || shotRun.code !== 0) {
+    await rm(screenshotPath, { force: true });
+    shotRun = await runChrome(chromeBin, [`--screenshot=${screenshotPath}`, pageUrl]);
+  }
   if (shotRun.timedOut) {
     result.ok = false;
     result.errors.push(`Chrome --screenshot timed out after ${CHROME_TIMEOUT_MS / 1000}s`);
