@@ -19,6 +19,10 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 - Opening a board in the main window closes Compass first, so the board and the pulsed card are visible.
 
+### Fixed
+
+- A board or card node no longer shows Start writing when the board has no cards.
+
 ## [1.0.0] - 2026-11-11
 
 ### Added

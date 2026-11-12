@@ -15221,7 +15221,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     }
     const emptyUids = /* @__PURE__ */ new Set();
     for (const node of list) {
-      if (node && typeof node.uid === "string" && isEmptyPage(node.kind, emptyCounts[node.uid])) {
+      if (node && typeof node.uid === "string" && emptyNode(node)) {
         emptyUids.add(node.uid);
       }
     }
@@ -15235,6 +15235,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   function rowsFor(uid) {
     if (!openRows.has(uid)) openRows.set(uid, /* @__PURE__ */ new Set());
     return openRows.get(uid);
+  }
+  function emptyNode(node) {
+    if (node?.style === "board" || node?.style === "card") return false;
+    return isEmptyPage(node?.kind, emptyCounts[node?.uid]);
   }
   function rebuild() {
     if (!snapshot || !settings) return;
@@ -16130,7 +16134,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       } else {
         const visible = typeof node.alias === "string" && node.alias ? node.alias : node.title;
         element.replaceChildren(el("span", "compass-node-title", visible));
-        if (isEmptyPage(node.kind, emptyCounts[node.uid])) {
+        if (emptyNode(node)) {
           const start = button("compass-start", "Start writing");
           start.dataset.uid = node.uid;
           element.append(start);
@@ -16168,7 +16172,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       const element = nodeEls.get(node.uid);
       if (!element) continue;
       element.classList.toggle("compass-fade", hidden.has(node.uid));
-      const empty2 = isEmptyPage(node.kind, emptyCounts[node.uid]);
+      const empty2 = emptyNode(node);
       element.classList.toggle("compass-empty-page", empty2);
       if (empty2) element.title = "Empty page";
     }
@@ -16459,7 +16463,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     menuItem("Open in main window", () => openMain(uid));
     const pinned = (settings?.pins ?? []).some((pin) => pin.uid === uid);
     if (nodeKind(uid) === "page" || isCenter) menuItem(pinned ? "Unpin" : "Pin", () => togglePin(uid));
-    if (node && isEmptyPage(node.kind, emptyCounts[node.uid])) menuItem("Start writing", () => openMain(uid));
+    if (node && emptyNode(node)) menuItem("Start writing", () => openMain(uid));
     if (node) menuItem("Why is this here?", () => showDetails(uid, clientX, clientY));
     if (node?.writable) {
       for (const side of ["north", "south", "west", "east"]) {
