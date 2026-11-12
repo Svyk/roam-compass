@@ -1088,6 +1088,11 @@ var DRAWING_ON_PAGE_QUERY = "[:find ?uid ?s :in $ ?title :where [?p :node/title 
 var ATTR_PULL = "[:block/uid {:block/children [:block/uid :block/string :block/order]}]";
 var RECENT_PAGES_QUERY = "[:find ?uid ?title ?edit ?create :where [?e :node/title ?title] [?e :block/uid ?uid] [?e :edit/time ?edit] [?e :create/time ?create]]";
 var RECENT_DRAWINGS_QUERY = `[:find ?uid ?edit :where [?b :block/uid ?uid] [?b :block/string ?s] [(clojure.string/includes? ?s "excalidraw")] [?b :edit/time ?edit]]`;
+var ENTITY_PULL = "[:block/uid :node/title :block/string]";
+var GUARD_PULL = "[:block/uid :block/string]";
+var PAGE_ATTRIBUTES_PULL = "[:block/uid {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string]}]}]";
+var PAGE_ATTRIBUTES_CAP = 200;
+var FORBIDDEN_WRITE_TOKENS = [":harc/", ":entity/attrs", ":attr/proxy"];
 var MENTION_CAP = 500;
 var NAMESPACE_CAP = 200;
 var DAILY_UID = /^(\d{2})-(\d{2})-(\d{4})$/;
@@ -1333,7 +1338,8 @@ function pageByTitle(data, title) {
   try {
     const found = data.pull("[:block/uid :node/title :edit/time :create/time]", `[:node/title "${title.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`);
     return entityOf(found);
-  } catch {
+  } catch (error) {
+    console.error("[compass] page lookup", error);
     return null;
   }
 }
@@ -1439,6 +1445,24 @@ function withLock(name, task) {
     result = await task();
   }).then(() => result);
 }
+function hasForbiddenToken(string) {
+  if (typeof string !== "string") return false;
+  return FORBIDDEN_WRITE_TOKENS.some((token) => string.includes(token));
+}
+function attributeValueOf(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const uid = raw[":block/uid"];
+  if (typeof uid === "string" && uid && typeof raw[":node/title"] === "string") {
+    return { uid, title: raw[":node/title"] };
+  }
+  if (typeof uid === "string" && uid && typeof raw[":block/string"] === "string") {
+    return { uid, text: plainText(raw[":block/string"], 90) };
+  }
+  if (raw[":harc/v-string"] != null) {
+    return { text: String(raw[":harc/v-string"]) };
+  }
+  return null;
+}
 async function applyOp(data, op) {
   if (op.op === "update") {
     await data.block.update({ block: { uid: op.uid, string: op.string } });
@@ -1479,12 +1503,12 @@ function createHost({ lifecycle }) {
     unwatch();
     const api = roamApi()?.data;
     if (!uid || !api?.addPullWatch || !api?.removePullWatch) return;
-    const entity = entityString(uid);
+    const entity2 = entityString(uid);
     const callback = () => onChange();
     for (const pattern of WATCHES) {
       try {
-        api.addPullWatch(pattern, entity, callback);
-        watches.push({ pattern, entity, callback });
+        api.addPullWatch(pattern, entity2, callback);
+        watches.push({ pattern, entity: entity2, callback });
       } catch (error) {
         console.error("[compass] watch failed", error);
       }
@@ -1772,6 +1796,157 @@ function createHost({ lifecycle }) {
     }
     return { pages, drawings };
   }
+  function entity(uid) {
+    if (typeof uid !== "string" || !uid) return null;
+    const api = roamApi()?.data;
+    if (typeof api?.pull !== "function") return null;
+    try {
+      const pulled = api.pull(ENTITY_PULL, entityString(uid));
+      if (!pulled) return null;
+      const resolvedUid = typeof pulled[":block/uid"] === "string" && pulled[":block/uid"] ? pulled[":block/uid"] : uid;
+      if (typeof pulled[":node/title"] === "string") {
+        return { uid: resolvedUid, kind: "page", title: pulled[":node/title"] };
+      }
+      if (typeof pulled[":block/string"] === "string") {
+        const string = pulled[":block/string"];
+        return { uid: resolvedUid, kind: "block", title: drawingTitle(string) ?? plainText(string, 90) };
+      }
+      return null;
+    } catch (error) {
+      console.error("[compass] entity", error);
+      return null;
+    }
+  }
+  function findPageByTitle(title) {
+    if (typeof title !== "string" || !title) return null;
+    const api = roamApi()?.data;
+    if (typeof api?.pull !== "function") return null;
+    const found = pageByTitle(api, title);
+    if (!found || typeof found.uid !== "string" || typeof found.title !== "string") return null;
+    return { uid: found.uid, title: found.title };
+  }
+  async function createPage(title) {
+    if (typeof title !== "string" || !title.trim()) return null;
+    try {
+      const existing = findPageByTitle(title);
+      if (existing?.uid) return existing.uid;
+      const root = roamApi();
+      const create = root?.data?.page?.create;
+      const uid = root?.util?.generateUID?.();
+      if (typeof create !== "function" || typeof uid !== "string" || !uid) return null;
+      await create({ page: { title, uid } });
+      return uid;
+    } catch (error) {
+      console.error("[compass] create page", error);
+      return null;
+    }
+  }
+  function dailyPage(date) {
+    let target = date instanceof Date ? date : new Date(date ?? Date.now());
+    if (Number.isNaN(target.getTime())) target = /* @__PURE__ */ new Date();
+    const fallbackUid = `${pad(target.getMonth() + 1)}-${pad(target.getDate())}-${target.getFullYear()}`;
+    const util = roamApi()?.util;
+    let uid = fallbackUid;
+    if (typeof util?.dateToPageUid === "function") {
+      try {
+        const made = util.dateToPageUid(target);
+        if (typeof made === "string" && made) uid = made;
+      } catch (error) {
+        console.error("[compass] daily page", error);
+      }
+    }
+    let title = uid;
+    if (typeof util?.dateToPageTitle === "function") {
+      try {
+        const named = util.dateToPageTitle(target);
+        if (typeof named === "string" && named) title = named;
+      } catch (error) {
+        console.error("[compass] daily page", error);
+      }
+    }
+    return { uid, title };
+  }
+  function pageAttributes(uids) {
+    if (!Array.isArray(uids)) return {};
+    const api = roamApi()?.data;
+    if (typeof api?.pull !== "function") return {};
+    const clean = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const uid of uids) {
+      if (typeof uid !== "string" || !uid || seen.has(uid)) continue;
+      seen.add(uid);
+      clean.push(uid);
+      if (clean.length >= PAGE_ATTRIBUTES_CAP) break;
+    }
+    const out = {};
+    for (const uid of clean) {
+      const attrs = {};
+      out[uid] = attrs;
+      let pulled = null;
+      try {
+        pulled = api.pull(PAGE_ATTRIBUTES_PULL, entityString(uid));
+      } catch (error) {
+        console.error("[compass] page attributes", error);
+        continue;
+      }
+      for (const harc of asList(pulled?.[":harc/_e"])) {
+        const name = attributeOf(harc);
+        if (!name) continue;
+        const key = name.toLowerCase();
+        let entry = attrs[key];
+        if (!entry) {
+          entry = { name, values: [] };
+          attrs[key] = entry;
+        }
+        for (const raw of asList(harc[":harc/v"])) {
+          const value = attributeValueOf(raw);
+          if (value) entry.values.push(value);
+        }
+      }
+    }
+    return out;
+  }
+  function applyPlan({ lockUid, guards = [], ops = [] } = {}) {
+    const key = typeof lockUid === "string" && lockUid ? lockUid : "plan";
+    const task = () => withLock(`compass:${graphName()}:${key}`, async () => {
+      try {
+        if (!Array.isArray(ops) || !ops.length) return { ok: false, reason: "empty" };
+        if (ops.some((op) => hasForbiddenToken(op?.string))) return { ok: false, reason: "forbidden" };
+        const api = roamApi()?.data;
+        if (!api) return { ok: false, reason: "unavailable" };
+        const guardList = asList(guards);
+        if (guardList.length && typeof api.pull !== "function") return { ok: false, reason: "unavailable" };
+        for (const item of guardList) {
+          if (typeof item?.uid !== "string" || !item.uid) return { ok: false, reason: "missing" };
+          const pulled = pull(api, GUARD_PULL, item.uid);
+          if (!pulled || typeof pulled[":block/string"] !== "string") return { ok: false, reason: "missing" };
+          if (pulled[":block/string"] !== item.string) return { ok: false, reason: "changed" };
+        }
+        const prepared = [];
+        for (const raw of ops) {
+          if (!raw || typeof raw !== "object") return { ok: false, reason: "invalid" };
+          const op = { ...raw };
+          if (op.op === "create" && !op.uid) {
+            const uid = roamApi()?.util?.generateUID?.();
+            if (typeof uid !== "string" || !uid) return { ok: false, reason: "no-uid" };
+            op.uid = uid;
+          }
+          prepared.push(op);
+        }
+        for (const op of prepared) await applyOp(api, op);
+        return { ok: true, ops: prepared };
+      } catch (error) {
+        console.error("[compass] apply plan", error);
+        return { ok: false, reason: "failed" };
+      }
+    });
+    const run = queue.then(task, task).catch((error) => {
+      console.error("[compass] apply plan", error);
+      return { ok: false, reason: "failed" };
+    });
+    queue = run.then(() => void 0, () => void 0);
+    return run;
+  }
   lifecycle.add(() => closeSidecar());
   lifecycle.add(() => unwatch());
   lifecycle.add(() => {
@@ -1797,6 +1972,12 @@ function createHost({ lifecycle }) {
     findDrawingBlock,
     writeZoneAttribute,
     drawingRows,
+    entity,
+    pageByTitle: findPageByTitle,
+    createPage,
+    dailyPage,
+    pageAttributes,
+    applyPlan,
     blockContextMenu() {
       return roamApi()?.ui?.blockContextMenu ?? null;
     }
@@ -2144,6 +2325,31 @@ function emptyQueryRows({ pins = [], today = null, pages = [], drawings = [], li
   return rows;
 }
 
+// src/model/views.js
+var VIEWS = Object.freeze(["compass", "mindmap", "facets"]);
+var VIEW_OPTIONS = Object.freeze([
+  Object.freeze({ view: "compass", id: "view-compass", title: "View: Compass" }),
+  Object.freeze({ view: "mindmap", id: "view-mindmap", title: "View: Mind Map" }),
+  Object.freeze({ view: "facets", id: "view-facets", title: "View: Facets" })
+]);
+function isValidView(value) {
+  return typeof value === "string" && VIEWS.includes(value);
+}
+function normalizeView(value) {
+  return isValidView(value) ? value : "compass";
+}
+function viewEntries(currentView, onSelect) {
+  const active = normalizeView(currentView);
+  return VIEW_OPTIONS.map((item) => ({
+    view: item.view,
+    id: item.id,
+    title: item.title,
+    menuTitle: item.view === active ? `✓ ${item.title}` : item.title,
+    active: item.view === active,
+    run: typeof onSelect === "function" ? () => onSelect(item.view) : void 0
+  }));
+}
+
 // src/settings.js
 var SETTING_IDS = Object.freeze({
   north: "compass-north",
@@ -2165,7 +2371,27 @@ var SETTING_IDS = Object.freeze({
   follow: "compass-follow",
   relatedDrawings: "compass-related-drawings",
   sort: "compass-sort",
-  crossLinks: "compass-cross-links"
+  crossLinks: "compass-cross-links",
+  view: "compass-view",
+  facetsPreset: "compass-facets-preset",
+  facetsPresets: "compass-facets-presets",
+  lenses: "compass-lenses",
+  filterReflow: "compass-filter-reflow",
+  group: "compass-group",
+  expanded: "compass-expanded",
+  typeAttribute: "compass-type-attribute",
+  flip: "compass-flip",
+  oneSided: "compass-one-sided",
+  trackpad: "compass-trackpad",
+  pinToday: "compass-pin-today",
+  pinWeek: "compass-pin-week",
+  pinMonth: "compass-pin-month",
+  weekFormat: "compass-week-format",
+  monthFormat: "compass-month-format",
+  weekStart: "compass-week-start",
+  mindmapDirection: "compass-mindmap-direction",
+  mindmapGenerations: "compass-mindmap-generations",
+  wanderSeconds: "compass-wander-seconds"
 });
 var DEFAULTS = Object.freeze({
   "compass-north": MODEL_DEFAULTS.parent,
@@ -2187,7 +2413,27 @@ var DEFAULTS = Object.freeze({
   "compass-follow": false,
   "compass-related-drawings": true,
   "compass-sort": "connections",
-  "compass-cross-links": false
+  "compass-cross-links": false,
+  "compass-view": "compass",
+  "compass-facets-preset": "roles",
+  "compass-facets-presets": [],
+  "compass-lenses": [],
+  "compass-filter-reflow": false,
+  "compass-group": false,
+  "compass-expanded": false,
+  "compass-type-attribute": "Type",
+  "compass-flip": false,
+  "compass-one-sided": false,
+  "compass-trackpad": false,
+  "compass-pin-today": true,
+  "compass-pin-week": false,
+  "compass-pin-month": false,
+  "compass-week-format": "YYYY-[W]WW",
+  "compass-month-format": "MMMM YYYY",
+  "compass-week-start": "monday",
+  "compass-mindmap-direction": "right",
+  "compass-mindmap-generations": "2",
+  "compass-wander-seconds": "6"
 });
 var SWITCHES = /* @__PURE__ */ new Set([
   SETTING_IDS.links,
@@ -2199,9 +2445,23 @@ var SWITCHES = /* @__PURE__ */ new Set([
   SETTING_IDS.boards,
   SETTING_IDS.follow,
   SETTING_IDS.relatedDrawings,
-  SETTING_IDS.crossLinks
+  SETTING_IDS.crossLinks,
+  SETTING_IDS.filterReflow,
+  SETTING_IDS.group,
+  SETTING_IDS.expanded,
+  SETTING_IDS.flip,
+  SETTING_IDS.oneSided,
+  SETTING_IDS.trackpad,
+  SETTING_IDS.pinToday,
+  SETTING_IDS.pinWeek,
+  SETTING_IDS.pinMonth
 ]);
-var SORTS = Object.freeze(["connections", "name", "edited", "created"]);
+var SELECT_ITEMS = Object.freeze({
+  [SETTING_IDS.sort]: Object.freeze(["connections", "name", "edited", "created"]),
+  [SETTING_IDS.view]: VIEWS,
+  [SETTING_IDS.weekStart]: Object.freeze(["monday", "sunday"]),
+  [SETTING_IDS.mindmapDirection]: Object.freeze(["right", "left", "balanced"])
+});
 var ROWS = [
   [SETTING_IDS.north, "Parents (north)", "Attributes whose value sits above the center. The first one is written when you drag a node north."],
   [SETTING_IDS.south, "Children (south)", "Attributes whose value sits below. Any attribute not listed anywhere also lands here."],
@@ -2222,10 +2482,57 @@ var ROWS = [
   [SETTING_IDS.maxZone, "Nodes per side", "How many nodes a side shows before it offers Show all."],
   [SETTING_IDS.pins, "Pins", "JSON list of {uid, title}. Use the Pin button instead of editing this."],
   [SETTING_IDS.sort, "Sort nodes", "Order inside a side: connections, name, edited, or created."],
-  [SETTING_IDS.crossLinks, "Cross links", "Faint edges between neighbours that reference each other. Off until you turn this on."]
+  [SETTING_IDS.crossLinks, "Cross links", "Faint edges between neighbours that reference each other. Off until you turn this on."],
+  [SETTING_IDS.view, "Canvas view", "Compass shows directions, Mind Map shows a hierarchy, Facets sorts neighbors into categories."],
+  [SETTING_IDS.filterReflow, "Reflow when filtering", "Close the gaps when a filter or lens hides nodes. Off keeps every node in place."],
+  [SETTING_IDS.group, "Group nodes by type", "Fold neighbors of the same type into one group on each side."],
+  [SETTING_IDS.expanded, "Expanded view", "Show each neighbor's children one level further."],
+  [SETTING_IDS.typeAttribute, "Node type attribute", "The attribute whose value names a page's type, used by grouping, lenses and Facets."],
+  [SETTING_IDS.flip, "Flip East–West", "Friends and Previous on the right, Challengers and Next on the left. Meanings stay the same."],
+  [SETTING_IDS.oneSided, "One-sided layout", "Friends and Challengers share one list on the left."],
+  [SETTING_IDS.trackpad, "Trackpad navigation", "Scroll pans and pinch zooms. Off keeps scroll-to-zoom."],
+  [SETTING_IDS.pinToday, "Pin Today", "Keep today's daily note in the pin row."],
+  [SETTING_IDS.pinWeek, "Pin This week", "Keep this week's page in the pin row."],
+  [SETTING_IDS.pinMonth, "Pin This month", "Keep this month's page in the pin row."],
+  [SETTING_IDS.weekFormat, "Week page title", "Title pattern for the weekly page. YYYY, MM, DD, WW, GGGG and [text] are understood."],
+  [SETTING_IDS.monthFormat, "Month page title", "Title pattern for the monthly page."],
+  [SETTING_IDS.weekStart, "Week starts on", "Used by the This week pin."],
+  [SETTING_IDS.mindmapDirection, "Mind Map direction", "Where the child tree grows."],
+  [SETTING_IDS.mindmapGenerations, "Mind Map generations", "How many generations open at first, 1 to 5."],
+  [SETTING_IDS.wanderSeconds, "Wander pace", "Seconds per move, 3 to 15."]
 ];
-function readSort(value) {
-  return SORTS.includes(value) ? value : "connections";
+function readChoice(value, allowed, fallback) {
+  return allowed.includes(value) ? value : fallback;
+}
+function readText(value, fallback) {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return trimmed || fallback;
+}
+function readArray(value) {
+  let list = value;
+  if (typeof value === "string") {
+    try {
+      list = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+  return Array.isArray(list) ? [...list] : [];
+}
+function readClampedInt(value, min, max, fallback) {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return fallback;
+    return Math.min(max, Math.max(min, Math.trunc(value)));
+  }
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text) return fallback;
+    const parsed = Number(text);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(max, Math.max(min, Math.trunc(parsed)));
+  }
+  return fallback;
 }
 function flag2(value, fallback) {
   if (value == null || value === "") return fallback;
@@ -2234,15 +2541,7 @@ function flag2(value, fallback) {
   return Boolean(value);
 }
 function readPins(value) {
-  let list = value;
-  if (typeof value === "string") {
-    try {
-      list = JSON.parse(value);
-    } catch {
-      list = [];
-    }
-  }
-  if (!Array.isArray(list)) return [];
+  const list = readArray(value);
   const seen = /* @__PURE__ */ new Set();
   return list.flatMap((item) => {
     if (!item || typeof item.uid !== "string" || !item.uid || seen.has(item.uid)) return [];
@@ -2270,7 +2569,7 @@ function readCompassSettings(extensionAPI) {
       siblings: flag2(read(SETTING_IDS.siblings), true),
       badges: flag2(read(SETTING_IDS.badges), true),
       maxPerZone: read(SETTING_IDS.maxZone),
-      sort: readSort(read(SETTING_IDS.sort))
+      sort: readChoice(read(SETTING_IDS.sort), SELECT_ITEMS[SETTING_IDS.sort], "connections")
     },
     sidecar: flag2(read(SETTING_IDS.sidecar), true),
     outline: flag2(read(SETTING_IDS.outline), false),
@@ -2279,7 +2578,27 @@ function readCompassSettings(extensionAPI) {
     follow: flag2(read(SETTING_IDS.follow), false),
     relatedDrawings: flag2(read(SETTING_IDS.relatedDrawings), true),
     pins: readPins(read(SETTING_IDS.pins)),
-    crossLinks: flag2(read(SETTING_IDS.crossLinks), false)
+    crossLinks: flag2(read(SETTING_IDS.crossLinks), false),
+    view: readChoice(read(SETTING_IDS.view), SELECT_ITEMS[SETTING_IDS.view], "compass"),
+    facetsPreset: readText(read(SETTING_IDS.facetsPreset), "roles"),
+    facetsPresets: readArray(read(SETTING_IDS.facetsPresets)),
+    lenses: readArray(read(SETTING_IDS.lenses)),
+    filterReflow: flag2(read(SETTING_IDS.filterReflow), false),
+    group: flag2(read(SETTING_IDS.group), false),
+    expanded: flag2(read(SETTING_IDS.expanded), false),
+    typeAttribute: readText(read(SETTING_IDS.typeAttribute), "Type"),
+    flip: flag2(read(SETTING_IDS.flip), false),
+    oneSided: flag2(read(SETTING_IDS.oneSided), false),
+    trackpad: flag2(read(SETTING_IDS.trackpad), false),
+    pinToday: flag2(read(SETTING_IDS.pinToday), true),
+    pinWeek: flag2(read(SETTING_IDS.pinWeek), false),
+    pinMonth: flag2(read(SETTING_IDS.pinMonth), false),
+    weekFormat: readText(read(SETTING_IDS.weekFormat), DEFAULTS[SETTING_IDS.weekFormat]),
+    monthFormat: readText(read(SETTING_IDS.monthFormat), DEFAULTS[SETTING_IDS.monthFormat]),
+    weekStart: readChoice(read(SETTING_IDS.weekStart), SELECT_ITEMS[SETTING_IDS.weekStart], "monday"),
+    mindmapDirection: readChoice(read(SETTING_IDS.mindmapDirection), SELECT_ITEMS[SETTING_IDS.mindmapDirection], "right"),
+    mindmapGenerations: readClampedInt(read(SETTING_IDS.mindmapGenerations), 1, 5, 2),
+    wanderSeconds: readClampedInt(read(SETTING_IDS.wanderSeconds), 3, 15, 6)
   };
 }
 async function writeSetting(extensionAPI, id, value) {
@@ -2296,11 +2615,12 @@ async function initializeSettings(extensionAPI) {
   }
 }
 function settingAction(id, persist) {
-  if (id === SETTING_IDS.sort) {
+  const items = SELECT_ITEMS[id];
+  if (items) {
     return {
       type: "select",
-      items: ["connections", "name", "edited", "created"],
-      onChange: (event) => persist(id, parseInput(id, event?.target?.value))
+      items: [...items],
+      onChange: (event) => persist(id, parseInput(id, typeof event === "string" ? event : event?.target?.value))
     };
   }
   if (SWITCHES.has(id)) {
@@ -2333,6 +2653,198 @@ function createSettingsPanel({ extensionAPI, onChange } = {}) {
     }))
   };
 }
+
+// src/view/features.js
+var SKIPPED = /* @__PURE__ */ Symbol("skipped");
+function createFeatures() {
+  const items = [];
+  function call(feature, hook, args) {
+    try {
+      const fn = feature[hook];
+      if (typeof fn !== "function") return SKIPPED;
+      return feature[hook](...args);
+    } catch (error) {
+      console.error("[compass] feature", feature.name, hook, error);
+      return void 0;
+    }
+  }
+  return {
+    add(feature) {
+      if (feature == null) return null;
+      if (typeof feature !== "object" || typeof feature.name !== "string" || !feature.name) {
+        throw new TypeError("A feature must have a string name");
+      }
+      items.push(feature);
+      return feature;
+    },
+    get(name) {
+      return items.find((feature) => feature.name === name) ?? null;
+    },
+    list() {
+      return [...items];
+    },
+    each(hook, ...args) {
+      for (const feature of items) call(feature, hook, args);
+    },
+    any(hook, ...args) {
+      for (const feature of items) {
+        if (call(feature, hook, args) === true) return true;
+      }
+      return false;
+    },
+    first(hook, ...args) {
+      for (const feature of items) {
+        const result = call(feature, hook, args);
+        if (result !== SKIPPED && result != null) return result;
+      }
+      return null;
+    },
+    pipe(hook, value, ...args) {
+      let current = value;
+      for (const feature of items) {
+        const result = call(feature, hook, [current, ...args]);
+        if (result !== SKIPPED && result != null) current = result;
+      }
+      return current;
+    },
+    collect(hook, ...args) {
+      const out = [];
+      for (const feature of items) {
+        const result = call(feature, hook, args);
+        if (Array.isArray(result)) out.push(...result);
+      }
+      return out;
+    }
+  };
+}
+
+// src/view/features/trail.js
+function createTrail() {
+  return { name: "trail" };
+}
+
+// src/view/features/pins.js
+function createPins() {
+  return { name: "pins" };
+}
+
+// src/view/features/views.js
+function readPreset(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "roles";
+}
+function createViews(ctx) {
+  let view = normalizeView(ctx?.state?.settings?.view);
+  let preset = readPreset(ctx?.state?.settings?.facetsPreset);
+  let saving = 0;
+  function current() {
+    return { view, preset };
+  }
+  function onSettings(settings) {
+    if (!settings || saving > 0) return;
+    view = normalizeView(settings.view);
+    preset = readPreset(settings.facetsPreset);
+  }
+  async function set(nextView, nextPreset) {
+    if (!isValidView(nextView)) return;
+    const hasPreset = typeof nextPreset === "string" && nextPreset.trim() !== "";
+    const targetPreset = hasPreset ? nextPreset.trim() : null;
+    view = nextView;
+    if (hasPreset) preset = targetPreset;
+    saving += 1;
+    try {
+      await ctx?.saveSetting?.(SETTING_IDS.view, nextView);
+      if (hasPreset) await ctx?.saveSetting?.(SETTING_IDS.facetsPreset, targetPreset);
+      ctx?.render?.();
+      ctx?.fit?.(true);
+    } catch (error) {
+      console.error("[compass] views", error);
+    } finally {
+      saving -= 1;
+    }
+  }
+  function commands() {
+    return viewEntries(view, (next) => set(next)).map(({ id, title, run }) => ({
+      id,
+      title,
+      hint: "",
+      run
+    }));
+  }
+  function stageMenu() {
+    return viewEntries(view, (next) => set(next)).map(({ menuTitle, run }) => ({
+      title: menuTitle,
+      run
+    }));
+  }
+  return { name: "views", current, set, onSettings, commands, stageMenu };
+}
+
+// src/view/features/mindmap.js
+function createMindMap() {
+  return { name: "mindmap" };
+}
+
+// src/view/features/facets.js
+function createFacets() {
+  return { name: "facets" };
+}
+
+// src/view/features/lenses.js
+function createLenses() {
+  return { name: "lenses" };
+}
+
+// src/view/features/layout-options.js
+function createLayoutOptions() {
+  return { name: "layout" };
+}
+
+// src/view/features/keys.js
+function createKeys() {
+  return { name: "keys" };
+}
+
+// src/view/features/palette.js
+function createPalette() {
+  return { name: "palette" };
+}
+
+// src/view/features/wander.js
+function createWander() {
+  return { name: "wander" };
+}
+
+// src/view/features/zen.js
+function createZen() {
+  return { name: "zen" };
+}
+
+// src/view/features/export.js
+function createExport() {
+  return { name: "export" };
+}
+
+// src/view/features/edit.js
+function createEdit() {
+  return { name: "edit" };
+}
+
+// src/view/features/index.js
+var FEATURES = Object.freeze([
+  createTrail,
+  createPins,
+  createViews,
+  createMindMap,
+  createFacets,
+  createLenses,
+  createLayoutOptions,
+  createKeys,
+  createPalette,
+  createWander,
+  createZen,
+  createExport,
+  createEdit
+]);
 
 // src/view/hover-dim.js
 var MARKS = ["compass-node-hot", "compass-node-dim", "compass-edge-hot", "compass-edge-dim"];
@@ -2566,6 +3078,15 @@ function describe(item, titleOf2) {
   if (item.note === "mentioned together") return "Mentioned in the same block";
   return item.note === "sibling block" ? "Sibling block" : "Same namespace";
 }
+var TYPING_SELECTOR = 'input, textarea, select, [contenteditable="true"]';
+function isTypingTarget(target) {
+  if (!target || typeof target !== "object") return false;
+  if (typeof target.matches === "function") return target.matches(TYPING_SELECTOR);
+  const tag = String(target.tagName ?? target.tag ?? "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return true;
+  if (target.isContentEditable === true || target.contentEditable === "true") return true;
+  return typeof target.getAttribute === "function" && target.getAttribute("contenteditable") === "true";
+}
 function mountOverlay({ extensionAPI, lifecycle, host }) {
   const doc = globalThis.document;
   if (!doc?.body || typeof doc.createElement !== "function") {
@@ -2590,7 +3111,12 @@ function mountOverlay({ extensionAPI, lifecycle, host }) {
       hideResults() {
       }
     };
-    return { ...view, installCommands: () => registerCommands({ extensionAPI, lifecycle, host, view }) };
+    return {
+      ...view,
+      ctx: null,
+      features: createFeatures(),
+      installCommands: () => registerCommands({ extensionAPI, lifecycle, host, view })
+    };
   }
   return mountReal({ extensionAPI, lifecycle, host });
 }
@@ -2618,17 +3144,6 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   const fitButton = button("compass-fit", "Fit", "Fit the neighborhood");
   const refreshButton = button("compass-refresh", "Refresh", "Read the graph again");
   const linkedButton = button("compass-linked", "Show linked window", "Open this page in the main window");
-  const lensButtons = {};
-  for (const [key, label] of [["pages", "Pages"], ["blocks", "Blocks"], ["drawings", "Drawings"], ["regions", "Regions"]]) {
-    const chip = button("compass-lens", label);
-    chip.dataset.lens = key;
-    chip.setAttribute("aria-pressed", "true");
-    lensButtons[key] = chip;
-  }
-  const lensKeyword = el("input", "compass-lens-keyword");
-  lensKeyword.type = "search";
-  lensKeyword.placeholder = "Filter";
-  lensKeyword.setAttribute("aria-label", "Filter nodes");
   const crossButton = button("compass-cross", "Cross links", "Faint edges between neighbours");
   crossButton.setAttribute("aria-pressed", "false");
   const linksButton = button("compass-with-links", "With links", "Snapshot text includes page links");
@@ -2647,8 +3162,6 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     fitButton,
     refreshButton,
     linkedButton,
-    ...Object.values(lensButtons),
-    lensKeyword,
     crossButton,
     linksButton,
     sendButton,
@@ -2712,6 +3225,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   zoneCreate.disabled = true;
   zonePopEl.append(zoneInput, zoneResults, zoneCreate);
   root.append(bar, pinRow, urls, stage, menu, details, ghost, hover, related, zonePopEl);
+  const features = createFeatures();
   const nodeEls = /* @__PURE__ */ new Map();
   const chipEls = /* @__PURE__ */ new Map();
   const timers = /* @__PURE__ */ new Set();
@@ -2753,6 +3267,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   let hoverX = 0;
   let hoverY = 0;
   let lens = { pages: true, blocks: true, drawings: true, regions: true, keyword: "" };
+  let customView = false;
   let emptyCounts = {};
   let linksMode = false;
   let zoneTarget = null;
@@ -2849,6 +3364,70 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       y: (clientY - rect.top - rect.height / 2 - panY) / zoom
     };
   }
+  function setCamera(camera = {}, glide = false) {
+    if (Number.isFinite(camera?.panX)) panX = camera.panX;
+    if (Number.isFinite(camera?.panY)) panY = camera.panY;
+    if (Number.isFinite(camera?.zoom)) zoom = clamp(camera.zoom, 0.25, 2.5);
+    applyCamera(glide === true);
+  }
+  function setGeometry(next) {
+    geometry = next;
+  }
+  function setLens(patch) {
+    if (patch && typeof patch === "object") {
+      for (const key of ["pages", "blocks", "drawings", "regions"]) {
+        if (key in patch && patch[key] !== void 0) lens[key] = Boolean(patch[key]);
+      }
+      if ("keyword" in patch && patch.keyword !== void 0) lens.keyword = String(patch.keyword);
+    }
+    render();
+  }
+  async function saveSetting(id, value) {
+    await writeSetting(extensionAPI, id, value);
+    const next = readSettings();
+    if (next) settings = next;
+    features.each("onSettings", settings);
+  }
+  function addBarButton(element) {
+    if (!element) return element;
+    if (typeof bar.insertBefore === "function") {
+      bar.insertBefore(element, status);
+      return element;
+    }
+    if (typeof status.before === "function") {
+      status.before(element);
+      return element;
+    }
+    const kids = [...bar.children ?? []].filter((child) => child !== element);
+    const index = kids.indexOf(status);
+    if (index < 0) bar.append(element);
+    else {
+      kids.splice(index, 0, element);
+      bar.replaceChildren(...kids);
+    }
+    return element;
+  }
+  function commands() {
+    return [
+      { id: "back", title: "Back", hint: "Alt+Left", run: () => goBack() },
+      { id: "forward", title: "Forward", hint: "Alt+Right", run: () => goForward() },
+      {
+        id: "find",
+        title: "Find a page",
+        hint: "Cmd/Ctrl+F",
+        run: () => {
+          searchInput.focus();
+          searchInput.select?.();
+        }
+      },
+      { id: "fit", title: "Fit to screen", hint: "", run: () => fit(true) },
+      { id: "refresh", title: "Refresh", hint: "", run: () => load() },
+      { id: "pin", title: "Pin or unpin the center", hint: "", run: () => togglePin() },
+      { id: "outline", title: "Toggle outline", hint: "", run: () => toggleOutline() },
+      { id: "close", title: "Close Compass", hint: "Esc", run: () => close() },
+      ...features.collect("commands")
+    ];
+  }
   function expandedFor(uid) {
     if (!expandedZones.has(uid)) expandedZones.set(uid, /* @__PURE__ */ new Set());
     return expandedZones.get(uid);
@@ -2874,6 +3453,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       boards,
       cards
     });
+    hood = features.pipe("transformHood", hood);
     nodeByUid = new Map(hood.nodes.map((node) => [node.uid, node]));
     try {
       const pageUids = hood.nodes.filter((node) => node.kind === "page").map((node) => node.uid);
@@ -2888,6 +3468,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const next = readSettings();
     if (!next) return;
     settings = next;
+    features.each("onSettings", settings);
     try {
       snapshot = host.snapshot(current, settings.model);
     } catch (error) {
@@ -2933,12 +3514,14 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     sampleTheme();
     root.hidden = false;
     placeFrame();
+    features.each("onOpen");
   }
   function focusUid(uid, options = {}) {
     const record = options.record !== false;
     if (!uid) return;
     if (options.sidecar === true) forceSidecar = true;
     hideFloating();
+    const previous = current;
     if (record && current && current !== uid) {
       back.push(current);
       if (back.length > HISTORY_CAP) back.shift();
@@ -2948,6 +3531,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (changed) openBoardUid = null;
     current = uid;
     reveal();
+    features.each("onNavigate", { uid, previous, changed, record, follow: false });
     host.watch(uid, scheduleReload);
     load({ navigate: changed });
     updateButtons();
@@ -2980,20 +3564,23 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     endDrag();
     setStatus("");
     lens = { pages: true, blocks: true, drawings: true, regions: true, keyword: "" };
-    lensKeyword.value = "";
-    for (const chip of Object.values(lensButtons)) chip.setAttribute("aria-pressed", "true");
     linksMode = false;
     linksButton.setAttribute("aria-pressed", "false");
     emptyCounts = {};
+    features.each("onClose");
   }
   function recenter(uid) {
     if (!uid || root.hidden || lifecycle.disposed) return;
     hideFloating();
+    const previous = current;
+    const changed = current !== uid;
     current = uid;
+    features.each("onNavigate", { uid, previous, changed, record: false, follow: true });
     host.watch(uid, scheduleReload);
     const next = readSettings();
     if (!next) return;
     settings = next;
+    features.each("onSettings", settings);
     try {
       snapshot = host.snapshot(current, settings.model);
     } catch (error) {
@@ -3643,9 +4230,36 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   }
   function render({ navigate = false } = {}) {
     if (!hood) return;
+    const custom = features.first("renderView", { hood, settings, navigate });
+    if (custom) {
+      customView = true;
+      root.dataset.view = custom.view;
+      for (const [uid, element] of nodeEls) {
+        element.remove();
+        dropThumb(uid);
+      }
+      nodeEls.clear();
+      for (const element of chipEls.values()) element.remove();
+      chipEls.clear();
+      edgeLayer.replaceChildren();
+      empty.hidden = true;
+      for (const label of Object.values(zoneCounts)) label.hidden = true;
+      urls.hidden = true;
+      related.hidden = true;
+      geometry = custom.geometry;
+      updateButtons();
+      if (navigate) fit(true);
+      features.each("afterRender", { hood, geometry, boxes: /* @__PURE__ */ new Map(), nodeEls, view: custom.view });
+      return;
+    }
+    if (customView) {
+      customView = false;
+      features.each("clearView");
+    }
+    root.dataset.view = "compass";
     const open = rowsFor(current);
     const rows = settings?.outline ? visibleRows(hood.outline, open) : [];
-    geometry = layout(hood, { rows });
+    geometry = layout(hood, features.pipe("layoutOptions", { rows }));
     const boxes = new Map(geometry.items.map((item) => [item.uid, item]));
     const keep = /* @__PURE__ */ new Set([hood.center.uid, ...boxes.keys()]);
     for (const [uid, element] of nodeEls) {
@@ -3713,7 +4327,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     renderEdges(boxes);
     drawLinkEdges(boxes);
     renderCross(boxes);
-    const hidden = new Set(hiddenUids(hood.nodes, lens));
+    const hidden = new Set(features.pipe("hiddenUids", hiddenUids(hood.nodes, lens), hood));
     for (const node of hood.nodes) {
       const element = nodeEls.get(node.uid);
       if (!element) continue;
@@ -3732,6 +4346,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     }
     updateButtons();
     if (navigate) fit(true);
+    features.each("afterRender", { hood, geometry, boxes, nodeEls, view: "compass" });
   }
   function renderChips() {
     const keep = /* @__PURE__ */ new Set();
@@ -3897,7 +4512,6 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   function renderPins() {
     const pins = settings?.pins ?? [];
     pinRow.replaceChildren();
-    pinRow.hidden = pins.length === 0;
     for (const pin of pins) {
       const chip = el("span", "compass-pin-chip");
       const jump = button("compass-pin-jump", pin.title);
@@ -3907,6 +4521,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       chip.append(jump, remove);
       pinRow.append(chip);
     }
+    features.each("afterPins", { pinRow, pins });
+    pinRow.hidden = (pinRow.childElementCount ?? pinRow.children.length) === 0;
   }
   async function savePins(pins) {
     await writeSetting(extensionAPI, SETTING_IDS.pins, pins);
@@ -4011,6 +4627,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
         if (attribute) menuItem(`Move to ${SIDE_NAME[side]} (${attribute}::)`, () => moveNode(node, side));
       }
     }
+    for (const extra of features.collect("nodeMenu", uid, node)) {
+      if (extra?.title && typeof extra.run === "function") menuItem(extra.title, extra.run);
+    }
     placeFloating(menu, clientX, clientY);
     menu.querySelector("button")?.focus();
   }
@@ -4075,6 +4694,15 @@ function mountReal({ extensionAPI, lifecycle, host }) {
           void openSidebar(item.sourceUid, "block");
         });
         entry.append(open);
+      }
+      for (const action of features.collect("evidenceActions", { node, item })) {
+        if (!action?.title || typeof action.run !== "function") continue;
+        const extra = button("compass-details-open", action.title);
+        extra.addEventListener("click", () => {
+          hideFloating();
+          guard(action.run)();
+        });
+        entry.append(extra);
       }
       list.append(entry);
     }
@@ -4153,14 +4781,14 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const attribute = node?.writable ? targetAttribute(node, side) : null;
     return attribute ? `${SIDE_NAME[side]} · ${attribute}::` : SIDE_NAME[side];
   }
-  function startDrag(state) {
-    state.dragging = true;
+  function startDrag(state2) {
+    state2.dragging = true;
     root.classList.add("compass-dragging");
-    const node = nodeByUid.get(state.uid);
+    const node = nodeByUid.get(state2.uid);
     for (const side of Object.keys(hints)) hints[side].textContent = hintText(side, node);
     ghost.textContent = node?.title ?? "";
     ghost.hidden = false;
-    nodeEls.get(state.uid)?.classList.add("compass-lifted");
+    nodeEls.get(state2.uid)?.classList.add("compass-lifted");
   }
   function endDrag() {
     root.classList.remove("compass-dragging");
@@ -4208,20 +4836,21 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   }
   function onPointerUp(event) {
     if (!pointer) return;
-    const state = pointer;
+    const state2 = pointer;
     pointer = null;
-    if (!state.dragging) return;
+    if (!state2.dragging) return;
     suppressClick = true;
     later(() => {
       suppressClick = false;
     }, 0);
-    if (state.type !== "node") return;
+    if (state2.type !== "node") return;
     endDrag();
     if (event.type === "pointercancel" || !geometry) return;
-    handleDrop(state.uid, sideAt(clientToWorld(event.clientX, event.clientY), geometry.center));
+    handleDrop(state2.uid, sideAt(clientToWorld(event.clientX, event.clientY), geometry.center));
   }
   function onWheel(event) {
     if (root.hidden) return;
+    if (features.any("onWheel", event)) return;
     event.preventDefault();
     const rect = stage.getBoundingClientRect();
     const ox = event.clientX - rect.left - rect.width / 2;
@@ -4243,6 +4872,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   }
   function onStageClick(event) {
     if (suppressClick) return;
+    if (features.any("onStageClick", event)) return;
     const target = event.target;
     const add = target.closest?.(".compass-zone-add");
     if (add) {
@@ -4316,6 +4946,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   }
   function onStageDoubleClick(event) {
     clickTimer = cancel(clickTimer);
+    if (features.any("onStageDoubleClick", event)) return;
     const target = event.target;
     if (target.closest?.(".compass-part, .compass-caret, .compass-chip, .compass-start, .compass-zone-add")) return;
     const row = target.closest?.(".compass-row[data-uid]");
@@ -4331,7 +4962,22 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       return;
     }
     const element = event.target.closest?.(".compass-node, .compass-edge, .compass-row[data-uid]");
-    if (!element) return;
+    if (!element) {
+      if (!stage.contains(event.target)) return;
+      event.preventDefault();
+      hideFloating();
+      let added = 0;
+      for (const item of features.collect("stageMenu", event)) {
+        if (!item?.title || typeof item.run !== "function") continue;
+        menuItem(item.title, item.run);
+        added += 1;
+      }
+      if (added > 0) {
+        placeFloating(menu, event.clientX, event.clientY);
+        menu.querySelector("button")?.focus();
+      }
+      return;
+    }
     event.preventDefault();
     if (element.classList.contains("compass-row")) {
       hideFloating();
@@ -4482,20 +5128,25 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       showHover(hoverNode.dataset.uid, hoverX, hoverY);
     }
     if (!root.contains(event.target) && event.target !== document.body) return;
-    const typing = event.target === searchInput || event.target === zoneInput || event.target === lensKeyword;
+    const typing = isTypingTarget(event.target);
     if (event.key === "Escape") {
       if (!menu.hidden || !details.hidden || !results.hidden || !zonePopEl.hidden) hideFloating();
-      else close();
+      else if (features.any("onEscape", event)) {
+      } else close();
       event.preventDefault();
       return;
     }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
       event.preventDefault();
       searchInput.focus();
-      searchInput.select();
+      searchInput.select?.();
       return;
     }
     if (typing) return;
+    if (features.any("onKey", event)) {
+      event.preventDefault();
+      return;
+    }
     if (event.altKey && event.key === "ArrowLeft") {
       event.preventDefault();
       goBack();
@@ -4532,23 +5183,104 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (event.key !== "Control" && event.key !== "Meta") return;
     clearHover();
   }
+  const dom = Object.freeze({
+    root,
+    bar,
+    stage,
+    world,
+    edgeLayer,
+    pinRow,
+    menu,
+    details,
+    status,
+    searchInput
+  });
+  const state = Object.freeze({
+    get current() {
+      return current;
+    },
+    get hood() {
+      return hood;
+    },
+    get geometry() {
+      return geometry;
+    },
+    get settings() {
+      return settings;
+    },
+    get snapshot() {
+      return snapshot;
+    },
+    get zoom() {
+      return zoom;
+    },
+    get panX() {
+      return panX;
+    },
+    get panY() {
+      return panY;
+    },
+    get isOpen() {
+      return !root.hidden;
+    },
+    get lens() {
+      return { ...lens };
+    },
+    nodeEls,
+    back,
+    forward
+  });
+  const ctx = Object.freeze({
+    extensionAPI,
+    lifecycle,
+    host,
+    features,
+    dom,
+    el,
+    button,
+    svg,
+    guard,
+    clamp,
+    curve,
+    later,
+    cancel,
+    frame,
+    state,
+    titleOf: titleOf2,
+    nodeKind,
+    focusUid,
+    goBack,
+    goForward,
+    load,
+    rebuild,
+    render,
+    fit,
+    close,
+    setStatus,
+    placeFloating,
+    hideFloating,
+    menuItem,
+    showMenu,
+    showDetails,
+    openSidebar,
+    openMain,
+    togglePin,
+    savePins,
+    clientToWorld,
+    setCamera,
+    setGeometry,
+    setLens,
+    saveSetting,
+    addBarButton,
+    commands
+  });
+  for (const create of FEATURES) features.add(create(ctx));
   lifecycle.node(root, document.body);
   lifecycle.event(closeButton, "click", () => close());
   lifecycle.event(backButton, "click", () => goBack());
   lifecycle.event(forwardButton, "click", () => goForward());
   lifecycle.event(pinButton, "click", guard(() => togglePin()));
   lifecycle.event(outlineButton, "click", guard(() => toggleOutline()));
-  for (const [key, chip] of Object.entries(lensButtons)) {
-    lifecycle.event(chip, "click", () => {
-      lens[key] = !lens[key];
-      chip.setAttribute("aria-pressed", lens[key] ? "true" : "false");
-      render();
-    });
-  }
-  lifecycle.event(lensKeyword, "input", () => {
-    lens.keyword = lensKeyword.value;
-    render();
-  });
   lifecycle.event(crossButton, "click", guard(async () => {
     if (!settings) settings = readSettings();
     if (!settings) return;
@@ -4668,7 +5400,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   applyCamera(false);
   updateButtons();
   const view = { repullIfOpen, toggle, focusPage, focusBlock, focusUid, isOpen, hideResults };
-  return { ...view, installCommands: () => registerCommands({ extensionAPI, lifecycle, host, view }) };
+  return { ...view, ctx, features, installCommands: () => registerCommands({ extensionAPI, lifecycle, host, view }) };
 }
 
 // src/extension.js

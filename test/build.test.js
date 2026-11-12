@@ -7,7 +7,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
 
-import { bundleEntry, verifyGeneratedArtifacts } from "../build.mjs";
+import { bundleEntry, renderArtifacts, verifyGeneratedArtifacts } from "../build.mjs";
 
 const run = promisify(execFile);
 const root = new URL("../", import.meta.url);
@@ -132,5 +132,48 @@ test("generated artifact verification detects drift", async () => {
     await assert.rejects(verifyGeneratedArtifacts(copyPath), /artifact drift/i);
   } finally {
     await rm(temporaryParent, { recursive: true, force: true });
+  }
+});
+
+test("CSS concatenation appends src/styles/*.css in ascending filename order and tolerates missing src/styles", async () => {
+  const [{ css }, baseSheet] = await Promise.all([
+    renderArtifacts(rootPath),
+    readFile(resolve(rootPath, "src/extension.css"), "utf8"),
+  ]);
+  assert.equal(css.startsWith(`${baseSheet}\n`), true);
+  assert.equal(css.includes(".compass-lens"), false);
+  assert.equal(css.includes(".compass-lens-keyword"), false);
+
+  const expectedStubs = [
+    "/* edit */",
+    "/* export */",
+    "/* facets */",
+    "/* keys */",
+    "/* layout-options */",
+    "/* lenses */",
+    "/* mindmap */",
+    "/* palette */",
+    "/* pins */",
+    "/* trail */",
+    "/* wander */",
+    "/* zen */",
+  ];
+  let cursor = baseSheet.length;
+  for (const comment of expectedStubs) {
+    const at = css.indexOf(comment, cursor);
+    assert.ok(at >= cursor, `expected ${comment} after offset ${cursor}`);
+    cursor = at + comment.length;
+  }
+
+  const withoutStyles = await fixture({
+    "package.json": JSON.stringify({ name: "fixture", version: "0.0.1" }),
+    "src/extension.js": "export default { onload() {}, onunload() {} };\n",
+    "src/extension.css": ".compass-root { color: inherit; }\n",
+  });
+  try {
+    const rendered = await renderArtifacts(withoutStyles);
+    assert.equal(rendered.css, ".compass-root { color: inherit; }\n");
+  } finally {
+    await rm(withoutStyles, { recursive: true, force: true });
   }
 });

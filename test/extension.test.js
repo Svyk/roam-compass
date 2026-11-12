@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { showBoardPlan } from "../src/model/boards.js";
 import extension from "../src/extension.js";
+import { DEFAULTS, readCompassSettings } from "../src/settings.js";
 
 const SETTING_IDS = [
   "compass-north",
@@ -25,6 +26,23 @@ const SETTING_IDS = [
   "compass-pins",
   "compass-sort",
   "compass-cross-links",
+  "compass-view",
+  "compass-filter-reflow",
+  "compass-group",
+  "compass-expanded",
+  "compass-type-attribute",
+  "compass-flip",
+  "compass-one-sided",
+  "compass-trackpad",
+  "compass-pin-today",
+  "compass-pin-week",
+  "compass-pin-month",
+  "compass-week-format",
+  "compass-month-format",
+  "compass-week-start",
+  "compass-mindmap-direction",
+  "compass-mindmap-generations",
+  "compass-wander-seconds",
 ];
 
 const SWITCH_IDS = [
@@ -38,7 +56,23 @@ const SWITCH_IDS = [
   "compass-follow",
   "compass-related-drawings",
   "compass-cross-links",
+  "compass-filter-reflow",
+  "compass-group",
+  "compass-expanded",
+  "compass-flip",
+  "compass-one-sided",
+  "compass-trackpad",
+  "compass-pin-today",
+  "compass-pin-week",
+  "compass-pin-month",
 ];
+
+const SELECT_ITEMS = {
+  "compass-sort": ["connections", "name", "edited", "created"],
+  "compass-view": ["compass", "mindmap", "facets"],
+  "compass-week-start": ["monday", "sunday"],
+  "compass-mindmap-direction": ["right", "left", "balanced"],
+};
 
 function versionHost() {
   return globalThis.window ?? globalThis;
@@ -184,10 +218,20 @@ test("extension exports the Roam lifecycle contract and survives repeated unload
     assert.equal(api.settings.get("compass-boards"), true);
     assert.equal(api.settings.get("compass-max-zone"), "12");
     assert.deepEqual(api.settings.get("compass-pins"), []);
+    assert.equal(api.settings.get("compass-view"), "compass");
+    assert.equal(api.settings.get("compass-facets-preset"), "roles");
+    assert.deepEqual(api.settings.get("compass-facets-presets"), []);
+    assert.deepEqual(api.settings.get("compass-lenses"), []);
+    assert.equal(api.settings.get("compass-pin-today"), true);
+    assert.equal(api.settings.get("compass-mindmap-generations"), "2");
+    assert.equal(api.settings.get("compass-wander-seconds"), "6");
+    assert.equal(api.panel.settings.length, 37);
     assert.deepEqual(api.panel.settings.map((row) => row.id), SETTING_IDS);
     for (const row of api.panel.settings) {
-      const type = row.id === "compass-sort" ? "select" : SWITCH_IDS.includes(row.id) ? "switch" : "input";
+      const selectItems = SELECT_ITEMS[row.id];
+      const type = selectItems ? "select" : SWITCH_IDS.includes(row.id) ? "switch" : "input";
       assert.equal(row.action.type, type);
+      if (selectItems) assert.deepEqual(row.action.items, selectItems);
     }
     await api.panel.settings.find((row) => row.id === "compass-outline").action.onChange({
       target: { checked: true },
@@ -633,4 +677,106 @@ test("open hides Find a page and Show on board uses the shipped plan", async () 
     else globalThis.dispatchEvent = previousDispatch;
     delete globalThis._listeners;
   }
+});
+
+test("new settings read rules parse JSON arrays, clamp integers, trim strings, and fall back on bad values", () => {
+  const defaults = readCompassSettings({ settings: { get: () => null } });
+  assert.equal(defaults.view, "compass");
+  assert.equal(defaults.facetsPreset, "roles");
+  assert.deepEqual(defaults.facetsPresets, []);
+  assert.deepEqual(defaults.lenses, []);
+  assert.equal(defaults.filterReflow, false);
+  assert.equal(defaults.group, false);
+  assert.equal(defaults.expanded, false);
+  assert.equal(defaults.typeAttribute, "Type");
+  assert.equal(defaults.flip, false);
+  assert.equal(defaults.oneSided, false);
+  assert.equal(defaults.trackpad, false);
+  assert.equal(defaults.pinToday, true);
+  assert.equal(defaults.pinWeek, false);
+  assert.equal(defaults.pinMonth, false);
+  assert.equal(defaults.weekFormat, DEFAULTS["compass-week-format"]);
+  assert.equal(defaults.monthFormat, DEFAULTS["compass-month-format"]);
+  assert.equal(defaults.weekStart, "monday");
+  assert.equal(defaults.mindmapDirection, "right");
+  assert.equal(defaults.mindmapGenerations, 2);
+  assert.equal(defaults.wanderSeconds, 6);
+
+  const bad = new Map([
+    ["compass-view", "diagonal"],
+    ["compass-facets-preset", "   "],
+    ["compass-facets-presets", "{not an array}"],
+    ["compass-lenses", "broken-json"],
+    ["compass-type-attribute", "   "],
+    ["compass-week-format", ""],
+    ["compass-month-format", "  "],
+    ["compass-week-start", "wednesday"],
+    ["compass-mindmap-direction", "up"],
+    ["compass-mindmap-generations", "abc"],
+    ["compass-wander-seconds", ""],
+  ]);
+  const fallback = readCompassSettings({ settings: { get: (key) => bad.get(key) } });
+  assert.equal(fallback.view, "compass");
+  assert.equal(fallback.facetsPreset, "roles");
+  assert.deepEqual(fallback.facetsPresets, []);
+  assert.deepEqual(fallback.lenses, []);
+  assert.equal(fallback.typeAttribute, "Type");
+  assert.equal(fallback.weekFormat, "YYYY-[W]WW");
+  assert.equal(fallback.monthFormat, "MMMM YYYY");
+  assert.equal(fallback.weekStart, "monday");
+  assert.equal(fallback.mindmapDirection, "right");
+  assert.equal(fallback.mindmapGenerations, 2);
+  assert.equal(fallback.wanderSeconds, 6);
+
+  const custom = new Map([
+    ["compass-view", "facets"],
+    ["compass-facets-preset", "projects"],
+    ["compass-facets-presets", JSON.stringify([{ id: "projects", name: "Projects" }])],
+    ["compass-lenses", JSON.stringify([{ id: "pages-only" }])],
+    ["compass-filter-reflow", "on"],
+    ["compass-group", true],
+    ["compass-expanded", 1],
+    ["compass-type-attribute", "  Category  "],
+    ["compass-flip", true],
+    ["compass-one-sided", true],
+    ["compass-trackpad", true],
+    ["compass-pin-today", false],
+    ["compass-pin-week", true],
+    ["compass-pin-month", true],
+    ["compass-week-format", "  GGGG-[W]WW  "],
+    ["compass-month-format", "  YYYY-MM  "],
+    ["compass-week-start", "sunday"],
+    ["compass-mindmap-direction", "balanced"],
+    ["compass-mindmap-generations", "99"],
+    ["compass-wander-seconds", "1"],
+  ]);
+  const parsed = readCompassSettings({ settings: { get: (key) => custom.get(key) } });
+  assert.equal(parsed.view, "facets");
+  assert.equal(parsed.facetsPreset, "projects");
+  assert.deepEqual(parsed.facetsPresets, [{ id: "projects", name: "Projects" }]);
+  assert.deepEqual(parsed.lenses, [{ id: "pages-only" }]);
+  assert.equal(parsed.filterReflow, true);
+  assert.equal(parsed.group, true);
+  assert.equal(parsed.expanded, true);
+  assert.equal(parsed.typeAttribute, "Category");
+  assert.equal(parsed.flip, true);
+  assert.equal(parsed.oneSided, true);
+  assert.equal(parsed.trackpad, true);
+  assert.equal(parsed.pinToday, false);
+  assert.equal(parsed.pinWeek, true);
+  assert.equal(parsed.pinMonth, true);
+  assert.equal(parsed.weekFormat, "GGGG-[W]WW");
+  assert.equal(parsed.monthFormat, "YYYY-MM");
+  assert.equal(parsed.weekStart, "sunday");
+  assert.equal(parsed.mindmapDirection, "balanced");
+  assert.equal(parsed.mindmapGenerations, 5);
+  assert.equal(parsed.wanderSeconds, 3);
+
+  const high = readCompassSettings({
+    settings: {
+      get: (key) => (key === "compass-mindmap-generations" ? "-2" : key === "compass-wander-seconds" ? 42 : null),
+    },
+  });
+  assert.equal(high.mindmapGenerations, 1);
+  assert.equal(high.wanderSeconds, 15);
 });

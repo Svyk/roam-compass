@@ -6,6 +6,8 @@ import { rankDrawings } from "../model/related.js";
 import { crossEdges, hiddenUids, isEmptyPage, planZoneCreate, urlGroups } from "../model/batch7.js";
 import { emptyQueryRows, rankTitles } from "../model/search.js";
 import { readCompassSettings, SETTING_IDS, writeSetting } from "../settings.js";
+import { createFeatures } from "./features.js";
+import { FEATURES } from "./features/index.js";
 import { markHover } from "./hover-dim.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -221,6 +223,17 @@ function describe(item, titleOf) {
   return item.note === "sibling block" ? "Sibling block" : "Same namespace";
 }
 
+const TYPING_SELECTOR = 'input, textarea, select, [contenteditable="true"]';
+
+function isTypingTarget(target) {
+  if (!target || typeof target !== "object") return false;
+  if (typeof target.matches === "function") return target.matches(TYPING_SELECTOR);
+  const tag = String(target.tagName ?? target.tag ?? "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return true;
+  if (target.isContentEditable === true || target.contentEditable === "true") return true;
+  return typeof target.getAttribute === "function" && target.getAttribute("contenteditable") === "true";
+}
+
 export function mountOverlay({ extensionAPI, lifecycle, host }) {
   const doc = globalThis.document;
   if (!doc?.body || typeof doc.createElement !== "function") {
@@ -236,7 +249,12 @@ export function mountOverlay({ extensionAPI, lifecycle, host }) {
       isOpen() { return false; },
       hideResults() {},
     };
-    return { ...view, installCommands: () => registerCommands({ extensionAPI, lifecycle, host, view }) };
+    return {
+      ...view,
+      ctx: null,
+      features: createFeatures(),
+      installCommands: () => registerCommands({ extensionAPI, lifecycle, host, view }),
+    };
   }
   return mountReal({ extensionAPI, lifecycle, host });
 }
@@ -266,17 +284,6 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   const fitButton = button("compass-fit", "Fit", "Fit the neighborhood");
   const refreshButton = button("compass-refresh", "Refresh", "Read the graph again");
   const linkedButton = button("compass-linked", "Show linked window", "Open this page in the main window");
-  const lensButtons = {};
-  for (const [key, label] of [["pages", "Pages"], ["blocks", "Blocks"], ["drawings", "Drawings"], ["regions", "Regions"]]) {
-    const chip = button("compass-lens", label);
-    chip.dataset.lens = key;
-    chip.setAttribute("aria-pressed", "true");
-    lensButtons[key] = chip;
-  }
-  const lensKeyword = el("input", "compass-lens-keyword");
-  lensKeyword.type = "search";
-  lensKeyword.placeholder = "Filter";
-  lensKeyword.setAttribute("aria-label", "Filter nodes");
   const crossButton = button("compass-cross", "Cross links", "Faint edges between neighbours");
   crossButton.setAttribute("aria-pressed", "false");
   const linksButton = button("compass-with-links", "With links", "Snapshot text includes page links");
@@ -288,7 +295,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   const closeButton = button("compass-close", "Close", "Close (Esc)");
   bar.append(
     backButton, forwardButton, find, pinButton, outlineButton, fitButton, refreshButton, linkedButton,
-    ...Object.values(lensButtons), lensKeyword, crossButton, linksButton, sendButton, status, closeButton,
+    crossButton, linksButton, sendButton, status, closeButton,
   );
 
   const pinRow = el("div", "compass-pins");
@@ -351,6 +358,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   zonePopEl.append(zoneInput, zoneResults, zoneCreate);
   root.append(bar, pinRow, urls, stage, menu, details, ghost, hover, related, zonePopEl);
 
+  const features = createFeatures();
   const nodeEls = new Map();
   const chipEls = new Map();
   const timers = new Set();
@@ -392,6 +400,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   let hoverX = 0;
   let hoverY = 0;
   let lens = { pages: true, blocks: true, drawings: true, regions: true, keyword: "" };
+  let customView = false;
   let emptyCounts = {};
   let linksMode = false;
   let zoneTarget = null;
@@ -501,6 +510,76 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     };
   }
 
+  function setCamera(camera = {}, glide = false) {
+    if (Number.isFinite(camera?.panX)) panX = camera.panX;
+    if (Number.isFinite(camera?.panY)) panY = camera.panY;
+    if (Number.isFinite(camera?.zoom)) zoom = clamp(camera.zoom, 0.25, 2.5);
+    applyCamera(glide === true);
+  }
+
+  function setGeometry(next) {
+    geometry = next;
+  }
+
+  function setLens(patch) {
+    if (patch && typeof patch === "object") {
+      for (const key of ["pages", "blocks", "drawings", "regions"]) {
+        if (key in patch && patch[key] !== undefined) lens[key] = Boolean(patch[key]);
+      }
+      if ("keyword" in patch && patch.keyword !== undefined) lens.keyword = String(patch.keyword);
+    }
+    render();
+  }
+
+  async function saveSetting(id, value) {
+    await writeSetting(extensionAPI, id, value);
+    const next = readSettings();
+    if (next) settings = next;
+    features.each("onSettings", settings);
+  }
+
+  function addBarButton(element) {
+    if (!element) return element;
+    if (typeof bar.insertBefore === "function") {
+      bar.insertBefore(element, status);
+      return element;
+    }
+    if (typeof status.before === "function") {
+      status.before(element);
+      return element;
+    }
+    const kids = [...(bar.children ?? [])].filter((child) => child !== element);
+    const index = kids.indexOf(status);
+    if (index < 0) bar.append(element);
+    else {
+      kids.splice(index, 0, element);
+      bar.replaceChildren(...kids);
+    }
+    return element;
+  }
+
+  function commands() {
+    return [
+      { id: "back", title: "Back", hint: "Alt+Left", run: () => goBack() },
+      { id: "forward", title: "Forward", hint: "Alt+Right", run: () => goForward() },
+      {
+        id: "find",
+        title: "Find a page",
+        hint: "Cmd/Ctrl+F",
+        run: () => {
+          searchInput.focus();
+          searchInput.select?.();
+        },
+      },
+      { id: "fit", title: "Fit to screen", hint: "", run: () => fit(true) },
+      { id: "refresh", title: "Refresh", hint: "", run: () => load() },
+      { id: "pin", title: "Pin or unpin the center", hint: "", run: () => togglePin() },
+      { id: "outline", title: "Toggle outline", hint: "", run: () => toggleOutline() },
+      { id: "close", title: "Close Compass", hint: "Esc", run: () => close() },
+      ...features.collect("commands"),
+    ];
+  }
+
   // ---- loading ----
 
   function expandedFor(uid) {
@@ -530,6 +609,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       boards,
       cards,
     });
+    hood = features.pipe("transformHood", hood);
     nodeByUid = new Map(hood.nodes.map((node) => [node.uid, node]));
     try {
       const pageUids = hood.nodes.filter((node) => node.kind === "page").map((node) => node.uid);
@@ -545,6 +625,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const next = readSettings();
     if (!next) return;
     settings = next;
+    features.each("onSettings", settings);
     try {
       snapshot = host.snapshot(current, settings.model);
     } catch (error) {
@@ -596,6 +677,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     sampleTheme();
     root.hidden = false;
     placeFrame();
+    features.each("onOpen");
   }
 
   function focusUid(uid, options = {}) {
@@ -603,6 +685,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (!uid) return;
     if (options.sidecar === true) forceSidecar = true;
     hideFloating();
+    const previous = current;
     if (record && current && current !== uid) {
       back.push(current);
       if (back.length > HISTORY_CAP) back.shift();
@@ -612,6 +695,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (changed) openBoardUid = null;
     current = uid;
     reveal();
+    features.each("onNavigate", { uid, previous, changed, record, follow: false });
     host.watch(uid, scheduleReload);
     load({ navigate: changed });
     updateButtons();
@@ -647,21 +731,24 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     endDrag();
     setStatus("");
     lens = { pages: true, blocks: true, drawings: true, regions: true, keyword: "" };
-    lensKeyword.value = "";
-    for (const chip of Object.values(lensButtons)) chip.setAttribute("aria-pressed", "true");
     linksMode = false;
     linksButton.setAttribute("aria-pressed", "false");
     emptyCounts = {};
+    features.each("onClose");
   }
 
   function recenter(uid) {
     if (!uid || root.hidden || lifecycle.disposed) return;
     hideFloating();
+    const previous = current;
+    const changed = current !== uid;
     current = uid;
+    features.each("onNavigate", { uid, previous, changed, record: false, follow: true });
     host.watch(uid, scheduleReload);
     const next = readSettings();
     if (!next) return;
     settings = next;
+    features.each("onSettings", settings);
     try {
       snapshot = host.snapshot(current, settings.model);
     } catch (error) {
@@ -1345,9 +1432,36 @@ function mountReal({ extensionAPI, lifecycle, host }) {
 
   function render({ navigate = false } = {}) {
     if (!hood) return;
+    const custom = features.first("renderView", { hood, settings, navigate });
+    if (custom) {
+      customView = true;
+      root.dataset.view = custom.view;
+      for (const [uid, element] of nodeEls) {
+        element.remove();
+        dropThumb(uid);
+      }
+      nodeEls.clear();
+      for (const element of chipEls.values()) element.remove();
+      chipEls.clear();
+      edgeLayer.replaceChildren();
+      empty.hidden = true;
+      for (const label of Object.values(zoneCounts)) label.hidden = true;
+      urls.hidden = true;
+      related.hidden = true;
+      geometry = custom.geometry;
+      updateButtons();
+      if (navigate) fit(true);
+      features.each("afterRender", { hood, geometry, boxes: new Map(), nodeEls, view: custom.view });
+      return;
+    }
+    if (customView) {
+      customView = false;
+      features.each("clearView");
+    }
+    root.dataset.view = "compass";
     const open = rowsFor(current);
     const rows = settings?.outline ? visibleRows(hood.outline, open) : [];
-    geometry = layout(hood, { rows });
+    geometry = layout(hood, features.pipe("layoutOptions", { rows }));
     const boxes = new Map(geometry.items.map((item) => [item.uid, item]));
     const keep = new Set([hood.center.uid, ...boxes.keys()]);
 
@@ -1419,7 +1533,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     renderEdges(boxes);
     drawLinkEdges(boxes);
     renderCross(boxes);
-    const hidden = new Set(hiddenUids(hood.nodes, lens));
+    const hidden = new Set(features.pipe("hiddenUids", hiddenUids(hood.nodes, lens), hood));
     for (const node of hood.nodes) {
       const element = nodeEls.get(node.uid);
       if (!element) continue;
@@ -1438,6 +1552,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     }
     updateButtons();
     if (navigate) fit(true);
+    features.each("afterRender", { hood, geometry, boxes, nodeEls, view: "compass" });
   }
 
   function renderChips() {
@@ -1610,7 +1725,6 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   function renderPins() {
     const pins = settings?.pins ?? [];
     pinRow.replaceChildren();
-    pinRow.hidden = pins.length === 0;
     for (const pin of pins) {
       const chip = el("span", "compass-pin-chip");
       const jump = button("compass-pin-jump", pin.title);
@@ -1620,6 +1734,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       chip.append(jump, remove);
       pinRow.append(chip);
     }
+    features.each("afterPins", { pinRow, pins });
+    pinRow.hidden = (pinRow.childElementCount ?? pinRow.children.length) === 0;
   }
 
   async function savePins(pins) {
@@ -1737,6 +1853,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
         if (attribute) menuItem(`Move to ${SIDE_NAME[side]} (${attribute}::)`, () => moveNode(node, side));
       }
     }
+    for (const extra of features.collect("nodeMenu", uid, node)) {
+      if (extra?.title && typeof extra.run === "function") menuItem(extra.title, extra.run);
+    }
     placeFloating(menu, clientX, clientY);
     menu.querySelector("button")?.focus();
   }
@@ -1804,6 +1923,15 @@ function mountReal({ extensionAPI, lifecycle, host }) {
         const open = button("compass-details-open", "Open block");
         open.addEventListener("click", () => { void openSidebar(item.sourceUid, "block"); });
         entry.append(open);
+      }
+      for (const action of features.collect("evidenceActions", { node, item })) {
+        if (!action?.title || typeof action.run !== "function") continue;
+        const extra = button("compass-details-open", action.title);
+        extra.addEventListener("click", () => {
+          hideFloating();
+          guard(action.run)();
+        });
+        entry.append(extra);
       }
       list.append(entry);
     }
@@ -1963,6 +2091,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
 
   function onWheel(event) {
     if (root.hidden) return;
+    if (features.any("onWheel", event)) return;
     event.preventDefault();
     const rect = stage.getBoundingClientRect();
     const ox = event.clientX - rect.left - rect.width / 2;
@@ -1990,6 +2119,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
 
   function onStageClick(event) {
     if (suppressClick) return;
+    if (features.any("onStageClick", event)) return;
     const target = event.target;
     const add = target.closest?.(".compass-zone-add");
     if (add) {
@@ -2064,6 +2194,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
 
   function onStageDoubleClick(event) {
     clickTimer = cancel(clickTimer);
+    if (features.any("onStageDoubleClick", event)) return;
     const target = event.target;
     if (target.closest?.(".compass-part, .compass-caret, .compass-chip, .compass-start, .compass-zone-add")) return;
     const row = target.closest?.(".compass-row[data-uid]");
@@ -2080,7 +2211,22 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       return;
     }
     const element = event.target.closest?.(".compass-node, .compass-edge, .compass-row[data-uid]");
-    if (!element) return;
+    if (!element) {
+      if (!stage.contains(event.target)) return;
+      event.preventDefault();
+      hideFloating();
+      let added = 0;
+      for (const item of features.collect("stageMenu", event)) {
+        if (!item?.title || typeof item.run !== "function") continue;
+        menuItem(item.title, item.run);
+        added += 1;
+      }
+      if (added > 0) {
+        placeFloating(menu, event.clientX, event.clientY);
+        menu.querySelector("button")?.focus();
+      }
+      return;
+    }
     event.preventDefault();
     if (element.classList.contains("compass-row")) {
       hideFloating();
@@ -2248,9 +2394,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     }
     // Keys typed in Roam itself (the sidecar, a block) belong to Roam.
     if (!root.contains(event.target) && event.target !== document.body) return;
-    const typing = event.target === searchInput || event.target === zoneInput || event.target === lensKeyword;
+    const typing = isTypingTarget(event.target);
     if (event.key === "Escape") {
       if (!menu.hidden || !details.hidden || !results.hidden || !zonePopEl.hidden) hideFloating();
+      else if (features.any("onEscape", event)) { /* consumed */ }
       else close();
       event.preventDefault();
       return;
@@ -2258,10 +2405,14 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
       event.preventDefault();
       searchInput.focus();
-      searchInput.select();
+      searchInput.select?.();
       return;
     }
     if (typing) return;
+    if (features.any("onKey", event)) {
+      event.preventDefault();
+      return;
+    }
     if (event.altKey && event.key === "ArrowLeft") {
       event.preventDefault();
       goBack();
@@ -2300,6 +2451,79 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     clearHover();
   }
 
+  const dom = Object.freeze({
+    root,
+    bar,
+    stage,
+    world,
+    edgeLayer,
+    pinRow,
+    menu,
+    details,
+    status,
+    searchInput,
+  });
+  const state = Object.freeze({
+    get current() { return current; },
+    get hood() { return hood; },
+    get geometry() { return geometry; },
+    get settings() { return settings; },
+    get snapshot() { return snapshot; },
+    get zoom() { return zoom; },
+    get panX() { return panX; },
+    get panY() { return panY; },
+    get isOpen() { return !root.hidden; },
+    get lens() { return { ...lens }; },
+    nodeEls,
+    back,
+    forward,
+  });
+  const ctx = Object.freeze({
+    extensionAPI,
+    lifecycle,
+    host,
+    features,
+    dom,
+    el,
+    button,
+    svg,
+    guard,
+    clamp,
+    curve,
+    later,
+    cancel,
+    frame,
+    state,
+    titleOf,
+    nodeKind,
+    focusUid,
+    goBack,
+    goForward,
+    load,
+    rebuild,
+    render,
+    fit,
+    close,
+    setStatus,
+    placeFloating,
+    hideFloating,
+    menuItem,
+    showMenu,
+    showDetails,
+    openSidebar,
+    openMain,
+    togglePin,
+    savePins,
+    clientToWorld,
+    setCamera,
+    setGeometry,
+    setLens,
+    saveSetting,
+    addBarButton,
+    commands,
+  });
+  for (const create of FEATURES) features.add(create(ctx));
+
   // ---- wiring ----
 
   lifecycle.node(root, document.body);
@@ -2308,17 +2532,6 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   lifecycle.event(forwardButton, "click", () => goForward());
   lifecycle.event(pinButton, "click", guard(() => togglePin()));
   lifecycle.event(outlineButton, "click", guard(() => toggleOutline()));
-  for (const [key, chip] of Object.entries(lensButtons)) {
-    lifecycle.event(chip, "click", () => {
-      lens[key] = !lens[key];
-      chip.setAttribute("aria-pressed", lens[key] ? "true" : "false");
-      render();
-    });
-  }
-  lifecycle.event(lensKeyword, "input", () => {
-    lens.keyword = lensKeyword.value;
-    render();
-  });
   lifecycle.event(crossButton, "click", guard(async () => {
     if (!settings) settings = readSettings();
     if (!settings) return;
@@ -2432,5 +2645,5 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   updateButtons();
 
   const view = { repullIfOpen, toggle, focusPage, focusBlock, focusUid, isOpen, hideResults };
-  return { ...view, installCommands: () => registerCommands({ extensionAPI, lifecycle, host, view }) };
+  return { ...view, ctx, features, installCommands: () => registerCommands({ extensionAPI, lifecycle, host, view }) };
 }

@@ -61,6 +61,11 @@ const DRAWING_ON_PAGE_QUERY = "[:find ?uid ?s :in $ ?title :where [?p :node/titl
 const ATTR_PULL = "[:block/uid {:block/children [:block/uid :block/string :block/order]}]";
 const RECENT_PAGES_QUERY = "[:find ?uid ?title ?edit ?create :where [?e :node/title ?title] [?e :block/uid ?uid] [?e :edit/time ?edit] [?e :create/time ?create]]";
 const RECENT_DRAWINGS_QUERY = `[:find ?uid ?edit :where [?b :block/uid ?uid] [?b :block/string ?s] [(clojure.string/includes? ?s "excalidraw")] [?b :edit/time ?edit]]`;
+const ENTITY_PULL = "[:block/uid :node/title :block/string]";
+const GUARD_PULL = "[:block/uid :block/string]";
+const PAGE_ATTRIBUTES_PULL = "[:block/uid {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string]}]}]";
+const PAGE_ATTRIBUTES_CAP = 200;
+const FORBIDDEN_WRITE_TOKENS = [":harc/", ":entity/attrs", ":attr/proxy"];
 
 const MENTION_CAP = 500;
 const NAMESPACE_CAP = 200;
@@ -344,7 +349,8 @@ function pageByTitle(data, title) {
   try {
     const found = data.pull("[:block/uid :node/title :edit/time :create/time]", `[:node/title "${title.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"]`);
     return entityOf(found);
-  } catch {
+  } catch (error) {
+    console.error("[compass] page lookup", error);
     return null;
   }
 }
@@ -457,6 +463,26 @@ function withLock(name, task) {
     if (!lock) return;
     result = await task();
   }).then(() => result);
+}
+
+function hasForbiddenToken(string) {
+  if (typeof string !== "string") return false;
+  return FORBIDDEN_WRITE_TOKENS.some((token) => string.includes(token));
+}
+
+function attributeValueOf(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const uid = raw[":block/uid"];
+  if (typeof uid === "string" && uid && typeof raw[":node/title"] === "string") {
+    return { uid, title: raw[":node/title"] };
+  }
+  if (typeof uid === "string" && uid && typeof raw[":block/string"] === "string") {
+    return { uid, text: plainText(raw[":block/string"], 90) };
+  }
+  if (raw[":harc/v-string"] != null) {
+    return { text: String(raw[":harc/v-string"]) };
+  }
+  return null;
 }
 
 async function applyOp(data, op) {
@@ -823,6 +849,163 @@ export function createHost({ lifecycle }) {
     return { pages, drawings };
   }
 
+  function entity(uid) {
+    if (typeof uid !== "string" || !uid) return null;
+    const api = roamApi()?.data;
+    if (typeof api?.pull !== "function") return null;
+    try {
+      const pulled = api.pull(ENTITY_PULL, entityString(uid));
+      if (!pulled) return null;
+      const resolvedUid = typeof pulled[":block/uid"] === "string" && pulled[":block/uid"] ? pulled[":block/uid"] : uid;
+      if (typeof pulled[":node/title"] === "string") {
+        return { uid: resolvedUid, kind: "page", title: pulled[":node/title"] };
+      }
+      if (typeof pulled[":block/string"] === "string") {
+        const string = pulled[":block/string"];
+        return { uid: resolvedUid, kind: "block", title: drawingTitle(string) ?? plainText(string, 90) };
+      }
+      return null;
+    } catch (error) {
+      console.error("[compass] entity", error);
+      return null;
+    }
+  }
+
+  function findPageByTitle(title) {
+    if (typeof title !== "string" || !title) return null;
+    const api = roamApi()?.data;
+    if (typeof api?.pull !== "function") return null;
+    const found = pageByTitle(api, title);
+    if (!found || typeof found.uid !== "string" || typeof found.title !== "string") return null;
+    return { uid: found.uid, title: found.title };
+  }
+
+  async function createPage(title) {
+    if (typeof title !== "string" || !title.trim()) return null;
+    try {
+      const existing = findPageByTitle(title);
+      if (existing?.uid) return existing.uid;
+      const root = roamApi();
+      const create = root?.data?.page?.create;
+      const uid = root?.util?.generateUID?.();
+      if (typeof create !== "function" || typeof uid !== "string" || !uid) return null;
+      await create({ page: { title, uid } });
+      return uid;
+    } catch (error) {
+      console.error("[compass] create page", error);
+      return null;
+    }
+  }
+
+  function dailyPage(date) {
+    let target = date instanceof Date ? date : new Date(date ?? Date.now());
+    if (Number.isNaN(target.getTime())) target = new Date();
+    const fallbackUid = `${pad(target.getMonth() + 1)}-${pad(target.getDate())}-${target.getFullYear()}`;
+    const util = roamApi()?.util;
+    let uid = fallbackUid;
+    if (typeof util?.dateToPageUid === "function") {
+      try {
+        const made = util.dateToPageUid(target);
+        if (typeof made === "string" && made) uid = made;
+      } catch (error) {
+        console.error("[compass] daily page", error);
+      }
+    }
+    let title = uid;
+    if (typeof util?.dateToPageTitle === "function") {
+      try {
+        const named = util.dateToPageTitle(target);
+        if (typeof named === "string" && named) title = named;
+      } catch (error) {
+        console.error("[compass] daily page", error);
+      }
+    }
+    return { uid, title };
+  }
+
+  function pageAttributes(uids) {
+    if (!Array.isArray(uids)) return {};
+    const api = roamApi()?.data;
+    if (typeof api?.pull !== "function") return {};
+    const clean = [];
+    const seen = new Set();
+    for (const uid of uids) {
+      if (typeof uid !== "string" || !uid || seen.has(uid)) continue;
+      seen.add(uid);
+      clean.push(uid);
+      if (clean.length >= PAGE_ATTRIBUTES_CAP) break;
+    }
+    const out = {};
+    for (const uid of clean) {
+      const attrs = {};
+      out[uid] = attrs;
+      let pulled = null;
+      try {
+        pulled = api.pull(PAGE_ATTRIBUTES_PULL, entityString(uid));
+      } catch (error) {
+        console.error("[compass] page attributes", error);
+        continue;
+      }
+      for (const harc of asList(pulled?.[":harc/_e"])) {
+        const name = attributeOf(harc);
+        if (!name) continue;
+        const key = name.toLowerCase();
+        let entry = attrs[key];
+        if (!entry) {
+          entry = { name, values: [] };
+          attrs[key] = entry;
+        }
+        for (const raw of asList(harc[":harc/v"])) {
+          const value = attributeValueOf(raw);
+          if (value) entry.values.push(value);
+        }
+      }
+    }
+    return out;
+  }
+
+  function applyPlan({ lockUid, guards = [], ops = [] } = {}) {
+    const key = typeof lockUid === "string" && lockUid ? lockUid : "plan";
+    const task = () => withLock(`compass:${graphName()}:${key}`, async () => {
+      try {
+        if (!Array.isArray(ops) || !ops.length) return { ok: false, reason: "empty" };
+        if (ops.some((op) => hasForbiddenToken(op?.string))) return { ok: false, reason: "forbidden" };
+        const api = roamApi()?.data;
+        if (!api) return { ok: false, reason: "unavailable" };
+        const guardList = asList(guards);
+        if (guardList.length && typeof api.pull !== "function") return { ok: false, reason: "unavailable" };
+        for (const item of guardList) {
+          if (typeof item?.uid !== "string" || !item.uid) return { ok: false, reason: "missing" };
+          const pulled = pull(api, GUARD_PULL, item.uid);
+          if (!pulled || typeof pulled[":block/string"] !== "string") return { ok: false, reason: "missing" };
+          if (pulled[":block/string"] !== item.string) return { ok: false, reason: "changed" };
+        }
+        const prepared = [];
+        for (const raw of ops) {
+          if (!raw || typeof raw !== "object") return { ok: false, reason: "invalid" };
+          const op = { ...raw };
+          if (op.op === "create" && !op.uid) {
+            const uid = roamApi()?.util?.generateUID?.();
+            if (typeof uid !== "string" || !uid) return { ok: false, reason: "no-uid" };
+            op.uid = uid;
+          }
+          prepared.push(op);
+        }
+        for (const op of prepared) await applyOp(api, op);
+        return { ok: true, ops: prepared };
+      } catch (error) {
+        console.error("[compass] apply plan", error);
+        return { ok: false, reason: "failed" };
+      }
+    });
+    const run = queue.then(task, task).catch((error) => {
+      console.error("[compass] apply plan", error);
+      return { ok: false, reason: "failed" };
+    });
+    queue = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
   lifecycle.add(() => closeSidecar());
   lifecycle.add(() => unwatch());
   lifecycle.add(() => { alive = false; });
@@ -847,6 +1030,12 @@ export function createHost({ lifecycle }) {
     findDrawingBlock,
     writeZoneAttribute,
     drawingRows,
+    entity,
+    pageByTitle: findPageByTitle,
+    createPage,
+    dailyPage,
+    pageAttributes,
+    applyPlan,
     blockContextMenu() {
       return roamApi()?.ui?.blockContextMenu ?? null;
     },

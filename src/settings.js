@@ -1,4 +1,5 @@
 import { MODEL_DEFAULTS } from "./model/neighborhood.js";
+import { VIEWS } from "./model/views.js";
 
 export const SETTING_IDS = Object.freeze({
   north: "compass-north",
@@ -21,6 +22,26 @@ export const SETTING_IDS = Object.freeze({
   relatedDrawings: "compass-related-drawings",
   sort: "compass-sort",
   crossLinks: "compass-cross-links",
+  view: "compass-view",
+  facetsPreset: "compass-facets-preset",
+  facetsPresets: "compass-facets-presets",
+  lenses: "compass-lenses",
+  filterReflow: "compass-filter-reflow",
+  group: "compass-group",
+  expanded: "compass-expanded",
+  typeAttribute: "compass-type-attribute",
+  flip: "compass-flip",
+  oneSided: "compass-one-sided",
+  trackpad: "compass-trackpad",
+  pinToday: "compass-pin-today",
+  pinWeek: "compass-pin-week",
+  pinMonth: "compass-pin-month",
+  weekFormat: "compass-week-format",
+  monthFormat: "compass-month-format",
+  weekStart: "compass-week-start",
+  mindmapDirection: "compass-mindmap-direction",
+  mindmapGenerations: "compass-mindmap-generations",
+  wanderSeconds: "compass-wander-seconds",
 });
 
 export const DEFAULTS = Object.freeze({
@@ -44,6 +65,26 @@ export const DEFAULTS = Object.freeze({
   "compass-related-drawings": true,
   "compass-sort": "connections",
   "compass-cross-links": false,
+  "compass-view": "compass",
+  "compass-facets-preset": "roles",
+  "compass-facets-presets": [],
+  "compass-lenses": [],
+  "compass-filter-reflow": false,
+  "compass-group": false,
+  "compass-expanded": false,
+  "compass-type-attribute": "Type",
+  "compass-flip": false,
+  "compass-one-sided": false,
+  "compass-trackpad": false,
+  "compass-pin-today": true,
+  "compass-pin-week": false,
+  "compass-pin-month": false,
+  "compass-week-format": "YYYY-[W]WW",
+  "compass-month-format": "MMMM YYYY",
+  "compass-week-start": "monday",
+  "compass-mindmap-direction": "right",
+  "compass-mindmap-generations": "2",
+  "compass-wander-seconds": "6",
 });
 
 const SWITCHES = new Set([
@@ -57,9 +98,23 @@ const SWITCHES = new Set([
   SETTING_IDS.follow,
   SETTING_IDS.relatedDrawings,
   SETTING_IDS.crossLinks,
+  SETTING_IDS.filterReflow,
+  SETTING_IDS.group,
+  SETTING_IDS.expanded,
+  SETTING_IDS.flip,
+  SETTING_IDS.oneSided,
+  SETTING_IDS.trackpad,
+  SETTING_IDS.pinToday,
+  SETTING_IDS.pinWeek,
+  SETTING_IDS.pinMonth,
 ]);
 
-const SORTS = Object.freeze(["connections", "name", "edited", "created"]);
+const SELECT_ITEMS = Object.freeze({
+  [SETTING_IDS.sort]: Object.freeze(["connections", "name", "edited", "created"]),
+  [SETTING_IDS.view]: VIEWS,
+  [SETTING_IDS.weekStart]: Object.freeze(["monday", "sunday"]),
+  [SETTING_IDS.mindmapDirection]: Object.freeze(["right", "left", "balanced"]),
+});
 
 const ROWS = [
   [SETTING_IDS.north, "Parents (north)", "Attributes whose value sits above the center. The first one is written when you drag a node north."],
@@ -82,10 +137,60 @@ const ROWS = [
   [SETTING_IDS.pins, "Pins", "JSON list of {uid, title}. Use the Pin button instead of editing this."],
   [SETTING_IDS.sort, "Sort nodes", "Order inside a side: connections, name, edited, or created."],
   [SETTING_IDS.crossLinks, "Cross links", "Faint edges between neighbours that reference each other. Off until you turn this on."],
+  [SETTING_IDS.view, "Canvas view", "Compass shows directions, Mind Map shows a hierarchy, Facets sorts neighbors into categories."],
+  [SETTING_IDS.filterReflow, "Reflow when filtering", "Close the gaps when a filter or lens hides nodes. Off keeps every node in place."],
+  [SETTING_IDS.group, "Group nodes by type", "Fold neighbors of the same type into one group on each side."],
+  [SETTING_IDS.expanded, "Expanded view", "Show each neighbor's children one level further."],
+  [SETTING_IDS.typeAttribute, "Node type attribute", "The attribute whose value names a page's type, used by grouping, lenses and Facets."],
+  [SETTING_IDS.flip, "Flip East–West", "Friends and Previous on the right, Challengers and Next on the left. Meanings stay the same."],
+  [SETTING_IDS.oneSided, "One-sided layout", "Friends and Challengers share one list on the left."],
+  [SETTING_IDS.trackpad, "Trackpad navigation", "Scroll pans and pinch zooms. Off keeps scroll-to-zoom."],
+  [SETTING_IDS.pinToday, "Pin Today", "Keep today's daily note in the pin row."],
+  [SETTING_IDS.pinWeek, "Pin This week", "Keep this week's page in the pin row."],
+  [SETTING_IDS.pinMonth, "Pin This month", "Keep this month's page in the pin row."],
+  [SETTING_IDS.weekFormat, "Week page title", "Title pattern for the weekly page. YYYY, MM, DD, WW, GGGG and [text] are understood."],
+  [SETTING_IDS.monthFormat, "Month page title", "Title pattern for the monthly page."],
+  [SETTING_IDS.weekStart, "Week starts on", "Used by the This week pin."],
+  [SETTING_IDS.mindmapDirection, "Mind Map direction", "Where the child tree grows."],
+  [SETTING_IDS.mindmapGenerations, "Mind Map generations", "How many generations open at first, 1 to 5."],
+  [SETTING_IDS.wanderSeconds, "Wander pace", "Seconds per move, 3 to 15."],
 ];
 
-function readSort(value) {
-  return SORTS.includes(value) ? value : "connections";
+function readChoice(value, allowed, fallback) {
+  return allowed.includes(value) ? value : fallback;
+}
+
+function readText(value, fallback) {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return trimmed || fallback;
+}
+
+function readArray(value) {
+  let list = value;
+  if (typeof value === "string") {
+    try {
+      list = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+  return Array.isArray(list) ? [...list] : [];
+}
+
+function readClampedInt(value, min, max, fallback) {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return fallback;
+    return Math.min(max, Math.max(min, Math.trunc(value)));
+  }
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text) return fallback;
+    const parsed = Number(text);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(max, Math.max(min, Math.trunc(parsed)));
+  }
+  return fallback;
 }
 
 function flag(value, fallback) {
@@ -96,15 +201,7 @@ function flag(value, fallback) {
 }
 
 function readPins(value) {
-  let list = value;
-  if (typeof value === "string") {
-    try {
-      list = JSON.parse(value);
-    } catch {
-      list = [];
-    }
-  }
-  if (!Array.isArray(list)) return [];
+  const list = readArray(value);
   const seen = new Set();
   return list.flatMap((item) => {
     if (!item || typeof item.uid !== "string" || !item.uid || seen.has(item.uid)) return [];
@@ -134,7 +231,7 @@ export function readCompassSettings(extensionAPI) {
       siblings: flag(read(SETTING_IDS.siblings), true),
       badges: flag(read(SETTING_IDS.badges), true),
       maxPerZone: read(SETTING_IDS.maxZone),
-      sort: readSort(read(SETTING_IDS.sort)),
+      sort: readChoice(read(SETTING_IDS.sort), SELECT_ITEMS[SETTING_IDS.sort], "connections"),
     },
     sidecar: flag(read(SETTING_IDS.sidecar), true),
     outline: flag(read(SETTING_IDS.outline), false),
@@ -144,6 +241,26 @@ export function readCompassSettings(extensionAPI) {
     relatedDrawings: flag(read(SETTING_IDS.relatedDrawings), true),
     pins: readPins(read(SETTING_IDS.pins)),
     crossLinks: flag(read(SETTING_IDS.crossLinks), false),
+    view: readChoice(read(SETTING_IDS.view), SELECT_ITEMS[SETTING_IDS.view], "compass"),
+    facetsPreset: readText(read(SETTING_IDS.facetsPreset), "roles"),
+    facetsPresets: readArray(read(SETTING_IDS.facetsPresets)),
+    lenses: readArray(read(SETTING_IDS.lenses)),
+    filterReflow: flag(read(SETTING_IDS.filterReflow), false),
+    group: flag(read(SETTING_IDS.group), false),
+    expanded: flag(read(SETTING_IDS.expanded), false),
+    typeAttribute: readText(read(SETTING_IDS.typeAttribute), "Type"),
+    flip: flag(read(SETTING_IDS.flip), false),
+    oneSided: flag(read(SETTING_IDS.oneSided), false),
+    trackpad: flag(read(SETTING_IDS.trackpad), false),
+    pinToday: flag(read(SETTING_IDS.pinToday), true),
+    pinWeek: flag(read(SETTING_IDS.pinWeek), false),
+    pinMonth: flag(read(SETTING_IDS.pinMonth), false),
+    weekFormat: readText(read(SETTING_IDS.weekFormat), DEFAULTS[SETTING_IDS.weekFormat]),
+    monthFormat: readText(read(SETTING_IDS.monthFormat), DEFAULTS[SETTING_IDS.monthFormat]),
+    weekStart: readChoice(read(SETTING_IDS.weekStart), SELECT_ITEMS[SETTING_IDS.weekStart], "monday"),
+    mindmapDirection: readChoice(read(SETTING_IDS.mindmapDirection), SELECT_ITEMS[SETTING_IDS.mindmapDirection], "right"),
+    mindmapGenerations: readClampedInt(read(SETTING_IDS.mindmapGenerations), 1, 5, 2),
+    wanderSeconds: readClampedInt(read(SETTING_IDS.wanderSeconds), 3, 15, 6),
   };
 }
 
@@ -163,11 +280,12 @@ export async function initializeSettings(extensionAPI) {
 }
 
 function settingAction(id, persist) {
-  if (id === SETTING_IDS.sort) {
+  const items = SELECT_ITEMS[id];
+  if (items) {
     return {
       type: "select",
-      items: ["connections", "name", "edited", "created"],
-      onChange: (event) => persist(id, parseInput(id, event?.target?.value)),
+      items: [...items],
+      onChange: (event) => persist(id, parseInput(id, typeof event === "string" ? event : event?.target?.value)),
     };
   }
   if (SWITCHES.has(id)) {

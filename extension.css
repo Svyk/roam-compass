@@ -706,21 +706,6 @@
   opacity: 0.9;
 }
 
-.compass-root .compass-lens[aria-pressed="false"] {
-  opacity: 0.45;
-}
-
-.compass-root .compass-lens-keyword {
-  width: 120px;
-  box-sizing: border-box;
-  border: 1px solid var(--compass-line);
-  border-radius: 4px;
-  padding: 3px 8px;
-  color: inherit;
-  background: transparent;
-  font: inherit;
-}
-
 .compass-root .compass-zone-add {
   position: absolute;
   z-index: 4;
@@ -844,3 +829,27 @@
   background: transparent;
   font: inherit;
 }
+
+/* edit */
+
+/* export */
+
+/* facets */
+
+/* keys */
+
+/* layout-options */
+
+/* lenses */
+
+/* mindmap */
+
+/* palette */
+
+/* pins */
+
+/* trail */
+
+/* wander */
+
+/* zen */

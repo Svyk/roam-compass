@@ -1,5 +1,5 @@
 import { build as esbuild } from "esbuild";
-import { copyFile, mkdir, readFile, rm, watch, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, watch, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -50,12 +50,32 @@ export async function bundleEntry({
   return output.text;
 }
 
+async function readStyles(rootDirectory) {
+  const base = await readFile(resolve(rootDirectory, "src/extension.css"), "utf8");
+  let entries;
+  try {
+    entries = await readdir(resolve(rootDirectory, "src/styles"), { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return base;
+    throw error;
+  }
+  const names = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".css"))
+    .map((entry) => entry.name)
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  if (!names.length) return base;
+  const extras = await Promise.all(
+    names.map((name) => readFile(resolve(rootDirectory, "src/styles", name), "utf8")),
+  );
+  return [base, ...extras].join("\n");
+}
+
 export async function renderArtifacts(rootDirectory = defaultRoot) {
   const packageMetadata = JSON.parse(await readFile(resolve(rootDirectory, "package.json"), "utf8"));
   const banner = `/* Compass v${packageMetadata.version} | MIT | generated; edit src/ */`;
   return {
     javascript: await bundleEntry({ rootDirectory, banner }),
-    css: await readFile(resolve(rootDirectory, "src/extension.css"), "utf8"),
+    css: await readStyles(rootDirectory),
   };
 }
 
