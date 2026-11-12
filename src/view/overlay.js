@@ -1855,6 +1855,16 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   function showMenu(uid, clientX, clientY) {
     hideFloating();
     const node = nodeByUid.get(uid);
+    if (node?.kind === "group") {
+      for (const extra of features.collect("nodeMenu", uid, node)) {
+        if (extra?.title && typeof extra.run === "function") menuItem(extra.title, extra.run);
+      }
+      if (menu.childElementCount > 0) {
+        placeFloating(menu, clientX, clientY);
+        menu.querySelector("button")?.focus();
+      }
+      return;
+    }
     const isCenter = uid === hood?.center?.uid;
     if (!isCenter) menuItem("Focus here", () => focusUid(uid));
     addShowOnBoard(uid);
@@ -2104,7 +2114,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const rect = root.getBoundingClientRect();
     ghost.style.left = `${event.clientX - rect.left + 10}px`;
     ghost.style.top = `${event.clientY - rect.top + 10}px`;
-    const side = geometry ? sideAt(clientToWorld(event.clientX, event.clientY), geometry.center) : null;
+    const side = geometry ? sideAt(clientToWorld(event.clientX, event.clientY), geometry.center, geometry.flip === true) : null;
     for (const [name, hint] of Object.entries(hints)) hint.classList.toggle("compass-hint-hot", name === side);
   }
 
@@ -2118,7 +2128,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (state.type !== "node") return;
     endDrag();
     if (event.type === "pointercancel" || !geometry) return;
-    handleDrop(state.uid, sideAt(clientToWorld(event.clientX, event.clientY), geometry.center));
+    handleDrop(state.uid, sideAt(clientToWorld(event.clientX, event.clientY), geometry.center, geometry.flip === true));
   }
 
   function onWheel(event) {
@@ -2456,7 +2466,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       return;
     }
     const element = event.target.closest?.(".compass-node");
-    if (element && (event.key === "Enter" || event.key === " ")) {
+    if (element && element.dataset.kind !== "group" && (event.key === "Enter" || event.key === " ")) {
       event.preventDefault();
       if (event.shiftKey) void openSidebar(element.dataset.uid);
       else if (!element.classList.contains("compass-node-center")) focusUid(element.dataset.uid);
