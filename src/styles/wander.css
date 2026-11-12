@@ -1,1 +1,111 @@
 /* wander */
+.compass-root.compass-wandering .compass-zone-add-south,
+.compass-root.compass-wandering .compass-zone-count-south {
+  display: none;
+}
+
+.compass-root .compass-wander-strip {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px;
+  border: 1px solid var(--compass-line);
+  border-radius: 20px;
+  background: var(--compass-paper);
+  color: var(--compass-ink);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  transform: translateX(-50%);
+}
+
+.compass-root .compass-wander-strip[hidden] {
+  display: none;
+}
+
+.compass-root .compass-wander-note {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  padding: 4px 10px;
+  border: 1px solid var(--compass-line);
+  border-radius: 12px;
+  background: var(--compass-paper);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
+  font-size: 12px;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.compass-root .compass-wander-note[hidden] {
+  display: none;
+}
+
+.compass-root .compass-wander-toggle {
+  min-width: 54px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 13px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.compass-root .compass-wander-pace-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  user-select: none;
+}
+
+.compass-root .compass-wander-pace-caption {
+  opacity: 0.72;
+}
+
+.compass-root .compass-wander-pace {
+  width: 96px;
+  margin: 0;
+  accent-color: var(--compass-accent);
+  cursor: pointer;
+}
+
+.compass-root .compass-wander-pace-value {
+  min-width: 24px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  opacity: 0.85;
+}
+
+.compass-root .compass-wander-stop {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 13px;
+  font-size: 15px;
+  line-height: 1;
+}
+
+@keyframes compass-wander-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--compass-accent) 26%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--compass-accent) 44%, transparent);
+  }
+}
+
+.compass-root .compass-node.compass-wander-next {
+  z-index: 3;
+  border-color: var(--compass-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--compass-accent) 32%, transparent);
+  animation: compass-wander-pulse 600ms ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compass-root .compass-node.compass-wander-next {
+    animation: none;
+  }
+}
