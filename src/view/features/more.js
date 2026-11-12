@@ -5,6 +5,8 @@ export const MORE_COMMAND_IDS = Object.freeze([
   "cross",
   "with-links",
   "send",
+  "send-to-board",
+  "draw-map",
   "export-image",
   "export-outline",
   "export-breadcrumbs",

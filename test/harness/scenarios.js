@@ -10,6 +10,8 @@ import * as layoutModule from "./scenarios/layout.js";
 import * as keysModule from "./scenarios/keys.js";
 import * as exportModule from "./scenarios/export.js";
 import * as editModule from "./scenarios/edit.js";
+import * as boardsModule from "./scenarios/boards.js";
+import * as drawingsModule from "./scenarios/drawings.js";
 import * as releaseModule from "./scenarios/release.js";
 
 const SCENARIO_SOURCES = [
@@ -23,6 +25,8 @@ const SCENARIO_SOURCES = [
   ["test/harness/scenarios/keys.js", keysModule],
   ["test/harness/scenarios/export.js", exportModule],
   ["test/harness/scenarios/edit.js", editModule],
+  ["test/harness/scenarios/boards.js", boardsModule],
+  ["test/harness/scenarios/drawings.js", drawingsModule],
   ["test/harness/scenarios/release.js", releaseModule],
 ];
 

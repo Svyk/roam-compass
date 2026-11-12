@@ -11,6 +11,8 @@ import { createWander } from "./wander.js";
 import { createZen } from "./zen.js";
 import { createExport } from "./export.js";
 import { createEdit } from "./edit.js";
+import { createBoards } from "./boards.js";
+import { createDrawings } from "./drawings.js";
 import { createMore } from "./more.js";
 
 export const FEATURES = Object.freeze([
@@ -27,5 +29,7 @@ export const FEATURES = Object.freeze([
   createZen,
   createExport,
   createEdit,
+  createBoards,
+  createDrawings,
   createMore,
 ]);

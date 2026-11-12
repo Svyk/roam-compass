@@ -97,8 +97,8 @@ test("createFeatures hook runners isolate errors and follow each, any, first, pi
   }
 });
 
-test("FEATURES lists all 14 feature factories in exact specification order", () => {
-  assert.equal(FEATURES.length, 14);
+test("FEATURES lists all 16 feature factories in exact specification order", () => {
+  assert.equal(FEATURES.length, 16);
   const names = FEATURES.map((create) => create(null).name);
   assert.deepEqual(names, [
     "trail",
@@ -114,6 +114,8 @@ test("FEATURES lists all 14 feature factories in exact specification order", () 
     "zen",
     "export",
     "edit",
+    "boards",
+    "drawings",
     "more",
   ]);
 });
@@ -408,7 +410,7 @@ test("overlay seam exposes frozen ctx, removes bar lens widgets, and fires all 1
     const { ctx, features } = overlay;
     assert.equal(Object.isFrozen(ctx), true);
     assert.equal(Object.isFrozen(ctx.dom), true);
-    assert.equal(features.list().length, 14);
+    assert.equal(features.list().length, 16);
     assert.equal(doc.querySelector(".compass-lens"), null);
     assert.equal(doc.querySelector(".compass-lens-keyword"), null);
     assert.equal(doc.querySelector(".compass-fit"), null);

@@ -12795,6 +12795,16 @@ function createEdit(ctx) {
   };
 }
 
+// src/view/features/boards.js
+function createBoards() {
+  return { name: "boards" };
+}
+
+// src/view/features/drawings.js
+function createDrawings() {
+  return { name: "drawings" };
+}
+
 // src/view/features/more.js
 var MORE_COMMAND_IDS = Object.freeze([
   "fit",
@@ -12803,6 +12813,8 @@ var MORE_COMMAND_IDS = Object.freeze([
   "cross",
   "with-links",
   "send",
+  "send-to-board",
+  "draw-map",
   "export-image",
   "export-outline",
   "export-breadcrumbs",
@@ -12971,6 +12983,8 @@ var FEATURES = Object.freeze([
   createZen,
   createExport,
   createEdit,
+  createBoards,
+  createDrawings,
   createMore
 ]);
 
