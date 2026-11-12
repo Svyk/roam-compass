@@ -8,11 +8,29 @@ import {
   allPresets,
   centerCategory,
   classify,
+  facetEdges,
   findPreset,
   layoutFacets,
   validatePreset,
 } from "../src/model/facets.js";
 import { createFacets } from "../src/view/features/facets.js";
+
+function pointInBox(px, py, box, inset = 0) {
+  return (
+    px >= box.x - box.w / 2 + inset &&
+    px <= box.x + box.w / 2 - inset &&
+    py >= box.y - box.h / 2 + inset &&
+    py <= box.y + box.h / 2 - inset
+  );
+}
+
+function sampleBezier(edge, t) {
+  const u = 1 - t;
+  return {
+    x: u * u * u * edge.sx + 3 * u * u * t * edge.c1x + 3 * u * t * t * edge.c2x + t * t * t * edge.ex,
+    y: u * u * u * edge.sy + 3 * u * u * t * edge.c1y + 3 * u * t * t * edge.c2y + t * t * t * edge.ey,
+  };
+}
 
 function boxesOverlap(a, b) {
   return Math.abs(a.x - b.x) * 2 < a.w + b.w && Math.abs(a.y - b.y) * 2 < a.h + b.h;
@@ -566,9 +584,135 @@ test("layoutFacets places 2 to 7 mixed-size categories across all layouts withou
             }
           }
         }
+
+        // Verify facetEdges endpoints and curve clearance across every layout, size, and focusCategory
+        const edges = facetEdges(geo);
+        if (!focusCategory) {
+          if (layoutName === "concentric") {
+            assert.equal(edges.length, 0, "concentric rings enclose center and omit curves");
+          } else {
+            assert.equal(edges.length, catCount, `${layoutName} (${catCount}): expected one curve per category region`);
+          }
+        }
+        const seenEdgeRegions = new Set();
+        for (const edge of edges) {
+          assert.equal(seenEdgeRegions.has(edge.regionId), false, "at most one curve per region");
+          seenEdgeRegions.add(edge.regionId);
+          const target = regionById.get(edge.regionId);
+          assert.ok(target, `edge references existing region ${edge.regionId}`);
+          assert.equal(target.status, null, "no curve to Unassigned or Conflicting status regions");
+          assert.notEqual(edge.regionId, focusCategory, "focused region holding center gets no curve");
+
+          // Start endpoint sits on center border; end endpoint sits at middle of a border of target region
+          assert.ok(pointInBox(edge.sx, edge.sy, geo.center, -1e-6));
+          assert.equal(pointInBox(edge.sx, edge.sy, geo.center, 0.5), false);
+          const sideMids = {
+            top: [target.x, target.y - target.h / 2],
+            bottom: [target.x, target.y + target.h / 2],
+            left: [target.x - target.w / 2, target.y],
+            right: [target.x + target.w / 2, target.y],
+          };
+          assert.deepEqual([edge.ex, edge.ey], sideMids[edge.side]);
+
+          // No returned segment's endpoints lie inside any other region
+          for (const other of geo.regions) {
+            if (other.id === edge.regionId) continue;
+            assert.equal(
+              pointInBox(edge.ex, edge.ey, other, 0),
+              false,
+              `${layoutName} (${catCount}): end endpoint for ${edge.regionId} lies inside ${other.id}`,
+            );
+            if (other.id !== focusCategory) {
+              assert.equal(
+                pointInBox(edge.sx, edge.sy, other, 0),
+                false,
+                `${layoutName} (${catCount}): start endpoint for ${edge.regionId} lies inside ${other.id}`,
+              );
+            }
+          }
+          if (!focusCategory) {
+            assert.equal(pointInBox(edge.sx, edge.sy, target, 0), false);
+          }
+
+          // Sampled curve never enters center, target region, any other region, or any card
+          for (let step = 1; step < 80; step += 1) {
+            const pt = sampleBezier(edge, step / 80);
+            assert.equal(pointInBox(pt.x, pt.y, geo.center, 0.5), false, "curve enters center");
+            assert.equal(pointInBox(pt.x, pt.y, target, 0.5), false, "curve enters target region");
+            for (const other of geo.regions) {
+              if (other.id === edge.regionId || other.id === focusCategory) continue;
+              assert.equal(
+                pointInBox(pt.x, pt.y, other, 0),
+                false,
+                `${layoutName} (${catCount}): curve to ${edge.regionId} passes through region ${other.id}`,
+              );
+            }
+            for (const card of [...geo.items, ...geo.more]) {
+              assert.equal(
+                pointInBox(pt.x, pt.y, card, 0),
+                false,
+                `${layoutName} (${catCount}): curve to ${edge.regionId} crosses card ${card.key || card.regionId}`,
+              );
+            }
+          }
+        }
       }
     }
   }
+});
+
+test("facetEdges routes in the corridor gap for horizontal/vertical and omits collinear blocked regions", () => {
+  // Horizontal with Unassigned + Conflicting: 4 category curves via top corridor, 0 status curves
+  const horizGeo = layoutFacets({
+    preset: { layout: "horizontal", hideEmptyStatus: false },
+    categories: [
+      { id: "c0", label: "Doing", color: "#2563eb", uids: ["u1"] },
+      { id: "c1", label: "Done", color: "#16a34a", uids: ["u2"] },
+      { id: "c2", label: "Planned", color: "#d97706", uids: ["u3"] },
+      { id: "c3", label: "Todo", color: "#9333ea", uids: ["u4"] },
+    ],
+    unassigned: ["u5"],
+    conflicting: ["u6"],
+  });
+  const horizEdges = facetEdges(horizGeo);
+  assert.deepEqual(horizEdges.map((e) => [e.regionId, e.side]), [
+    ["c0", "top"],
+    ["c1", "top"],
+    ["c2", "top"],
+    ["c3", "top"],
+  ]);
+
+  // Vertical stack: outer regions route through left corridor rather than crossing middle regions
+  const vertGeo = layoutFacets({
+    preset: { layout: "vertical", hideEmptyStatus: true },
+    categories: [
+      { id: "v0", label: "V0", color: "#2563eb", uids: ["1", "2"] },
+      { id: "v1", label: "V1", color: "#16a34a", uids: ["3", "4"] },
+      { id: "v2", label: "V2", color: "#d97706", uids: ["5", "6"] },
+      { id: "v3", label: "V3", color: "#9333ea", uids: ["7", "8"] },
+    ],
+    unassigned: [],
+    conflicting: [],
+  });
+  const vertEdges = facetEdges(vertGeo);
+  assert.deepEqual(vertEdges.map((e) => [e.regionId, e.side]), [
+    ["v0", "left"],
+    ["v1", "left"],
+    ["v2", "left"],
+    ["v3", "left"],
+  ]);
+
+  // Collinear blocking geometry: near region gets a curve; far region behind near is left out
+  const blockedEdges = facetEdges({
+    center: { x: 0, y: 0, w: 200, h: 56 },
+    regions: [
+      { id: "near", label: "Near", color: "#2563eb", x: 240, y: 0, w: 180, h: 120, status: null },
+      { id: "far", label: "Far", color: "#16a34a", x: 480, y: 0, w: 180, h: 120, status: null },
+    ],
+    items: [],
+    more: [],
+  });
+  assert.deepEqual(blockedEdges.map((e) => [e.regionId, e.side]), [["near", "left"]]);
 });
 
 test("layoutFacets preserves directional invariants for circular, horizontal, vertical, quadrants, and overflow", () => {
@@ -835,6 +979,14 @@ test("createFacets implements commands, stageMenu, fallback status, empty center
   assert.ok(conflictCard.title.includes("Alpha"));
   assert.ok(conflictCard.title.includes("Beta"));
   assert.notEqual(facets.classified(), null);
+
+  // edges: true draws one .compass-edge-line per category region, none for Conflicting
+  settingsObj.facetsPresets[0].edges = true;
+  facets.renderView({ hood: hoodWithConflict, settings: settingsObj });
+  const svgEl = layer.children.find((ch) => ch.tagName === "SVG");
+  assert.ok(svgEl);
+  assert.equal(svgEl.children.length, 3);
+  assert.ok(svgEl.children.every((g) => g.children[0]?.classList?.contains("compass-edge-line")));
 
   facets.clearView();
   assert.equal(facets.classified(), null);

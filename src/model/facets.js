@@ -1076,3 +1076,270 @@ export function layoutFacets(classified, options = {}) {
     fallback,
   };
 }
+
+function clampNum(value, low, high) {
+  if (low > high) return (low + high) / 2;
+  return Math.max(low, Math.min(high, value));
+}
+
+function pointInsideBox(px, py, box, margin = 0) {
+  return (
+    px >= box.x - box.w / 2 - margin - 1e-6 &&
+    px <= box.x + box.w / 2 + margin + 1e-6 &&
+    py >= box.y - box.h / 2 - margin - 1e-6 &&
+    py <= box.y + box.h / 2 + margin + 1e-6
+  );
+}
+
+function boxEncloses(outer, inner) {
+  return (
+    outer.x - outer.w / 2 <= inner.x - inner.w / 2 + 1e-6 &&
+    outer.x + outer.w / 2 >= inner.x + inner.w / 2 - 1e-6 &&
+    outer.y - outer.h / 2 <= inner.y - inner.h / 2 + 1e-6 &&
+    outer.y + outer.h / 2 >= inner.y + inner.h / 2 - 1e-6
+  );
+}
+
+function segmentHitsRect(x1, y1, x2, y2, minX, minY, maxX, maxY) {
+  if (minX >= maxX || minY >= maxY) return false;
+  let t0 = 0;
+  let t1 = 1;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const p = [-dx, dx, -dy, dy];
+  const q = [x1 - minX, maxX - x1, y1 - minY, maxY - y1];
+  for (let i = 0; i < 4; i += 1) {
+    if (Math.abs(p[i]) < 1e-9) {
+      if (q[i] < 0) return false;
+    } else {
+      const r = q[i] / p[i];
+      if (p[i] < 0) {
+        if (r > t1) return false;
+        if (r > t0) t0 = r;
+      } else {
+        if (r < t0) return false;
+        if (r < t1) t1 = r;
+      }
+    }
+  }
+  return t0 <= t1;
+}
+
+function bezierAt(p0, p1, p2, p3, t) {
+  const u = 1 - t;
+  return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
+}
+
+function curveClearOfObstacles(cand, centerBox, targetReg, obstacles) {
+  const { sx, sy, c1x, c1y, c2x, c2y, ex, ey } = cand;
+  const steps = 64;
+  const cMinX = centerBox.x - centerBox.w / 2 + 0.5;
+  const cMaxX = centerBox.x + centerBox.w / 2 - 0.5;
+  const cMinY = centerBox.y - centerBox.h / 2 + 0.5;
+  const cMaxY = centerBox.y + centerBox.h / 2 - 0.5;
+  const tMinX = targetReg.x - targetReg.w / 2 + 0.5;
+  const tMaxX = targetReg.x + targetReg.w / 2 - 0.5;
+  const tMinY = targetReg.y - targetReg.h / 2 + 0.5;
+  const tMaxY = targetReg.y + targetReg.h / 2 - 0.5;
+
+  let prevX = sx;
+  let prevY = sy;
+  for (let s = 1; s <= steps; s += 1) {
+    const t = s / steps;
+    const curX = bezierAt(sx, c1x, c2x, ex, t);
+    const curY = bezierAt(sy, c1y, c2y, ey, t);
+    if (segmentHitsRect(prevX, prevY, curX, curY, cMinX, cMinY, cMaxX, cMaxY)) return false;
+    if (segmentHitsRect(prevX, prevY, curX, curY, tMinX, tMinY, tMaxX, tMaxY)) return false;
+    for (let i = 0; i < obstacles.length; i += 1) {
+      const ob = obstacles[i];
+      if (segmentHitsRect(prevX, prevY, curX, curY, ob.minX, ob.minY, ob.maxX, ob.maxY)) return false;
+    }
+    prevX = curX;
+    prevY = curY;
+  }
+  return true;
+}
+
+function candidateCurvesForRegion(centerBox, reg) {
+  const cLeft = centerBox.x - centerBox.w / 2;
+  const cRight = centerBox.x + centerBox.w / 2;
+  const cTop = centerBox.y - centerBox.h / 2;
+  const cBottom = centerBox.y + centerBox.h / 2;
+  const padX = Math.min(18, centerBox.w / 4);
+  const padY = Math.min(12, centerBox.h / 4);
+
+  const rLeft = reg.x - reg.w / 2;
+  const rRight = reg.x + reg.w / 2;
+  const rTop = reg.y - reg.h / 2;
+  const rBottom = reg.y + reg.h / 2;
+
+  const facing = [];
+  if (cBottom <= rTop + 1e-6) {
+    facing.push({ side: "top", sep: rTop - cBottom, ex: reg.x, ey: rTop, vertical: true });
+  }
+  if (cTop >= rBottom - 1e-6) {
+    facing.push({ side: "bottom", sep: cTop - rBottom, ex: reg.x, ey: rBottom, vertical: true });
+  }
+  if (cRight <= rLeft + 1e-6) {
+    facing.push({ side: "left", sep: rLeft - cRight, ex: rLeft, ey: reg.y, vertical: false });
+  }
+  if (cLeft >= rRight - 1e-6) {
+    facing.push({ side: "right", sep: cLeft - rRight, ex: rRight, ey: reg.y, vertical: false });
+  }
+
+  facing.sort((a, b) => b.sep - a.sep);
+
+  const primary = [];
+  const detours = [];
+  const detourRatios = [
+    [0.8, 0.9],
+    [0.15, 0.25],
+  ];
+
+  for (const face of facing) {
+    const { side, ex, ey, vertical } = face;
+    if (vertical) {
+      const fanSx = Math.round(clampNum(centerBox.x + (ex - centerBox.x) * 0.28, cLeft + padX, cRight - padX));
+      const directSx = Math.round(clampNum(ex, cLeft + padX, cRight - padX));
+      const sy = side === "top" ? cBottom : cTop;
+      const startXs = fanSx === directSx ? [fanSx] : [fanSx, directSx];
+      for (const sx of startXs) {
+        const midY = Math.round((sy + (ey - sy) * 0.5) * 10) / 10;
+        primary.push({ side, sx, sy, c1x: sx, c1y: midY, c2x: ex, c2y: midY, ex, ey });
+        for (const [r1, r2] of detourRatios) {
+          const c1y = Math.round((sy + (ey - sy) * r1) * 10) / 10;
+          const c2y = Math.round((sy + (ey - sy) * r2) * 10) / 10;
+          detours.push({ side, sx, sy, c1x: sx, c1y, c2x: ex, c2y, ex, ey });
+        }
+      }
+      if (cRight <= ex - 4) {
+        const lsx = cRight;
+        const lsy = centerBox.y;
+        const c1x = Math.round((lsx + (ex - lsx) * 0.65) * 10) / 10;
+        const c2y = Math.round((lsy + (ey - lsy) * 0.35) * 10) / 10;
+        detours.push({ side, sx: lsx, sy: lsy, c1x, c1y: lsy, c2x: ex, c2y, ex, ey });
+      } else if (cLeft >= ex + 4) {
+        const lsx = cLeft;
+        const lsy = centerBox.y;
+        const c1x = Math.round((lsx + (ex - lsx) * 0.65) * 10) / 10;
+        const c2y = Math.round((lsy + (ey - lsy) * 0.35) * 10) / 10;
+        detours.push({ side, sx: lsx, sy: lsy, c1x, c1y: lsy, c2x: ex, c2y, ex, ey });
+      }
+    } else {
+      const sx = side === "left" ? cRight : cLeft;
+      const fanSy = Math.round(clampNum(centerBox.y + (ey - centerBox.y) * 0.08, cTop + padY, cBottom - padY));
+      const directSy = Math.round(clampNum(ey, cTop + padY, cBottom - padY));
+      const startYs = fanSy === directSy ? [fanSy] : [fanSy, directSy];
+      for (const sy of startYs) {
+        const midX = Math.round((sx + (ex - sx) * 0.5) * 10) / 10;
+        primary.push({ side, sx, sy, c1x: midX, c1y: sy, c2x: midX, c2y: ey, ex, ey });
+        for (const [r1, r2] of detourRatios) {
+          const c1x = Math.round((sx + (ex - sx) * r1) * 10) / 10;
+          const c2x = Math.round((sx + (ex - sx) * r2) * 10) / 10;
+          detours.push({ side, sx, sy, c1x, c1y: sy, c2x, c2y: ey, ex, ey });
+        }
+      }
+      if (cBottom <= ey - 4) {
+        const lsx = centerBox.x;
+        const lsy = cBottom;
+        const c1y = Math.round((lsy + (ey - lsy) * 0.65) * 10) / 10;
+        const c2x = Math.round((lsx + (ex - lsx) * 0.35) * 10) / 10;
+        detours.push({ side, sx: lsx, sy: lsy, c1x: lsx, c1y, c2x, c2y: ey, ex, ey });
+      } else if (cTop >= ey + 4) {
+        const lsx = centerBox.x;
+        const lsy = cTop;
+        const c1y = Math.round((lsy + (ey - lsy) * 0.65) * 10) / 10;
+        const c2x = Math.round((lsx + (ex - lsx) * 0.35) * 10) / 10;
+        detours.push({ side, sx: lsx, sy: lsy, c1x: lsx, c1y, c2x, c2y: ey, ex, ey });
+      }
+    }
+  }
+  return [...primary, ...detours];
+}
+
+export function facetEdges(geo) {
+  const centerBox = geo?.center;
+  const regions = Array.isArray(geo?.regions) ? geo.regions : [];
+  if (!centerBox || !regions.length) return [];
+
+  const enclosingCenter = regions.filter((reg) => boxEncloses(reg, centerBox));
+  if (enclosingCenter.length > 1) return [];
+  const holderId = enclosingCenter.length === 1 ? enclosingCenter[0].id : null;
+
+  const cardBoxes = [
+    ...(Array.isArray(geo?.items) ? geo.items : []),
+    ...(Array.isArray(geo?.more) ? geo.more : []),
+  ];
+
+  const out = [];
+  for (const reg of regions) {
+    if (reg.status !== null && reg.status !== undefined) continue;
+    if (reg.id === holderId) continue;
+    if (boxEncloses(reg, centerBox)) continue;
+    if (regions.some((other) => other.id !== reg.id && boxEncloses(other, reg))) continue;
+
+    const obstacles = [];
+    for (const other of regions) {
+      if (other.id === reg.id) continue;
+      if (other.id === holderId) {
+        const hTop = other.y - other.h / 2;
+        obstacles.push({
+          minX: other.x - other.w / 2 + 2,
+          maxX: other.x + other.w / 2 - 2,
+          minY: hTop,
+          maxY: hTop + REGION_HEADER_H - 4,
+        });
+        continue;
+      }
+      obstacles.push({
+        minX: other.x - other.w / 2 - 1.5,
+        maxX: other.x + other.w / 2 + 1.5,
+        minY: other.y - other.h / 2 - 1.5,
+        maxY: other.y + other.h / 2 + 1.5,
+      });
+    }
+    for (const card of cardBoxes) {
+      obstacles.push({
+        minX: card.x - card.w / 2 - 1.5,
+        maxX: card.x + card.w / 2 + 1.5,
+        minY: card.y - card.h / 2 - 1.5,
+        maxY: card.y + card.h / 2 + 1.5,
+      });
+    }
+
+    const candidates = candidateCurvesForRegion(centerBox, reg);
+    let chosen = null;
+    for (const cand of candidates) {
+      const startInsideOther = regions.some(
+        (other) => other.id !== reg.id && other.id !== holderId && pointInsideBox(cand.sx, cand.sy, other, 0.5),
+      );
+      if (startInsideOther) continue;
+      const endInsideOther = regions.some(
+        (other) => other.id !== reg.id && pointInsideBox(cand.ex, cand.ey, other, 0.5),
+      );
+      if (endInsideOther) continue;
+      if (curveClearOfObstacles(cand, centerBox, reg, obstacles)) {
+        chosen = cand;
+        break;
+      }
+    }
+
+    if (chosen) {
+      out.push({
+        regionId: reg.id,
+        side: chosen.side,
+        sx: chosen.sx,
+        sy: chosen.sy,
+        ex: chosen.ex,
+        ey: chosen.ey,
+        c1x: chosen.c1x,
+        c1y: chosen.c1y,
+        c2x: chosen.c2x,
+        c2y: chosen.c2y,
+        d: `M${chosen.sx},${chosen.sy} C${chosen.c1x},${chosen.c1y} ${chosen.c2x},${chosen.c2y} ${chosen.ex},${chosen.ey}`,
+      });
+    }
+  }
+
+  return out;
+}

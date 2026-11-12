@@ -16,14 +16,26 @@ function findRegionByName(h, label) {
   return h.qa('.compass-facets [data-paint="region"]').find((el) => regionNameOf(el) === label) ?? null;
 }
 
+function pointStrictlyInRect(x, y, rect, pad = 1) {
+  return (
+    x > rect.left + pad &&
+    x < rect.right - pad &&
+    y > rect.top + pad &&
+    y < rect.bottom - pad
+  );
+}
+
 function assertRegionsAndCardsClean(h) {
   h.noOverlap('.compass-facets [data-paint="region"]');
   h.noOverlap(".compass-facets .compass-node");
   const centerEl = h.q(".compass-facets .compass-node-center");
   h.assert(Boolean(centerEl), "center card exists in facets view");
-  for (const reg of h.qa('.compass-facets [data-paint="region"]')) {
+  const regions = h.qa('.compass-facets [data-paint="region"]');
+  const regionRects = regions.map((reg) => ({ reg, rect: h.rect(reg) }));
+  const nodeRects = h.qa(".compass-facets .compass-node").map((node) => ({ node, rect: h.rect(node) }));
+
+  for (const { reg, rect: rRect } of regionRects) {
     h.assert(!h.overlaps(reg, centerEl), `region ${regionNameOf(reg)} does not overlap center`);
-    const rRect = h.rect(reg);
     const regionId = reg.dataset.region;
     for (const card of h.qa(`.compass-facets .compass-facet-card[data-region="${regionId}"]`)) {
       const cRect = h.rect(card);
@@ -36,6 +48,31 @@ function assertRegionsAndCardsClean(h) {
       );
     }
   }
+
+  let crossingError = "";
+  for (const pathEl of h.qa(".compass-facets .compass-edge-line")) {
+    const total = pathEl.getTotalLength();
+    const ctm = pathEl.getScreenCTM();
+    h.assert(total > 0 && Boolean(ctm), "facet edge path has positive length");
+    for (let step = 1; step < 40 && !crossingError; step += 1) {
+      const pt = pathEl.getPointAtLength((total * step) / 40);
+      const sx = ctm.a * pt.x + ctm.c * pt.y + ctm.e;
+      const sy = ctm.b * pt.x + ctm.d * pt.y + ctm.f;
+      for (const { reg, rect } of regionRects) {
+        if (pointStrictlyInRect(sx, sy, rect, 1)) {
+          crossingError = `edge curve enters region ${regionNameOf(reg)}`;
+          break;
+        }
+      }
+      for (const { node, rect } of nodeRects) {
+        if (!crossingError && pointStrictlyInRect(sx, sy, rect, 1)) {
+          crossingError = `edge curve crosses card ${node.textContent.trim()}`;
+          break;
+        }
+      }
+    }
+  }
+  h.assert(!crossingError, crossingError || "no edge curve enters a region or crosses a card");
 }
 
 export const SCENARIOS = {
@@ -77,6 +114,11 @@ export const SCENARIOS = {
       "stageMenu marks active preset",
     );
 
+    const categoryRegionCount = h.count('.compass-facets [data-paint="region"]:not([data-status])');
+    const edgeLineCount = h.count(".compass-facets .compass-edge-line");
+    h.equal(edgeLineCount, categoryRegionCount, "one .compass-edge-line per category region in facets-roles");
+    h.assert(edgeLineCount !== h.count(".compass-facets .compass-facet-card"), "edge count matches regions, not cards");
+
     assertRegionsAndCardsClean(h);
   },
 
@@ -103,6 +145,11 @@ export const SCENARIOS = {
     for (const title of ["Programs", "Project Beta", "Risk Register", "Budget", "Roadmap"]) {
       h.assert(unassignedCards.includes(title), `${title} sits in Unassigned`);
     }
+
+    const statusCategoryCount = h.count('.compass-facets [data-paint="region"]:not([data-status])');
+    const statusEdgeCount = h.count(".compass-facets .compass-edge-line");
+    h.equal(statusEdgeCount, statusCategoryCount, "one .compass-edge-line per category region in facets-status (none to Unassigned)");
+    h.assert(statusEdgeCount !== h.count(".compass-facets .compass-facet-card"), "edge count matches category regions, not cards");
 
     assertRegionsAndCardsClean(h);
   },

@@ -3,6 +3,7 @@ import {
   allPresets,
   centerCategory,
   classify,
+  facetEdges,
   findPreset,
   layoutFacets,
   validatePreset,
@@ -99,6 +100,44 @@ export function createFacets(ctx) {
     ctx.lifecycle.node(layer, ctx.dom.world);
   } else if (layer) {
     ctx.dom.world.append(layer);
+  }
+
+  function updateRegionEdgeHover(activeNode) {
+    if (!layer || typeof layer.querySelectorAll !== "function") return;
+    const edgeGroups = layer.querySelectorAll(".compass-facet-edge");
+    if (!edgeGroups.length) return;
+    if (!activeNode) {
+      for (const grp of edgeGroups) {
+        grp.classList.toggle("is-hot", false);
+        grp.classList.toggle("is-dim", false);
+      }
+      return;
+    }
+    const isCenter = activeNode.classList?.contains?.("compass-node-center");
+    const hoveredRegion = activeNode.dataset?.region || "";
+    for (const grp of edgeGroups) {
+      const hot = Boolean(isCenter || (hoveredRegion && grp.dataset?.region === hoveredRegion));
+      grp.classList.toggle("is-hot", hot);
+      grp.classList.toggle("is-dim", !hot);
+    }
+  }
+
+  if (layer && typeof layer.addEventListener === "function") {
+    const onOver = (event) => {
+      const node = event.target?.closest?.(".compass-node") ?? null;
+      updateRegionEdgeHover(node);
+    };
+    const onOut = (event) => {
+      const next = event.relatedTarget?.closest?.(".compass-node") ?? null;
+      if (!next || !layer.contains?.(next)) updateRegionEdgeHover(null);
+    };
+    if (ctx.lifecycle?.event) {
+      ctx.lifecycle.event(layer, "pointerover", onOver);
+      ctx.lifecycle.event(layer, "pointerout", onOut);
+    } else {
+      layer.addEventListener("pointerover", onOver);
+      layer.addEventListener("pointerout", onOut);
+    }
   }
 
   let backdrop = null;
@@ -457,25 +496,6 @@ export function createFacets(ctx) {
     jsonArea?.focus({ preventScroll: true });
   }
 
-  function drawEdgeCurve(centerBox, itemBox) {
-    const dx = itemBox.x - centerBox.x;
-    const dy = itemBox.y - centerBox.y;
-    if (Math.abs(dy) >= Math.abs(dx)) {
-      const dir = dy >= 0 ? 1 : -1;
-      const sx = ctx.clamp(itemBox.x, centerBox.x - centerBox.w / 2 + 16, centerBox.x + centerBox.w / 2 - 16);
-      const sy = centerBox.y + dir * (centerBox.h / 2);
-      const ex = itemBox.x;
-      const ey = itemBox.y - dir * (itemBox.h / 2);
-      return ctx.curve(sx, sy, ex, ey, true).d;
-    }
-    const dir = dx >= 0 ? 1 : -1;
-    const sx = centerBox.x + dir * (centerBox.w / 2);
-    const sy = ctx.clamp(itemBox.y, centerBox.y - centerBox.h / 2 + 12, centerBox.y + centerBox.h / 2 - 12);
-    const ex = itemBox.x - dir * (itemBox.w / 2);
-    const ey = itemBox.y;
-    return ctx.curve(sx, sy, ex, ey, false).d;
-  }
-
   function buildCenterCard(hood, box) {
     const element = ctx.el("div", "compass-node compass-node-center");
     element.dataset.uid = hood.center.uid;
@@ -633,15 +653,16 @@ export function createFacets(ctx) {
     }
     layer.append(regionContainer);
 
-    if (preset.edges !== false && geo.items.length > 0) {
+    const regionCurves = preset.edges !== false ? facetEdges(geo) : [];
+    if (regionCurves.length > 0) {
       const edgeSvg = ctx.svg("svg", "compass-edges compass-facets-edges");
       edgeSvg.setAttribute("width", "1");
       edgeSvg.setAttribute("height", "1");
-      for (const item of geo.items) {
-        const group = ctx.svg("g", "compass-edge compass-facet-edge");
-        group.dataset.uid = item.uid;
+      for (const edge of regionCurves) {
+        const group = ctx.svg("g", "compass-facet-edge");
+        group.dataset.region = edge.regionId;
         const line = ctx.svg("path", "compass-edge-line");
-        line.setAttribute("d", drawEdgeCurve(geo.center, item));
+        line.setAttribute("d", edge.d);
         group.append(line);
         edgeSvg.append(group);
       }
