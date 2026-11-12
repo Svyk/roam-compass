@@ -1,4 +1,4 @@
-/* Compass v0.9.1 | MIT | generated; edit src/ */
+/* Compass v1.0.0 | MIT | generated; edit src/ */
 
 // src/lifecycle.js
 function isPromiseLike(value) {
@@ -216,6 +216,109 @@ function planAttributeWrite({ attribute, title, existing } = {}) {
   return { ops: [{ op: "update", uid: existing.uid, string: `${current.trim()} ${ref}` }] };
 }
 
+// src/model/ontology.js
+var ROLES = ["parent", "child", "friend", "challenger", "previous", "next"];
+var INVERSE = Object.freeze({
+  parent: "child",
+  child: "parent",
+  friend: "friend",
+  challenger: "challenger",
+  previous: "next",
+  next: "previous"
+});
+var READ_ONLY = [/^BT_attr/i, /^aliases$/i, /^roam\//i];
+function sameName(a, b) {
+  return a.toLowerCase() === b.toLowerCase();
+}
+function isReadOnly(name) {
+  return READ_ONLY.some((pattern) => pattern.test(String(name ?? "")));
+}
+function isWritableName(name) {
+  if (typeof name !== "string") return false;
+  const clean = name.trim();
+  if (!clean || clean.includes("::") || /[[\]\n]/.test(clean) || isReadOnly(clean)) return false;
+  return true;
+}
+function parseRoleList(value) {
+  const raw = Array.isArray(value) ? value : String(value ?? "").split(",");
+  const names = [];
+  const pairs = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const item of raw) {
+    const sides = String(item ?? "").split("|").map((part) => part.trim()).filter(Boolean);
+    if (!sides.length) continue;
+    const name = sides[0];
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+    if (sides.length >= 2) {
+      pairs.push([name, sides[1]]);
+    }
+  }
+  return { names, pairs };
+}
+function buildOntology(rawLists = {}) {
+  const parsed = {};
+  const lists = {};
+  for (const role of ROLES) {
+    parsed[role] = parseRoleList(rawLists?.[role]);
+    lists[role] = [...parsed[role].names];
+  }
+  const pairs = /* @__PURE__ */ new Map();
+  const addPair = (left, right) => {
+    const lk = left.toLowerCase();
+    const rk = right.toLowerCase();
+    if (pairs.has(lk) || pairs.has(rk)) return false;
+    if (lk === rk) {
+      pairs.set(lk, left);
+      return true;
+    }
+    pairs.set(lk, right);
+    pairs.set(rk, left);
+    return true;
+  };
+  for (const role of ROLES) {
+    const inverse = INVERSE[role];
+    for (const [name, partner] of parsed[role].pairs) {
+      if (addPair(name, partner) && !lists[inverse].some((item) => sameName(item, partner))) {
+        lists[inverse].push(partner);
+      }
+    }
+  }
+  const builtins = [
+    ["parent", "Parent", "child", "Child"],
+    ["previous", "Previous", "next", "Next"]
+  ];
+  for (const [leftRole, leftDefault, rightRole, rightDefault] of builtins) {
+    const leftName = lists[leftRole].find((item) => sameName(item, leftDefault));
+    const rightName = lists[rightRole].find((item) => sameName(item, rightDefault));
+    if (leftName && rightName) addPair(leftName, rightName);
+  }
+  return { lists, pairs };
+}
+function captionFor(attribute, direction, pairs) {
+  const name = String(attribute ?? "");
+  if (direction === "in" && pairs instanceof Map) {
+    const partner = pairs.get(name.trim().toLowerCase());
+    if (partner) return partner;
+  }
+  return name;
+}
+function inverseAttribute(attribute, role, ontology) {
+  const key = String(attribute ?? "").trim().toLowerCase();
+  if (key && ontology?.pairs instanceof Map) {
+    const partner = ontology.pairs.get(key);
+    if (partner) return isWritableName(partner) ? partner.trim() : null;
+  }
+  const inverse = INVERSE[role];
+  if (!inverse) return null;
+  const candidates = ontology?.lists?.[inverse];
+  if (!Array.isArray(candidates)) return null;
+  const chosen = candidates.find((item) => isWritableName(item));
+  return chosen ? chosen.trim() : null;
+}
+
 // src/model/text.js
 var TAG_CHAR = /[\p{L}\p{N}_\-/.@&%+=~*']/u;
 var UID_RE = /^[\w-]{1,64}$/;
@@ -422,7 +525,7 @@ function splitNames(value) {
 }
 
 // src/model/neighborhood.js
-var ROLES = ["parent", "child", "friend", "challenger", "previous", "next"];
+var ROLES2 = ["parent", "child", "friend", "challenger", "previous", "next"];
 var ZONES = ["north", "south", "west", "east", "siblings"];
 var ZONE_OF = Object.freeze({
   parent: "north",
@@ -434,7 +537,7 @@ var ZONE_OF = Object.freeze({
   sibling: "siblings"
 });
 var DROP_ROLE = Object.freeze({ north: "parent", south: "child", west: "friend", east: "challenger" });
-var INVERSE = Object.freeze({
+var INVERSE2 = Object.freeze({
   parent: "child",
   child: "parent",
   friend: "friend",
@@ -442,7 +545,7 @@ var INVERSE = Object.freeze({
   previous: "next",
   next: "previous"
 });
-var READ_ONLY = [/^BT_attr/i, /^aliases$/i, /^roam\//i];
+var READ_ONLY2 = [/^BT_attr/i, /^aliases$/i, /^roam\//i];
 var STRENGTH = Object.freeze({ typed: 3, structural: 2, link: 1, mention: 1, sibling: 0 });
 var BADGE_CAP = 8;
 var MODEL_DEFAULTS = Object.freeze({
@@ -470,35 +573,45 @@ function sortMode(value) {
   return SORT_MODES.has(value) ? value : "connections";
 }
 function modelSettings(raw = {}) {
-  const lists = {};
-  for (const role of ROLES) lists[role] = splitNames(raw[role] ?? MODEL_DEFAULTS[role]);
+  let lists;
+  let pairs;
+  if (raw?.lists && raw?.pairs instanceof Map && ROLES2.every((role) => raw[role] == null)) {
+    lists = {};
+    for (const role of ROLES2) lists[role] = [...raw.lists[role] ?? []];
+    pairs = new Map(raw.pairs);
+  } else {
+    const rawLists = {};
+    for (const role of ROLES2) rawLists[role] = raw?.[role] ?? MODEL_DEFAULTS[role];
+    ({ lists, pairs } = buildOntology(rawLists));
+  }
   return {
     lists,
-    hidden: splitNames(raw.hidden ?? MODEL_DEFAULTS.hidden),
-    links: flag(raw.links, true),
-    siblings: flag(raw.siblings, true),
-    badges: flag(raw.badges, true),
-    maxPerZone: count(raw.maxPerZone, 12),
-    sort: sortMode(raw.sort)
+    pairs,
+    hidden: splitNames(raw?.hidden ?? MODEL_DEFAULTS.hidden),
+    links: flag(raw?.links, true),
+    siblings: flag(raw?.siblings, true),
+    badges: flag(raw?.badges, true),
+    maxPerZone: count(raw?.maxPerZone, 12),
+    sort: sortMode(raw?.sort)
   };
 }
-function sameName(a, b) {
+function sameName2(a, b) {
   return a.toLowerCase() === b.toLowerCase();
 }
 function roleOf(attribute, settings) {
   const name = String(attribute ?? "").trim();
   if (!name) return null;
-  if (settings.hidden.some((item) => sameName(item, name))) return null;
-  for (const role of ROLES) {
-    if (settings.lists[role].some((item) => sameName(item, name))) return { role, explicit: true };
+  if (settings.hidden.some((item) => sameName2(item, name))) return null;
+  for (const role of ROLES2) {
+    if (settings.lists[role].some((item) => sameName2(item, name))) return { role, explicit: true };
   }
   return { role: "child", explicit: false };
 }
 function inverseRole(role) {
-  return INVERSE[role] ?? role;
+  return INVERSE2[role] ?? role;
 }
 function isReadOnlyAttribute(name) {
-  return READ_ONLY.some((pattern) => pattern.test(String(name ?? "")));
+  return READ_ONLY2.some((pattern) => pattern.test(String(name ?? "")));
 }
 function attributeForRole(role, settings) {
   const name = settings.lists[role]?.[0];
@@ -786,6 +899,7 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
         role: mapping.role,
         explicit: mapping.explicit,
         attribute: harc.attribute,
+        caption: captionFor(harc.attribute, "out", settings.pairs),
         labels: labelsText(harc.labels),
         sourceUid: harc.source?.uid ?? null,
         sourceString: harc.source?.string ?? null,
@@ -805,6 +919,7 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
       role: inverseRole(mapping.role),
       explicit: mapping.explicit,
       attribute: harc.attribute,
+      caption: captionFor(harc.attribute, "in", settings.pairs),
       labels: labelsText(harc.labels),
       sourceUid: harc.source?.uid ?? null,
       sourceString: harc.source?.string ?? null,
@@ -864,7 +979,7 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
       strength: picked.strength,
       style: picked.strongest[0].kind,
       evidence: items,
-      label: [...new Set(typed.map((item) => [item.attribute, ...item.labels].join(" · ")))].join(" | "),
+      label: [...new Set(typed.map((item) => [item.caption ?? item.attribute, ...item.labels].join(" · ")))].join(" | "),
       writable: typed.length === 1 && typed[0].writable ? typed[0] : null,
       via: null
     });
@@ -1086,6 +1201,8 @@ var ALIAS_QUERY = `[:find ?uid ?s :in $ [?uid ...] :where [?p :block/uid ?uid] [
 var CHILD_COUNT_QUERY = "[:find ?uid (count ?c) :in $ [?uid ...] :where [?p :block/uid ?uid] [?p :block/children ?c]]";
 var DRAWING_ON_PAGE_QUERY = "[:find ?uid ?s :in $ ?title :where [?p :node/title ?title] [?p :block/children ?b] [?b :block/uid ?uid] [?b :block/string ?s]]";
 var ATTR_PULL = "[:block/uid {:block/children [:block/uid :block/string :block/order]}]";
+var ATTR_BLOCK_PULL = "[:block/uid {:block/children [:block/uid :block/string :block/order {:block/children [:block/uid :block/string :block/order]}]}]";
+var SOURCE_BLOCK_PULL = "[:block/uid :block/string :block/order {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order {:block/children [:block/uid]}]}]";
 var RECENT_PAGES_QUERY = "[:find ?uid ?title ?edit ?create :where [?e :node/title ?title] [?e :block/uid ?uid] [?e :edit/time ?edit] [?e :create/time ?create]]";
 var RECENT_DRAWINGS_QUERY = `[:find ?uid ?edit :where [?b :block/uid ?uid] [?b :block/string ?s] [(clojure.string/includes? ?s "excalidraw")] [?b :edit/time ?edit]]`;
 var ENTITY_PULL = "[:block/uid :node/title :block/string]";
@@ -1948,6 +2065,72 @@ function createHost({ lifecycle }) {
     queue = run.then(() => void 0, () => void 0);
     return run;
   }
+  function attributeBlock(pageUid, attribute) {
+    const target = typeof attribute === "string" ? attribute.trim().toLowerCase() : "";
+    if (typeof pageUid !== "string" || !pageUid || !target) return null;
+    try {
+      const api = roamApi()?.data;
+      if (typeof api?.pull !== "function") return null;
+      const pulled = pull(api, ATTR_BLOCK_PULL, pageUid);
+      const children = [...asList(pulled?.[":block/children"])].sort((a, b) => (a?.[":block/order"] ?? 0) - (b?.[":block/order"] ?? 0));
+      for (const child of children) {
+        const uid = child?.[":block/uid"];
+        const string = child?.[":block/string"];
+        if (typeof uid !== "string" || !uid || typeof string !== "string") continue;
+        const parsed = parseAttribute(string);
+        if (parsed && parsed.name.toLowerCase() === target) {
+          const nested = asList(child[":block/children"]).map((item) => {
+            const itemUid = item?.[":block/uid"];
+            const itemString = item?.[":block/string"];
+            if (typeof itemUid !== "string" || !itemUid || typeof itemString !== "string") return null;
+            return {
+              uid: itemUid,
+              string: itemString,
+              order: Number.isFinite(item[":block/order"]) ? item[":block/order"] : 0
+            };
+          }).filter(Boolean).sort(byOrder);
+          return { uid, string, children: nested };
+        }
+      }
+      return null;
+    } catch (error) {
+      console.error("[compass] attribute block", error);
+      return null;
+    }
+  }
+  function sourceBlock(uid) {
+    if (typeof uid !== "string" || !uid) return null;
+    try {
+      const api = roamApi()?.data;
+      if (typeof api?.pull !== "function") return null;
+      const node = pull(api, SOURCE_BLOCK_PULL, uid);
+      const blockUid = node?.[":block/uid"];
+      if (typeof blockUid !== "string" || !blockUid || typeof node[":block/string"] !== "string") return null;
+      const parentUid = asList(node[":block/_children"])[0]?.[":block/uid"];
+      const children = asList(node[":block/children"]).map((child) => {
+        const childUid = child?.[":block/uid"];
+        const childString = child?.[":block/string"];
+        if (typeof childUid !== "string" || !childUid || typeof childString !== "string") return null;
+        const childCount = asList(child[":block/children"]).filter((grand) => typeof grand?.[":block/uid"] === "string" && grand[":block/uid"]).length;
+        return {
+          uid: childUid,
+          string: childString,
+          order: Number.isFinite(child[":block/order"]) ? child[":block/order"] : 0,
+          childCount
+        };
+      }).filter(Boolean).sort(byOrder);
+      return {
+        uid: blockUid,
+        string: node[":block/string"],
+        order: Number.isFinite(node[":block/order"]) ? node[":block/order"] : null,
+        parentUid: typeof parentUid === "string" ? parentUid : null,
+        children
+      };
+    } catch (error) {
+      console.error("[compass] source block", error);
+      return null;
+    }
+  }
   lifecycle.add(() => closeSidecar());
   lifecycle.add(() => unwatch());
   lifecycle.add(() => {
@@ -1979,6 +2162,8 @@ function createHost({ lifecycle }) {
     dailyPage,
     pageAttributes,
     applyPlan,
+    attributeBlock,
+    sourceBlock,
     blockContextMenu() {
       return roamApi()?.ui?.blockContextMenu ?? null;
     }
@@ -2075,6 +2260,7 @@ function connectionEdges(children) {
 var NODE = Object.freeze({ w: 180, h: 34 });
 var SIBLING = Object.freeze({ w: 148, h: 28 });
 var ROW_H = 24;
+var SUB_H = 20;
 var COL_GAP = 14;
 var ROW_GAP = 12;
 var V_GAP = 64;
@@ -2083,39 +2269,65 @@ var CHIP_GAP = 22;
 var HEADER_H = 56;
 var BADGE_H = 24;
 var MAX_ROWS = 40;
+function nodeHeight(uid, baseH, sub) {
+  const count2 = sub?.[uid];
+  return typeof count2 === "number" && Number.isFinite(count2) && count2 > 0 ? baseH + count2 * SUB_H : baseH;
+}
 function gridWidth(count2, columns, width) {
   const used = Math.min(count2, columns);
   return used ? used * width + (used - 1) * COL_GAP : 0;
 }
-function grid(nodes, columns, direction, edge) {
+function grid(nodes, columns, direction, edge, sub) {
   const rows = Math.ceil(nodes.length / columns);
-  return nodes.map((node, index) => {
-    const row = Math.floor(index / columns);
-    const column2 = index % columns;
-    const inRow = row === rows - 1 ? nodes.length - row * columns : columns;
+  const out = [];
+  let cursor = edge;
+  for (let row = 0; row < rows; row += 1) {
+    const start = row * columns;
+    const rowNodes = nodes.slice(start, start + columns);
+    const inRow = rowNodes.length;
     const width = gridWidth(inRow, columns, NODE.w);
-    return {
+    let rowH = 0;
+    for (const node of rowNodes) {
+      const h = nodeHeight(node.uid, NODE.h, sub);
+      if (h > rowH) rowH = h;
+    }
+    for (let column2 = 0; column2 < inRow; column2 += 1) {
+      const node = rowNodes[column2];
+      const h = nodeHeight(node.uid, NODE.h, sub);
+      out.push({
+        uid: node.uid,
+        zone: node.zone,
+        x: -width / 2 + column2 * (NODE.w + COL_GAP) + NODE.w / 2,
+        y: direction * (cursor + h / 2),
+        w: NODE.w,
+        h
+      });
+    }
+    cursor += rowH + ROW_GAP;
+  }
+  return out;
+}
+function column(nodes, x, top, size, gap, sub) {
+  let cursor = top;
+  return nodes.map((node) => {
+    const h = nodeHeight(node.uid, size.h, sub);
+    const item = {
       uid: node.uid,
       zone: node.zone,
-      x: -width / 2 + column2 * (NODE.w + COL_GAP) + NODE.w / 2,
-      y: direction * (edge + NODE.h / 2 + row * (NODE.h + ROW_GAP)),
-      w: NODE.w,
-      h: NODE.h
+      x,
+      y: cursor + h / 2,
+      w: size.w,
+      h
     };
+    cursor += h + gap;
+    return item;
   });
 }
-function column(nodes, x, top, size, gap) {
-  return nodes.map((node, index) => ({
-    uid: node.uid,
-    zone: node.zone,
-    x,
-    y: top + size.h / 2 + index * (size.h + gap),
-    w: size.w,
-    h: size.h
-  }));
-}
-function columnHeight(count2, size, gap) {
-  return count2 ? count2 * size.h + (count2 - 1) * gap : 0;
+function columnHeight(nodes, size, gap, sub) {
+  if (!nodes.length) return 0;
+  let total = (nodes.length - 1) * gap;
+  for (const node of nodes) total += nodeHeight(node.uid, size.h, sub);
+  return total;
 }
 function centerSize({ badges = 0, rows = 0, more = false } = {}) {
   const expanded = rows > 0 || more;
@@ -2133,6 +2345,9 @@ function layout(neighborhood, options = {}) {
   const size = centerSize({ badges, rows: rowsIn.length, more });
   const cw = size.w;
   const ch = size.h;
+  const flip = options.flip === true;
+  const oneSided = options.oneSided === true;
+  const sub = options.sub && typeof options.sub === "object" ? options.sub : null;
   const zone = (name) => nodes.filter((node) => node.zone === name);
   const north = zone("north");
   const south = zone("south");
@@ -2142,27 +2357,50 @@ function layout(neighborhood, options = {}) {
   const northColumns = 3;
   const southColumns = 4;
   const items = [
-    ...grid(north, northColumns, -1, ch / 2 + V_GAP),
-    ...grid(south, southColumns, 1, ch / 2 + V_GAP)
+    ...grid(north, northColumns, -1, ch / 2 + V_GAP, sub),
+    ...grid(south, southColumns, 1, ch / 2 + V_GAP, sub)
   ];
   const wideHalf = Math.max(
     cw / 2,
     gridWidth(north.length, northColumns, NODE.w) / 2,
     gridWidth(south.length, southColumns, NODE.w) / 2
   );
-  const lateralX = (count2) => {
-    const half = columnHeight(count2, NODE, ROW_GAP) / 2;
+  const lateralX = (height) => {
+    const half = height / 2;
     const clear = half <= ch / 2 + V_GAP - ROW_GAP;
     return (clear ? cw / 2 : wideHalf) + H_GAP + NODE.w / 2;
   };
-  const westX = -lateralX(west.length);
-  const eastX = lateralX(east.length);
-  items.push(...column(west, westX, -columnHeight(west.length, NODE, ROW_GAP) / 2, NODE, ROW_GAP));
-  items.push(...column(east, eastX, -columnHeight(east.length, NODE, ROW_GAP) / 2, NODE, ROW_GAP));
-  const eastOuter = east.length ? eastX + NODE.w / 2 : 0;
+  let eastOuter = 0;
+  if (oneSided) {
+    const westH = columnHeight(west, NODE, ROW_GAP, sub);
+    const eastH = columnHeight(east, NODE, ROW_GAP, sub);
+    const gapBetween = west.length && east.length ? ROW_GAP * 2 : 0;
+    const sharedH = westH + gapBetween + eastH;
+    const sharedClear = sharedH / 2 <= ch / 2;
+    const sharedX = -((sharedClear ? cw / 2 : wideHalf) + H_GAP + NODE.w / 2);
+    const sharedTop = -sharedH / 2;
+    items.push(...column(west, sharedX, sharedTop, NODE, ROW_GAP, sub));
+    const eastTop = west.length ? sharedTop + westH + gapBetween : sharedTop;
+    items.push(...column(east, sharedX, eastTop, NODE, ROW_GAP, sub));
+  } else {
+    const westH = columnHeight(west, NODE, ROW_GAP, sub);
+    const eastH = columnHeight(east, NODE, ROW_GAP, sub);
+    const westX = -lateralX(westH);
+    const eastX = lateralX(eastH);
+    items.push(...column(west, westX, -westH / 2, NODE, ROW_GAP, sub));
+    items.push(...column(east, eastX, -eastH / 2, NODE, ROW_GAP, sub));
+    eastOuter = east.length ? eastX + NODE.w / 2 : 0;
+  }
   const siblingX = Math.max(eastOuter, wideHalf) + H_GAP * 0.75 + SIBLING.w / 2;
   const siblingTop = -(ch / 2 + V_GAP + NODE.h);
-  items.push(...column(siblings, siblingX, siblingTop, SIBLING, 8));
+  items.push(...column(siblings, siblingX, siblingTop, SIBLING, 8, sub));
+  if (flip) {
+    for (const item of items) {
+      if (item.zone === "west" || item.zone === "east" || item.zone === "siblings") {
+        item.x = item.x === 0 ? 0 : -item.x;
+      }
+    }
+  }
   const rowTop = -ch / 2 + HEADER_H + (badges ? BADGE_H : 0);
   const rows = rowsIn.map((row, index) => ({
     uid: row.uid,
@@ -2196,7 +2434,7 @@ function layout(neighborhood, options = {}) {
     minY = Math.min(minY, chip.y - 12);
     maxY = Math.max(maxY, chip.y + 12);
   }
-  return {
+  const out = {
     center: { x: 0, y: 0, w: cw, h: ch },
     items,
     rows,
@@ -2204,14 +2442,18 @@ function layout(neighborhood, options = {}) {
     chips,
     bounds: { minX, minY, maxX, maxY }
   };
+  if (flip) out.flip = true;
+  if (oneSided) out.oneSided = true;
+  return out;
 }
-function sideAt(point, center) {
+function sideAt(point, center, flip = false) {
   const halfW = center.w / 2;
   const halfH = center.h / 2;
   if (Math.abs(point.x) <= halfW && Math.abs(point.y) <= halfH) return null;
   const nx = point.x / (halfW + H_GAP);
   const ny = point.y / (halfH + V_GAP);
   if (Math.abs(ny) >= Math.abs(nx)) return ny < 0 ? "north" : "south";
+  if (flip) return nx < 0 ? "east" : "west";
   return nx < 0 ? "west" : "east";
 }
 
@@ -2247,6 +2489,7 @@ function rankDrawings(centreRefs, rows) {
 }
 
 // src/model/facts.js
+var SINGLE_FIELDS = /* @__PURE__ */ new Set(["kind", "group", "type", "role", "zone", "style", "label"]);
 function stringField(value) {
   return typeof value === "string" ? value : "";
 }
@@ -2323,6 +2566,56 @@ function factsFor(nodes, attributesByUid = {}, { typeAttribute = "Type", emptyUi
     map.set(node.uid, factOf(node, attrs ?? {}, { typeAttribute, empty: emptySet.has(node.uid) }));
   }
   return map;
+}
+function fieldValues(fact, field) {
+  if (!fact || typeof fact !== "object" || typeof field !== "string") return [];
+  if (field === "title") {
+    const out = [];
+    if (typeof fact.title === "string" && fact.title) out.push(fact.title);
+    if (typeof fact.alias === "string" && fact.alias) out.push(fact.alias);
+    return out;
+  }
+  if (SINGLE_FIELDS.has(field)) {
+    const value = fact[field];
+    return typeof value === "string" && value ? [value] : [];
+  }
+  if (field.startsWith("attr:")) {
+    const key = field.slice(5).trim().toLowerCase();
+    if (!key) return [];
+    const values = fact.attributes?.[key];
+    return Array.isArray(values) ? [...values] : [];
+  }
+  return [];
+}
+function matchCondition(condition, fact) {
+  if (!condition || typeof condition !== "object") return false;
+  const { field, op, value } = condition;
+  const values = fieldValues(fact, field);
+  if (op === "exists") return values.length > 0;
+  if (op === "missing") return values.length === 0;
+  const needle = typeof value === "string" ? value.trim() : value == null ? "" : String(value).trim();
+  if (op === "is") return needle !== "" && values.some((item) => item.trim() === needle);
+  if (op === "is-not") return needle === "" || !values.some((item) => item.trim() === needle);
+  if (op === "contains") {
+    if (!needle) return false;
+    const lower = needle.toLowerCase();
+    return values.some((item) => item.toLowerCase().includes(lower));
+  }
+  if (op === "not-contains") {
+    if (!needle) return true;
+    const lower = needle.toLowerCase();
+    return !values.some((item) => item.toLowerCase().includes(lower));
+  }
+  return false;
+}
+function matchConditions(match, fact) {
+  if (!match || typeof match !== "object") return false;
+  const all = Array.isArray(match.all) ? match.all : [];
+  const any = Array.isArray(match.any) ? match.any : [];
+  if (!all.length && !any.length) return false;
+  if (all.length && !all.every((condition) => matchCondition(condition, fact))) return false;
+  if (any.length && !any.some((condition) => matchCondition(condition, fact))) return false;
+  return true;
 }
 
 // src/model/search.js
@@ -2798,14 +3091,1307 @@ function createFeatures() {
   };
 }
 
+// src/model/trail.js
+var DEFAULT_CAP = 500;
+function formatRelativeTime(at, now = Date.now()) {
+  if (!Number.isFinite(at) || !Number.isFinite(now)) return "now";
+  const diffMs = Math.max(0, now - at);
+  if (diffMs < 6e4) return "now";
+  const mins = Math.floor(diffMs / 6e4);
+  if (mins < 60) return `${mins} min`;
+  const hours = Math.floor(diffMs / 36e5);
+  if (hours < 24) return `${hours} h`;
+  const days = Math.floor(diffMs / 864e5);
+  return `${days} d`;
+}
+function normalizeCap(raw) {
+  if (raw == null || raw === "") return DEFAULT_CAP;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_CAP;
+  return Math.trunc(parsed);
+}
+function createTrail({ cap = DEFAULT_CAP, clock, now } = {}) {
+  const limit = normalizeCap(cap);
+  const readTime = typeof clock === "function" ? clock : typeof now === "function" ? now : () => Date.now();
+  const items = [];
+  let seq = 0;
+  function copy(entry) {
+    return entry ? { ...entry } : null;
+  }
+  return {
+    get size() {
+      return items.length;
+    },
+    visit({ uid, title, kind } = {}) {
+      if (typeof uid !== "string" || !uid.trim()) return null;
+      seq += 1;
+      const entry = {
+        uid,
+        title: typeof title === "string" && title ? title : uid,
+        kind: kind === "block" ? "block" : "page",
+        at: Number(readTime()),
+        seq
+      };
+      if (limit > 0) {
+        items.push(entry);
+        while (items.length > limit) items.shift();
+      }
+      return copy(entry);
+    },
+    entries() {
+      const out = [];
+      for (let i = items.length - 1; i >= 0; i -= 1) {
+        out.push(copy(items[i]));
+      }
+      return out;
+    },
+    current() {
+      return items.length ? copy(items[items.length - 1]) : null;
+    },
+    startHere() {
+      if (items.length > 1) items.splice(0, items.length - 1);
+      return items.length ? copy(items[0]) : null;
+    },
+    markdown() {
+      if (!items.length) return "";
+      const lines = [];
+      for (let i = items.length - 1; i >= 0; i -= 1) {
+        const entry = items[i];
+        lines.push(entry.kind === "block" ? `- ((${entry.uid}))` : `- [[${entry.title || entry.uid}]]`);
+      }
+      return lines.join("\n");
+    },
+    retitle(uid, title) {
+      if (typeof uid !== "string" || !uid || typeof title !== "string" || !title) return 0;
+      let updated = 0;
+      for (const entry of items) {
+        if (entry.uid === uid) {
+          entry.title = title;
+          updated += 1;
+        }
+      }
+      return updated;
+    }
+  };
+}
+
+// src/view/clipboard.js
+function copyWithTextarea(value) {
+  const doc = globalThis.document;
+  if (!doc?.body || typeof doc.createElement !== "function" || typeof doc.execCommand !== "function") {
+    return false;
+  }
+  let area = null;
+  try {
+    area = doc.createElement("textarea");
+    area.value = value;
+    area.setAttribute?.("readonly", "");
+    if (area.style) {
+      area.style.position = "fixed";
+      area.style.top = "-9999px";
+      area.style.left = "-9999px";
+      area.style.opacity = "0";
+    }
+    doc.body.append(area);
+    area.focus?.();
+    area.select?.();
+    return doc.execCommand("copy") === true;
+  } catch {
+    return false;
+  } finally {
+    try {
+      area?.remove?.();
+    } catch {
+    }
+  }
+}
+async function copyText(text) {
+  const value = String(text ?? "");
+  const clipboard = globalThis.navigator?.clipboard;
+  if (typeof clipboard?.writeText === "function") {
+    try {
+      await clipboard.writeText(value);
+      return true;
+    } catch {
+    }
+  }
+  return copyWithTextarea(value);
+}
+async function copyBlob(blob) {
+  if (!blob) return false;
+  const clipboard = globalThis.navigator?.clipboard;
+  const Item = globalThis.ClipboardItem;
+  if (typeof clipboard?.write !== "function" || typeof Item !== "function") return false;
+  try {
+    await clipboard.write([new Item({ [blob.type]: blob })]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function saveBlob(blob, filename) {
+  if (!blob) return false;
+  const doc = globalThis.document;
+  const urlApi = globalThis.URL;
+  if (!doc?.body || typeof doc.createElement !== "function" || typeof urlApi?.createObjectURL !== "function") {
+    return false;
+  }
+  let url = null;
+  let link = null;
+  try {
+    url = urlApi.createObjectURL(blob);
+    link = doc.createElement("a");
+    link.href = url;
+    link.download = String(filename ?? "download");
+    if (link.style) link.style.display = "none";
+    doc.body.append(link);
+    link.click();
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try {
+      link?.remove?.();
+    } catch {
+    }
+    if (url != null) {
+      try {
+        urlApi.revokeObjectURL?.(url);
+      } catch {
+      }
+    }
+  }
+}
+
 // src/view/features/trail.js
-function createTrail() {
-  return { name: "trail" };
+function visitCountLabel(count2) {
+  return `${count2} ${count2 === 1 ? "visit" : "visits"}`;
+}
+function isAltShortcut(event, letter, code) {
+  if (!event?.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
+  if (event.code === code) return true;
+  return typeof event.key === "string" && event.key.toLowerCase() === letter;
+}
+function createTrail2(ctx) {
+  const trail = createTrail();
+  const hasDom = Boolean(
+    ctx?.dom?.root && typeof ctx?.el === "function" && typeof ctx?.button === "function" && ctx?.lifecycle?.node && ctx?.lifecycle?.event
+  );
+  let barBtn = null;
+  let panel = null;
+  let countEl = null;
+  let listEl = null;
+  let copyBtn = null;
+  let startBtn = null;
+  let refreshTimer = null;
+  let justOpened = false;
+  function isPanelOpen() {
+    return Boolean(panel && !panel.hidden);
+  }
+  function stopRefreshTimer() {
+    if (refreshTimer != null && typeof ctx?.cancel === "function") {
+      refreshTimer = ctx.cancel(refreshTimer);
+    } else {
+      refreshTimer = null;
+    }
+  }
+  function armRefreshTimer() {
+    stopRefreshTimer();
+    if (!isPanelOpen() || typeof ctx?.later !== "function") return;
+    refreshTimer = ctx.later(() => {
+      refreshTimer = null;
+      if (!isPanelOpen()) return;
+      renderPanel({ preserveScroll: true, preserveFocus: true });
+      armRefreshTimer();
+    }, 3e4);
+  }
+  function recordVisit(uid) {
+    if (typeof uid !== "string" || !uid.trim()) return;
+    const found = ctx?.host?.entity?.(uid) ?? null;
+    const entry = found ? {
+      uid: found.uid || uid,
+      kind: found.kind === "block" ? "block" : "page",
+      title: found.title || ctx?.titleOf?.(uid) || uid
+    } : {
+      uid,
+      kind: "page",
+      title: ctx?.titleOf?.(uid) || uid
+    };
+    trail.visit(entry);
+  }
+  function renderPanel({ preserveScroll = false, preserveFocus = false } = {}) {
+    if (!panel || !listEl || !countEl) return;
+    const prevScroll = preserveScroll ? listEl.scrollTop : 0;
+    const activeSeq = preserveFocus ? listEl.querySelector(".compass-trail-row:focus")?.dataset?.seq ?? null : null;
+    const entries = trail.entries();
+    countEl.textContent = visitCountLabel(entries.length);
+    const nowMs = Date.now();
+    listEl.replaceChildren();
+    if (!entries.length) {
+      listEl.append(ctx.el("div", "compass-trail-empty", "No visits yet"));
+    } else {
+      for (const [index, entry] of entries.entries()) {
+        const live = ctx?.host?.entity?.(entry.uid) ?? null;
+        const missing = live == null;
+        if (!missing && live.kind === "page" && live.title && live.title !== entry.title) {
+          trail.retitle(entry.uid, live.title);
+          entry.title = live.title;
+        }
+        const row = ctx.button("compass-trail-row");
+        row.dataset.uid = entry.uid;
+        row.dataset.kind = entry.kind;
+        row.dataset.seq = String(entry.seq);
+        if (index === 0) {
+          row.classList.add("compass-trail-row-current");
+          row.setAttribute("aria-current", "true");
+        }
+        if (missing) {
+          row.classList.add("compass-trail-row-missing");
+          row.disabled = true;
+        }
+        const displayTitle = !missing && live?.title ? live.title : entry.title || entry.uid;
+        row.title = displayTitle;
+        const titleSpan = ctx.el("span", "compass-trail-title", displayTitle);
+        const timeSpan = ctx.el("span", "compass-trail-time", formatRelativeTime(entry.at, nowMs));
+        row.append(titleSpan, timeSpan);
+        listEl.append(row);
+      }
+    }
+    if (copyBtn) copyBtn.disabled = entries.length === 0;
+    if (startBtn) startBtn.disabled = entries.length === 0;
+    if (preserveScroll && prevScroll > 0) {
+      listEl.scrollTop = prevScroll;
+    } else {
+      listEl.scrollTop = 0;
+    }
+    if (activeSeq) {
+      const target = listEl.querySelector(`.compass-trail-row[data-seq="${activeSeq}"]:not(:disabled)`);
+      target?.focus?.({ preventScroll: true });
+    }
+  }
+  function placePanel() {
+    if (!panel || !barBtn || typeof ctx?.placeFloating !== "function") return;
+    const rect = barBtn.getBoundingClientRect();
+    ctx.placeFloating(panel, rect.left, rect.bottom - 2);
+  }
+  function open() {
+    if (!panel || !barBtn) return;
+    ctx?.hideFloating?.();
+    renderPanel({ preserveScroll: false });
+    barBtn.setAttribute("aria-pressed", "true");
+    barBtn.setAttribute("aria-expanded", "true");
+    placePanel();
+    justOpened = true;
+    Promise.resolve().then(() => {
+      justOpened = false;
+    });
+    armRefreshTimer();
+    const newest = listEl.querySelector(".compass-trail-row:not(:disabled)") ?? listEl.querySelector(".compass-trail-row") ?? copyBtn;
+    newest?.focus?.({ preventScroll: true });
+  }
+  function close({ restoreFocus = false } = {}) {
+    if (!panel || panel.hidden) return;
+    panel.hidden = true;
+    stopRefreshTimer();
+    if (barBtn) {
+      barBtn.setAttribute("aria-pressed", "false");
+      barBtn.setAttribute("aria-expanded", "false");
+      if (restoreFocus) barBtn.focus({ preventScroll: true });
+    }
+  }
+  function toggle() {
+    if (isPanelOpen()) close({ restoreFocus: true });
+    else open();
+  }
+  function startHere() {
+    if (trail.size === 0 && ctx?.state?.current) {
+      recordVisit(ctx.state.current);
+    } else {
+      trail.startHere();
+    }
+    if (isPanelOpen()) {
+      renderPanel({ preserveScroll: false });
+      const newest = listEl?.querySelector(".compass-trail-row:not(:disabled)") ?? startBtn;
+      newest?.focus?.({ preventScroll: true });
+    }
+  }
+  async function copyMarkdown() {
+    const count2 = trail.size;
+    const ok = await copyText(trail.markdown());
+    ctx?.setStatus?.(ok ? `Copied ${visitCountLabel(count2)}` : "Could not copy");
+    return ok;
+  }
+  function chooseRow(uid) {
+    if (!uid) return;
+    close({ restoreFocus: false });
+    ctx?.focusUid?.(uid);
+  }
+  if (hasDom) {
+    barBtn = ctx.button("compass-trail-btn", "Footprints", "Footprints (Alt+H)");
+    barBtn.setAttribute("aria-pressed", "false");
+    barBtn.setAttribute("aria-expanded", "false");
+    ctx.addBarButton?.(barBtn);
+    panel = ctx.el("div", "compass-trail-panel");
+    panel.hidden = true;
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-label", "Footprints");
+    const header = ctx.el("div", "compass-trail-header");
+    const heading = ctx.el("span", "compass-trail-heading", "Footprints");
+    countEl = ctx.el("span", "compass-trail-count", "0 visits");
+    header.append(heading, countEl);
+    listEl = ctx.el("div", "compass-trail-list");
+    const footer = ctx.el("div", "compass-trail-footer");
+    copyBtn = ctx.button("compass-trail-copy", "Copy as Markdown");
+    startBtn = ctx.button("compass-trail-start", "Start here");
+    footer.append(copyBtn, startBtn);
+    panel.append(header, listEl, footer);
+    ctx.lifecycle.node(panel, ctx.dom.root);
+    ctx.lifecycle.event(barBtn, "click", () => toggle());
+    ctx.lifecycle.event(copyBtn, "click", () => {
+      void copyMarkdown();
+    });
+    ctx.lifecycle.event(startBtn, "click", () => startHere());
+    ctx.lifecycle.event(listEl, "click", (event) => {
+      const row = event.target.closest?.(".compass-trail-row");
+      if (!row || row.disabled) return;
+      chooseRow(row.dataset.uid);
+    });
+    ctx.lifecycle.event(panel, "keydown", (event) => {
+      const rows = [...listEl.querySelectorAll(".compass-trail-row:not(:disabled)")];
+      const activeRow = event.target.closest?.(".compass-trail-row");
+      const activeIndex = activeRow ? rows.indexOf(activeRow) : -1;
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!rows.length) return;
+        const nextIndex = activeIndex < 0 ? 0 : Math.min(rows.length - 1, activeIndex + 1);
+        rows[nextIndex].focus({ preventScroll: true });
+        rows[nextIndex].scrollIntoView?.({ block: "nearest" });
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!rows.length) return;
+        const prevIndex = activeIndex < 0 ? 0 : Math.max(0, activeIndex - 1);
+        rows[prevIndex].focus({ preventScroll: true });
+        rows[prevIndex].scrollIntoView?.({ block: "nearest" });
+        return;
+      }
+      if (event.key === "Home") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!rows.length) return;
+        listEl.scrollTop = 0;
+        rows[0].focus({ preventScroll: true });
+        rows[0].scrollIntoView?.({ block: "nearest" });
+        return;
+      }
+      if (event.key === "End") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!rows.length) return;
+        const last = rows[rows.length - 1];
+        last.focus({ preventScroll: true });
+        last.scrollIntoView?.({ block: "nearest" });
+        return;
+      }
+      if (event.key === "Enter" && activeRow && !activeRow.disabled) {
+        event.preventDefault();
+        event.stopPropagation();
+        chooseRow(activeRow.dataset.uid);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        close({ restoreFocus: true });
+      }
+    });
+    const onOutside = (event) => {
+      if (!isPanelOpen() || justOpened) return;
+      const target = event.target;
+      if (panel.contains(target) || barBtn.contains(target)) return;
+      close({ restoreFocus: false });
+    };
+    const doc = globalThis.document ?? ctx.dom.root;
+    ctx.lifecycle.event(doc, "pointerdown", onOutside);
+    ctx.lifecycle.event(doc, "click", onOutside);
+    if (globalThis.addEventListener) {
+      ctx.lifecycle.event(globalThis, "resize", () => {
+        if (isPanelOpen()) placePanel();
+      });
+    }
+    ctx.lifecycle.add(() => stopRefreshTimer());
+  }
+  return {
+    name: "trail",
+    entries() {
+      return trail.entries();
+    },
+    markdown() {
+      return trail.markdown();
+    },
+    startHere,
+    open,
+    close: () => close({ restoreFocus: false }),
+    toggle,
+    onNavigate({ uid, changed } = {}) {
+      if (!uid) return;
+      if (changed || trail.size === 0) {
+        recordVisit(uid);
+        if (isPanelOpen()) {
+          renderPanel({ preserveScroll: true });
+        }
+      }
+    },
+    afterRender({ hood } = {}) {
+      const center = hood?.center;
+      if (center?.kind === "page" && center.uid && center.title) {
+        const changedCount = trail.retitle(center.uid, center.title);
+        if (changedCount > 0 && isPanelOpen()) {
+          renderPanel({ preserveScroll: true, preserveFocus: true });
+        }
+      }
+    },
+    onClose() {
+      close({ restoreFocus: false });
+    },
+    onEscape() {
+      if (!isPanelOpen()) return false;
+      close({ restoreFocus: true });
+      return true;
+    },
+    onKey(event) {
+      if (isAltShortcut(event, "h", "KeyH")) {
+        toggle();
+        return true;
+      }
+      return false;
+    },
+    commands() {
+      return [
+        { id: "trail-open", title: "Footprints", hint: "Alt+H", run: () => toggle() },
+        { id: "trail-copy", title: "Copy trail as Markdown", hint: "", run: () => copyMarkdown() },
+        { id: "trail-start", title: "Start trail here", hint: "", run: () => startHere() }
+      ];
+    }
+  };
+}
+
+// src/model/periodic.js
+var MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December"
+];
+var SHORT_MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec"
+];
+var MS_PER_DAY = 864e5;
+var DEFAULT_WEEK_FORMAT = "YYYY-[W]WW";
+var DEFAULT_MONTH_FORMAT = "MMMM YYYY";
+var TOKEN_PATTERN = /\[([^\]]*)\]|YYYY|YY|MMMM|MMM|MM|M|DD|Do|D|WW|W|GGGG|gggg/g;
+function pad2(value) {
+  return String(value).padStart(2, "0");
+}
+function pad4(value) {
+  const sign = value < 0 ? "-" : "";
+  return `${sign}${String(Math.abs(value)).padStart(4, "0")}`;
+}
+function ordinalDay(day) {
+  const mod100 = day % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${day}th`;
+  const mod10 = day % 10;
+  if (mod10 === 1) return `${day}st`;
+  if (mod10 === 2) return `${day}nd`;
+  if (mod10 === 3) return `${day}rd`;
+  return `${day}th`;
+}
+function weekParts(year, month, day, weekStart) {
+  const utc = Date.UTC(year, month, day);
+  const dow = new Date(utc).getUTCDay();
+  if (weekStart === "sunday") {
+    const sundayUtc = utc - dow * MS_PER_DAY;
+    const saturdayUtc = sundayUtc + 6 * MS_PER_DAY;
+    const weekYear2 = new Date(saturdayUtc).getUTCFullYear();
+    const jan1Utc2 = Date.UTC(weekYear2, 0, 1);
+    const jan1Dow = new Date(jan1Utc2).getUTCDay();
+    const week1SundayUtc = jan1Utc2 - jan1Dow * MS_PER_DAY;
+    const week2 = Math.round((sundayUtc - week1SundayUtc) / (7 * MS_PER_DAY)) + 1;
+    return { week: week2, weekYear: weekYear2 };
+  }
+  const isoDow = dow === 0 ? 7 : dow;
+  const thursdayUtc = utc + (4 - isoDow) * MS_PER_DAY;
+  const weekYear = new Date(thursdayUtc).getUTCFullYear();
+  const jan1Utc = Date.UTC(weekYear, 0, 1);
+  const week = Math.floor((thursdayUtc - jan1Utc) / MS_PER_DAY / 7) + 1;
+  return { week, weekYear };
+}
+function toValidDate(input) {
+  const d = input instanceof Date ? input : new Date(input ?? Date.now());
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+function formatPeriod(date, pattern, { weekStart = "monday" } = {}) {
+  const d = toValidDate(date);
+  if (!d || typeof pattern !== "string" || !pattern) return "";
+  const year = d.getFullYear();
+  const monthIndex = d.getMonth();
+  const month = monthIndex + 1;
+  const day = d.getDate();
+  const normalizedStart = weekStart === "sunday" ? "sunday" : "monday";
+  const { week, weekYear } = weekParts(year, monthIndex, day, normalizedStart);
+  return pattern.replace(TOKEN_PATTERN, (token, literal) => {
+    if (literal !== void 0) return literal;
+    switch (token) {
+      case "YYYY":
+        return pad4(year);
+      case "YY":
+        return pad2(Math.abs(year) % 100);
+      case "MMMM":
+        return MONTHS[monthIndex];
+      case "MMM":
+        return SHORT_MONTHS[monthIndex];
+      case "MM":
+        return pad2(month);
+      case "M":
+        return String(month);
+      case "DD":
+        return pad2(day);
+      case "Do":
+        return ordinalDay(day);
+      case "D":
+        return String(day);
+      case "WW":
+        return pad2(week);
+      case "W":
+        return String(week);
+      case "GGGG":
+      case "gggg":
+        return pad4(weekYear);
+      default:
+        return token;
+    }
+  });
+}
+function settingText(value, fallback) {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return trimmed || fallback;
+}
+function periodTitle(kind, date, settings = {}) {
+  const rawStart = settings?.weekStart ?? settings?.["compass-week-start"];
+  const weekStart = rawStart === "sunday" ? "sunday" : "monday";
+  if (kind === "week") {
+    const pattern = settingText(settings?.weekFormat ?? settings?.["compass-week-format"], DEFAULT_WEEK_FORMAT);
+    return formatPeriod(date, pattern, { weekStart });
+  }
+  if (kind === "month") {
+    const pattern = settingText(settings?.monthFormat ?? settings?.["compass-month-format"], DEFAULT_MONTH_FORMAT);
+    return formatPeriod(date, pattern, { weekStart });
+  }
+  return "";
+}
+function readFlag(value, fallback) {
+  if (value == null || value === "") return fallback;
+  if (value === true || value === "on" || value === "true" || value === 1) return true;
+  if (value === false || value === "off" || value === "false" || value === 0) return false;
+  return Boolean(value);
+}
+function periodicPins({ settings = {}, now, daily } = {}) {
+  const date = toValidDate(now) ?? /* @__PURE__ */ new Date();
+  const showToday = readFlag(settings?.pinToday ?? settings?.["compass-pin-today"], true);
+  const showWeek = readFlag(settings?.pinWeek ?? settings?.["compass-pin-week"], false);
+  const showMonth = readFlag(settings?.pinMonth ?? settings?.["compass-pin-month"], false);
+  const out = [];
+  if (showToday) {
+    const fallbackUid = `${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}-${pad4(date.getFullYear())}`;
+    const uid = typeof daily?.uid === "string" && daily.uid ? daily.uid : fallbackUid;
+    const title = typeof daily?.title === "string" && daily.title ? daily.title : formatPeriod(date, "MMMM Do, YYYY");
+    out.push({ id: "today", label: "Today", title, uid });
+  }
+  if (showWeek) {
+    out.push({
+      id: "week",
+      label: "This week",
+      title: periodTitle("week", date, settings),
+      uid: null
+    });
+  }
+  if (showMonth) {
+    out.push({
+      id: "month",
+      label: "This month",
+      title: periodTitle("month", date, settings),
+      uid: null
+    });
+  }
+  return out;
+}
+function movePin(pins, uid, delta) {
+  if (!Array.isArray(pins) || !pins.length || typeof uid !== "string" || !uid || !Number.isFinite(delta)) {
+    return pins;
+  }
+  const from = pins.findIndex((pin) => pin?.uid === uid);
+  if (from < 0) return pins;
+  const to = Math.max(0, Math.min(pins.length - 1, from + Math.trunc(delta)));
+  if (to === from) return pins;
+  const next = [...pins];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+}
+function reorderPins(pins, uid, beforeUid) {
+  if (!Array.isArray(pins) || !pins.length || typeof uid !== "string" || !uid) {
+    return pins;
+  }
+  const from = pins.findIndex((pin) => pin?.uid === uid);
+  if (from < 0) return pins;
+  if (beforeUid == null) {
+    if (from === pins.length - 1) return pins;
+    const next2 = [...pins];
+    const [moved2] = next2.splice(from, 1);
+    next2.push(moved2);
+    return next2;
+  }
+  if (typeof beforeUid !== "string" || !beforeUid || beforeUid === uid) return pins;
+  const beforeIndex = pins.findIndex((pin) => pin?.uid === beforeUid);
+  if (beforeIndex < 0 || from + 1 === beforeIndex) return pins;
+  const next = [...pins];
+  const [moved] = next.splice(from, 1);
+  const insertAt = from < beforeIndex ? beforeIndex - 1 : beforeIndex;
+  next.splice(insertAt, 0, moved);
+  return next;
 }
 
 // src/view/features/pins.js
-function createPins() {
-  return { name: "pins" };
+function isAltShortcut2(event, letter, code) {
+  if (!event?.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
+  if (event.code === code) return true;
+  return typeof event.key === "string" && event.key.toLowerCase() === letter;
+}
+function hasTodaySource(ctx) {
+  const settingsApi = ctx?.extensionAPI?.settings;
+  if (!settingsApi || typeof settingsApi.get !== "function") return true;
+  if (settingsApi.canSet === false) return true;
+  if (settingsApi.get(SETTING_IDS.pinToday) != null) return true;
+  const scope = globalThis.window ?? globalThis;
+  const roam = scope?.roamAlphaAPI ?? globalThis.roamAlphaAPI;
+  return typeof roam?.util?.dateToPageUid === "function";
+}
+function createPins(ctx) {
+  const hasDom = Boolean(
+    ctx?.dom?.root && ctx?.dom?.pinRow && typeof ctx?.el === "function" && typeof ctx?.button === "function" && ctx?.lifecycle?.node && ctx?.lifecycle?.event
+  );
+  let confirming = null;
+  let confirmJustOpened = false;
+  let pickerJustOpened = false;
+  let creatingPage = false;
+  let midnightTimer = null;
+  let drag = null;
+  let suppressPinClick = false;
+  let dropMarker = null;
+  let picker = null;
+  function resolvePeriodic(now = /* @__PURE__ */ new Date()) {
+    const rawSettings = ctx?.state?.settings ?? {};
+    const settings = rawSettings.pinToday === true && !hasTodaySource(ctx) ? { ...rawSettings, pinToday: false } : rawSettings;
+    const daily = ctx?.host?.dailyPage?.(now) ?? null;
+    const base = periodicPins({ settings, now, daily });
+    return base.map((item) => {
+      if (item.id === "today") {
+        const entity = item.uid ? ctx?.host?.entity?.(item.uid) : null;
+        return {
+          id: item.id,
+          label: item.label,
+          title: entity?.title || item.title,
+          uid: entity?.uid || item.uid || null,
+          exists: Boolean(entity)
+        };
+      }
+      const found = item.title ? ctx?.host?.pageByTitle?.(item.title) : null;
+      return {
+        id: item.id,
+        label: item.label,
+        title: found?.title || item.title,
+        uid: found?.uid ?? null,
+        exists: Boolean(found?.uid)
+      };
+    });
+  }
+  function lookupDestination(id, now = /* @__PURE__ */ new Date()) {
+    const settings = ctx?.state?.settings ?? {};
+    if (id === "today") {
+      const daily = ctx?.host?.dailyPage?.(now) ?? null;
+      const uid = daily?.uid ?? null;
+      const title = daily?.title || uid || "";
+      const entity = uid ? ctx?.host?.entity?.(uid) : null;
+      return {
+        id: "today",
+        label: "Today",
+        title: entity?.title || title,
+        uid: entity?.uid || uid,
+        explicitUid: uid || void 0,
+        exists: Boolean(entity)
+      };
+    }
+    if (id === "week" || id === "month") {
+      const title = periodTitle(id, now, settings);
+      const found = title ? ctx?.host?.pageByTitle?.(title) : null;
+      return {
+        id,
+        label: id === "week" ? "This week" : "This month",
+        title: found?.title || title,
+        uid: found?.uid ?? null,
+        explicitUid: void 0,
+        exists: Boolean(found?.uid)
+      };
+    }
+    return null;
+  }
+  function stopMidnightTimer() {
+    if (midnightTimer != null && typeof ctx?.cancel === "function") {
+      midnightTimer = ctx.cancel(midnightTimer);
+    } else {
+      midnightTimer = null;
+    }
+  }
+  function armMidnightTimer() {
+    stopMidnightTimer();
+    if (!ctx?.state?.isOpen || typeof ctx?.later !== "function") return;
+    const now = /* @__PURE__ */ new Date();
+    const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 2, 0);
+    const delay = Math.max(1e3, nextMidnight.getTime() - now.getTime());
+    midnightTimer = ctx.later(() => {
+      midnightTimer = null;
+      if (!ctx?.state?.isOpen) return;
+      decoratePinRow();
+      armMidnightTimer();
+    }, delay);
+  }
+  async function confirmCreate(info, createBtn, cancelBtn) {
+    if (creatingPage) return;
+    creatingPage = true;
+    createBtn.disabled = true;
+    cancelBtn.disabled = true;
+    try {
+      const createdUid = info.explicitUid ? await ctx.host.createPage(info.title, info.explicitUid) : await ctx.host.createPage(info.title);
+      confirming = null;
+      const targetUid = createdUid || info.explicitUid || ctx?.host?.pageByTitle?.(info.title)?.uid;
+      if (targetUid) {
+        ctx?.focusUid?.(targetUid);
+      } else {
+        decoratePinRow();
+      }
+    } catch (error) {
+      console.error("[compass] create periodic page", error);
+      confirming = null;
+      decoratePinRow();
+    } finally {
+      creatingPage = false;
+    }
+  }
+  function cancelConfirm({ restoreFocus = false } = {}) {
+    if (!confirming) return;
+    const id = confirming.id;
+    confirming = null;
+    decoratePinRow();
+    if (restoreFocus && ctx?.dom?.pinRow) {
+      const restored = ctx.dom.pinRow.querySelector(`.compass-pin-periodic-btn[data-periodic-id="${id}"]`);
+      restored?.focus?.({ preventScroll: true });
+    }
+  }
+  function buildConfirmChip(info) {
+    const wrap = ctx.el("span", "compass-pin-chip compass-pin-confirm");
+    wrap.dataset.periodicId = info.id;
+    const prompt = ctx.el("span", "compass-pin-confirm-text", `Create [[${info.title}]]?`);
+    const createBtn = ctx.button("compass-pin-confirm-create", "Create");
+    const cancelBtn = ctx.button("compass-pin-confirm-cancel", "Cancel");
+    createBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void confirmCreate(info, createBtn, cancelBtn);
+    });
+    cancelBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      cancelConfirm({ restoreFocus: true });
+    });
+    wrap.append(prompt, createBtn, cancelBtn);
+    return wrap;
+  }
+  function decoratePinRow(pinRow = ctx?.dom?.pinRow) {
+    if (!pinRow || !hasDom) return;
+    for (const old of pinRow.querySelectorAll(".compass-pin-periodic, .compass-pin-confirm")) {
+      old.remove();
+    }
+    for (const chip of pinRow.querySelectorAll(".compass-pin-chip")) {
+      const jump2 = chip.querySelector(".compass-pin-jump");
+      const uid = jump2?.dataset?.uid;
+      if (uid) {
+        chip.classList.add("compass-pin-user");
+        chip.dataset.pinUid = uid;
+      }
+    }
+    const periodicList = resolvePeriodic(/* @__PURE__ */ new Date());
+    const nodes = [];
+    let renderedConfirm = false;
+    for (const item of periodicList) {
+      if (confirming && confirming.id === item.id) {
+        renderedConfirm = true;
+        nodes.push(buildConfirmChip(confirming));
+        continue;
+      }
+      const chip = ctx.el("span", "compass-pin-chip compass-pin-periodic");
+      chip.dataset.periodicId = item.id;
+      chip.dataset.exists = item.exists ? "true" : "false";
+      chip.title = item.title;
+      if (item.exists && item.uid && item.uid === ctx?.state?.current) {
+        chip.classList.add("compass-pin-active");
+      }
+      const btn = ctx.button("compass-pin-periodic-btn");
+      btn.dataset.periodicId = item.id;
+      btn.title = item.title;
+      const cal = ctx.el("span", "compass-pin-cal");
+      cal.setAttribute("aria-hidden", "true");
+      const label = ctx.el("span", "compass-pin-periodic-label", item.label);
+      btn.append(cal, label);
+      chip.append(btn);
+      nodes.push(chip);
+    }
+    if (confirming && !renderedConfirm) {
+      nodes.unshift(buildConfirmChip(confirming));
+    }
+    if (nodes.length) pinRow.prepend(...nodes);
+    pinRow.hidden = pinRow.childElementCount === 0;
+  }
+  function activatePeriodic(id) {
+    const dest = lookupDestination(id, /* @__PURE__ */ new Date());
+    if (!dest || !dest.title) return;
+    if (dest.exists && dest.uid) {
+      if (confirming) {
+        confirming = null;
+        decoratePinRow();
+      }
+      ctx?.focusUid?.(dest.uid);
+      return;
+    }
+    confirming = {
+      id: dest.id,
+      title: dest.title,
+      explicitUid: dest.explicitUid
+    };
+    confirmJustOpened = true;
+    Promise.resolve().then(() => {
+      confirmJustOpened = false;
+    });
+    decoratePinRow();
+    const createBtn = ctx?.dom?.pinRow?.querySelector(".compass-pin-confirm-create");
+    createBtn?.focus?.({ preventScroll: true });
+  }
+  function openUserPinMenu(uid, clientX, clientY) {
+    const pins = ctx?.state?.settings?.pins ?? [];
+    const index = pins.findIndex((pin) => pin.uid === uid);
+    if (index < 0) return;
+    ctx.hideFloating();
+    if (index > 0) {
+      ctx.menuItem("Move left", async () => {
+        const currentPins = ctx?.state?.settings?.pins ?? [];
+        const next = movePin(currentPins, uid, -1);
+        if (next !== currentPins) await ctx.savePins(next);
+      });
+    }
+    if (index < pins.length - 1) {
+      ctx.menuItem("Move right", async () => {
+        const currentPins = ctx?.state?.settings?.pins ?? [];
+        const next = movePin(currentPins, uid, 1);
+        if (next !== currentPins) await ctx.savePins(next);
+      });
+    }
+    ctx.menuItem("Unpin", async () => {
+      const currentPins = ctx?.state?.settings?.pins ?? [];
+      await ctx.savePins(currentPins.filter((pin) => pin.uid !== uid));
+    });
+    ctx.placeFloating(ctx.dom.menu, clientX, clientY);
+    ctx.dom.menu.querySelector("button")?.focus();
+  }
+  function clearDrag() {
+    if (!drag) return;
+    drag.chip?.classList?.remove("compass-pin-dragging");
+    ctx?.dom?.pinRow?.classList?.remove("compass-pins-dragging");
+    if (dropMarker) dropMarker.hidden = true;
+    drag = null;
+  }
+  function computeDropTarget(clientX, clientY) {
+    const chips = [...ctx?.dom?.pinRow?.querySelectorAll(".compass-pin-user") ?? []];
+    if (!chips.length) return null;
+    const measured = chips.map((chip, index) => ({
+      chip,
+      index,
+      uid: chip.dataset.pinUid,
+      rect: chip.getBoundingClientRect()
+    }));
+    let rowItems = measured.filter(({ rect }) => clientY >= rect.top - 8 && clientY <= rect.bottom + 8);
+    if (!rowItems.length) {
+      let bestDist = Infinity;
+      let bestCenterY = 0;
+      for (const item of measured) {
+        const cy = (item.rect.top + item.rect.bottom) / 2;
+        const dist = Math.abs(clientY - cy);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestCenterY = cy;
+        }
+      }
+      rowItems = measured.filter(
+        ({ rect }) => Math.abs((rect.top + rect.bottom) / 2 - bestCenterY) <= rect.height / 2 + 4
+      );
+    }
+    for (let i = 0; i < rowItems.length; i += 1) {
+      const currentItem = rowItems[i];
+      const midX = currentItem.rect.left + currentItem.rect.width / 2;
+      if (clientX < midX) {
+        const prevInRow = i > 0 ? rowItems[i - 1] : null;
+        const markerX = prevInRow ? (prevInRow.rect.right + currentItem.rect.left) / 2 : currentItem.rect.left - 3;
+        return {
+          beforeUid: currentItem.uid,
+          x: markerX,
+          top: currentItem.rect.top,
+          height: currentItem.rect.height
+        };
+      }
+    }
+    const lastInRow = rowItems[rowItems.length - 1];
+    const nextOverall = measured[lastInRow.index + 1] ?? null;
+    return {
+      beforeUid: nextOverall ? nextOverall.uid : null,
+      x: lastInRow.rect.right + 3,
+      top: lastInRow.rect.top,
+      height: lastInRow.rect.height
+    };
+  }
+  function isPickerOpen() {
+    return Boolean(picker && !picker.hidden);
+  }
+  function closePicker({ restoreFocus = false } = {}) {
+    if (!picker || picker.hidden) return;
+    picker.hidden = true;
+    picker.replaceChildren();
+    if (restoreFocus) {
+      ctx?.dom?.stage?.focus?.({ preventScroll: true });
+    }
+  }
+  function openPicker() {
+    if (!picker || !hasDom) return;
+    ctx?.hideFloating?.();
+    ctx?.features?.get?.("trail")?.close?.();
+    picker.replaceChildren();
+    const periodicList = resolvePeriodic(/* @__PURE__ */ new Date());
+    const userPins = ctx?.state?.settings?.pins ?? [];
+    for (const item of periodicList) {
+      const row = ctx.button("compass-pins-picker-item");
+      row.dataset.periodicId = item.id;
+      const label = ctx.el("span", "compass-pins-picker-label", item.label);
+      const meta = ctx.el(
+        "span",
+        "compass-pins-picker-meta",
+        item.exists ? item.title : `${item.title} (new)`
+      );
+      row.append(label, meta);
+      picker.append(row);
+    }
+    for (const pin of userPins) {
+      const row = ctx.button("compass-pins-picker-item");
+      row.dataset.uid = pin.uid;
+      const label = ctx.el("span", "compass-pins-picker-label", pin.title);
+      row.append(label);
+      picker.append(row);
+    }
+    if (!periodicList.length && !userPins.length) {
+      picker.append(ctx.el("div", "compass-pins-picker-empty", "No pins yet"));
+    }
+    const anchorEl = !ctx.dom.pinRow.hidden ? ctx.dom.pinRow : ctx.dom.bar;
+    const rect = anchorEl.getBoundingClientRect();
+    ctx.placeFloating(picker, rect.left + 8, rect.bottom - 2);
+    pickerJustOpened = true;
+    Promise.resolve().then(() => {
+      pickerJustOpened = false;
+    });
+    picker.querySelector(".compass-pins-picker-item")?.focus?.({ preventScroll: true });
+  }
+  function choosePickerRow(row) {
+    if (!row) return;
+    const periodicId = row.dataset.periodicId;
+    const uid = row.dataset.uid;
+    closePicker({ restoreFocus: false });
+    if (periodicId) activatePeriodic(periodicId);
+    else if (uid) ctx?.focusUid?.(uid);
+  }
+  if (hasDom) {
+    dropMarker = ctx.el("div", "compass-pin-drop-marker");
+    dropMarker.hidden = true;
+    ctx.lifecycle.node(dropMarker, ctx.dom.root);
+    picker = ctx.el("div", "compass-pins-picker");
+    picker.hidden = true;
+    picker.setAttribute("role", "dialog");
+    picker.setAttribute("aria-label", "Pins");
+    ctx.lifecycle.node(picker, ctx.dom.root);
+    ctx.lifecycle.event(ctx.dom.pinRow, "click", (event) => {
+      if (suppressPinClick) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      const periodicBtn = event.target.closest?.(".compass-pin-periodic-btn");
+      if (periodicBtn?.dataset?.periodicId) {
+        event.preventDefault();
+        event.stopPropagation();
+        activatePeriodic(periodicBtn.dataset.periodicId);
+      }
+    }, true);
+    ctx.lifecycle.event(ctx.dom.pinRow, "contextmenu", (event) => {
+      const userChip = event.target.closest?.(".compass-pin-user");
+      if (!userChip?.dataset?.pinUid) return;
+      event.preventDefault();
+      event.stopPropagation();
+      openUserPinMenu(userChip.dataset.pinUid, event.clientX, event.clientY);
+    });
+    ctx.lifecycle.event(ctx.dom.pinRow, "pointerdown", (event) => {
+      if (event.button !== 0 || drag) return;
+      if (event.target.closest?.(".compass-pin-remove, .compass-pin-periodic, .compass-pin-confirm")) {
+        return;
+      }
+      const userChip = event.target.closest?.(".compass-pin-user");
+      const uid = userChip?.dataset?.pinUid;
+      if (!userChip || !uid) return;
+      drag = {
+        uid,
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        active: false,
+        beforeUid: void 0,
+        chip: userChip
+      };
+    });
+    ctx.lifecycle.event(globalThis, "pointermove", (event) => {
+      if (!drag) return;
+      if (drag.pointerId != null && event.pointerId != null && event.pointerId !== drag.pointerId) return;
+      const dx = event.clientX - drag.startX;
+      const dy = event.clientY - drag.startY;
+      if (!drag.active) {
+        if (Math.hypot(dx, dy) < 5) return;
+        drag.active = true;
+        drag.chip.classList.add("compass-pin-dragging");
+        ctx.dom.pinRow.classList.add("compass-pins-dragging");
+      }
+      const target = computeDropTarget(event.clientX, event.clientY);
+      if (!target) {
+        dropMarker.hidden = true;
+        drag.beforeUid = void 0;
+        return;
+      }
+      drag.beforeUid = target.beforeUid;
+      const rootRect = ctx.dom.root.getBoundingClientRect();
+      dropMarker.style.left = `${Math.round(target.x - rootRect.left - 1)}px`;
+      dropMarker.style.top = `${Math.round(target.top - rootRect.top)}px`;
+      dropMarker.style.height = `${Math.round(target.height)}px`;
+      dropMarker.hidden = false;
+    });
+    ctx.lifecycle.event(globalThis, "pointerup", (event) => {
+      if (!drag) return;
+      if (drag.pointerId != null && event.pointerId != null && event.pointerId !== drag.pointerId) return;
+      const state = drag;
+      clearDrag();
+      if (!state.active) return;
+      suppressPinClick = true;
+      ctx.later?.(() => {
+        suppressPinClick = false;
+      }, 0);
+      if (state.beforeUid === void 0) return;
+      const currentPins = ctx?.state?.settings?.pins ?? [];
+      const next = reorderPins(currentPins, state.uid, state.beforeUid);
+      if (next !== currentPins) {
+        void Promise.resolve(ctx.savePins(next)).catch((error) => console.error("[compass] pins", error));
+      }
+    });
+    ctx.lifecycle.event(globalThis, "pointercancel", (event) => {
+      if (!drag) return;
+      if (drag.pointerId != null && event.pointerId != null && event.pointerId !== drag.pointerId) return;
+      clearDrag();
+    });
+    ctx.lifecycle.event(picker, "click", (event) => {
+      const row = event.target.closest?.(".compass-pins-picker-item");
+      if (row) choosePickerRow(row);
+    });
+    ctx.lifecycle.event(picker, "keydown", (event) => {
+      const items = [...picker.querySelectorAll(".compass-pins-picker-item")];
+      const activeItem = event.target.closest?.(".compass-pins-picker-item");
+      const activeIndex = activeItem ? items.indexOf(activeItem) : -1;
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!items.length) return;
+        const nextIndex = activeIndex < 0 ? 0 : Math.min(items.length - 1, activeIndex + 1);
+        items[nextIndex].focus({ preventScroll: true });
+        items[nextIndex].scrollIntoView?.({ block: "nearest" });
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!items.length) return;
+        const prevIndex = activeIndex < 0 ? 0 : Math.max(0, activeIndex - 1);
+        items[prevIndex].focus({ preventScroll: true });
+        items[prevIndex].scrollIntoView?.({ block: "nearest" });
+        return;
+      }
+      if (event.key === "Home") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!items.length) return;
+        items[0].focus({ preventScroll: true });
+        items[0].scrollIntoView?.({ block: "nearest" });
+        return;
+      }
+      if (event.key === "End") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!items.length) return;
+        items[items.length - 1].focus({ preventScroll: true });
+        items[items.length - 1].scrollIntoView?.({ block: "nearest" });
+        return;
+      }
+      if (event.key === "Enter" && activeItem) {
+        event.preventDefault();
+        event.stopPropagation();
+        choosePickerRow(activeItem);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closePicker({ restoreFocus: true });
+      }
+    });
+    const onOutside = (event) => {
+      const target = event.target;
+      if (confirming && !confirmJustOpened) {
+        const confirmEl = ctx.dom.pinRow.querySelector(".compass-pin-confirm");
+        if (!confirmEl || !confirmEl.contains(target)) {
+          cancelConfirm({ restoreFocus: false });
+        }
+      }
+      if (isPickerOpen() && !pickerJustOpened && !picker.contains(target)) {
+        closePicker({ restoreFocus: false });
+      }
+    };
+    const doc = globalThis.document ?? ctx.dom.root;
+    ctx.lifecycle.event(doc, "pointerdown", onOutside);
+    ctx.lifecycle.event(doc, "click", onOutside);
+    ctx.lifecycle.event(ctx.dom.root, "focusin", (event) => {
+      if (isPickerOpen() && !pickerJustOpened && !picker.contains(event.target)) {
+        closePicker({ restoreFocus: false });
+      }
+    });
+    ctx.lifecycle.add(() => {
+      stopMidnightTimer();
+      clearDrag();
+    });
+  }
+  return {
+    name: "pins",
+    periodic() {
+      return resolvePeriodic(/* @__PURE__ */ new Date());
+    },
+    openPicker,
+    onOpen() {
+      armMidnightTimer();
+    },
+    onClose() {
+      stopMidnightTimer();
+      clearDrag();
+      confirming = null;
+      closePicker({ restoreFocus: false });
+    },
+    onNavigate({ changed } = {}) {
+      if (changed) {
+        confirming = null;
+        closePicker({ restoreFocus: false });
+      }
+    },
+    afterPins({ pinRow } = {}) {
+      decoratePinRow(pinRow);
+      if (ctx?.state?.isOpen && midnightTimer == null) {
+        armMidnightTimer();
+      }
+    },
+    onEscape() {
+      if (drag) {
+        const wasActive = drag.active;
+        clearDrag();
+        if (wasActive) return true;
+      }
+      if (isPickerOpen()) {
+        closePicker({ restoreFocus: true });
+        return true;
+      }
+      if (confirming) {
+        cancelConfirm({ restoreFocus: true });
+        return true;
+      }
+      return false;
+    },
+    onKey(event) {
+      if (isAltShortcut2(event, "b", "KeyB")) {
+        if (isPickerOpen()) closePicker({ restoreFocus: true });
+        else openPicker();
+        return true;
+      }
+      if (event?.key === "ContextMenu" || event?.shiftKey && event?.key === "F10") {
+        const userChip = event.target?.closest?.(".compass-pin-user");
+        if (userChip?.dataset?.pinUid) {
+          const rect = userChip.getBoundingClientRect();
+          openUserPinMenu(userChip.dataset.pinUid, rect.left + 8, rect.bottom);
+          return true;
+        }
+      }
+      return false;
+    },
+    commands() {
+      const settings = ctx?.state?.settings ?? {};
+      const out = [
+        { id: "pins-open", title: "Open pins", hint: "Alt+B", run: () => openPicker() },
+        { id: "pin-today", title: "Go to Today", hint: "", run: () => activatePeriodic("today") }
+      ];
+      if (settings.pinWeek === true) {
+        out.push({ id: "pin-week", title: "Go to This week", hint: "", run: () => activatePeriodic("week") });
+      }
+      if (settings.pinMonth === true) {
+        out.push({ id: "pin-month", title: "Go to This month", hint: "", run: () => activatePeriodic("month") });
+      }
+      return out;
+    }
+  };
 }
 
 // src/view/features/views.js
@@ -2860,9 +4446,1110 @@ function createViews(ctx) {
   return { name: "views", current, set, onSettings, commands, stageMenu };
 }
 
+// src/model/mindmap.js
+var DEFAULT_NODE = Object.freeze({ w: 180, h: 34 });
+var DEFAULT_ROOT = Object.freeze({ w: 240, h: 56 });
+var MORE_SIZE = Object.freeze({ w: 104, h: 26 });
+var PARENT_COLUMNS = 3;
+var BALANCED_PEER_CAP = 4;
+var COL_GAP2 = 14;
+function clamp(value, low, high) {
+  return Math.max(low, Math.min(high, value));
+}
+function cleanNodes(list) {
+  if (!Array.isArray(list)) return [];
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const item of list) {
+    if (!item || typeof item.uid !== "string" || !item.uid || seen.has(item.uid)) continue;
+    seen.add(item.uid);
+    out.push(item);
+  }
+  return out;
+}
+function normalizeState(state) {
+  return {
+    folded: state?.folded instanceof Set ? state.folded : /* @__PURE__ */ new Set(),
+    opened: state?.opened instanceof Set ? state.opened : /* @__PURE__ */ new Set(),
+    limits: state?.limits instanceof Map ? state.limits : /* @__PURE__ */ new Map()
+  };
+}
+function cloneState(state) {
+  const norm = normalizeState(state);
+  return {
+    folded: new Set(norm.folded),
+    opened: new Set(norm.opened),
+    limits: new Map(norm.limits)
+  };
+}
+function positiveInt(value, fallback, min = 1) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(min, Math.trunc(num));
+}
+function readLimit(limits, key, fallback) {
+  const custom = limits.get(key);
+  if (typeof custom === "number" && Number.isFinite(custom) && custom >= 0) return Math.trunc(custom);
+  return fallback;
+}
+function buildTree({
+  root,
+  children = [],
+  parents = [],
+  peers = [],
+  childrenOf,
+  state,
+  generations = 2,
+  maxChildren = 12,
+  maxNodes = 300
+} = {}) {
+  const rootUid = typeof root?.uid === "string" ? root.uid : "";
+  const rootNode = {
+    ...root,
+    uid: rootUid,
+    title: typeof root?.title === "string" && root.title ? root.title : rootUid,
+    kind: root?.kind === "block" ? "block" : "page"
+  };
+  const normState = normalizeState(state);
+  const genLimit = positiveInt(generations, 2, 1);
+  const childCap = positiveInt(maxChildren, 12, 0);
+  const nodeCap = positiveInt(maxNodes, 300, 1);
+  const fetchChildren = typeof childrenOf === "function" ? childrenOf : () => [];
+  const rootOcc = {
+    key: rootUid,
+    uid: rootUid,
+    node: rootNode,
+    depth: 0,
+    parentKey: null,
+    status: "open",
+    children: [],
+    childCount: 0,
+    hidden: 0
+  };
+  const expandedUids = /* @__PURE__ */ new Set();
+  const queue = [{ occ: rootOcc, ancestors: /* @__PURE__ */ new Set() }];
+  let count2 = 1;
+  let truncated = false;
+  for (let qIndex = 0; qIndex < queue.length; qIndex += 1) {
+    const { occ, ancestors } = queue[qIndex];
+    if (occ.depth > 0 && (ancestors.has(occ.uid) || expandedUids.has(occ.uid))) {
+      occ.status = "repeat";
+      occ.childCount = null;
+      occ.children = [];
+      occ.hidden = 0;
+      continue;
+    }
+    const shouldOpen = occ.depth === 0 || (occ.depth < genLimit ? !normState.folded.has(occ.key) : normState.opened.has(occ.key));
+    if (!shouldOpen) {
+      occ.status = "folded";
+      occ.childCount = null;
+      occ.children = [];
+      occ.hidden = 0;
+      continue;
+    }
+    if (occ.depth > 0 && truncated && count2 >= nodeCap) {
+      occ.status = "folded";
+      occ.childCount = null;
+      occ.children = [];
+      occ.hidden = 0;
+      continue;
+    }
+    const kids = cleanNodes(occ.depth === 0 ? children : fetchChildren(occ.uid));
+    occ.childCount = kids.length;
+    if (occ.depth > 0 && kids.length === 0) {
+      expandedUids.add(occ.uid);
+      occ.status = "leaf";
+      occ.children = [];
+      occ.hidden = 0;
+      continue;
+    }
+    const limit = readLimit(normState.limits, occ.key, childCap);
+    const wanted = kids.slice(0, limit);
+    const budget = Math.max(0, nodeCap - count2);
+    if (wanted.length > budget) truncated = true;
+    const shown = wanted.slice(0, budget);
+    if (occ.depth > 0 && shown.length === 0 && kids.length > 0) {
+      occ.status = "folded";
+      occ.children = [];
+      occ.hidden = 0;
+      continue;
+    }
+    expandedUids.add(occ.uid);
+    occ.status = "open";
+    occ.hidden = kids.length - shown.length;
+    const nextAncestors = new Set(ancestors);
+    if (occ.uid) nextAncestors.add(occ.uid);
+    for (const childNode of shown) {
+      const childOcc = {
+        key: occ.key ? `${occ.key}/${childNode.uid}` : childNode.uid,
+        uid: childNode.uid,
+        node: childNode,
+        depth: occ.depth + 1,
+        parentKey: occ.key,
+        status: "folded",
+        children: [],
+        childCount: null,
+        hidden: 0
+      };
+      occ.children.push(childOcc);
+      count2 += 1;
+      queue.push({ occ: childOcc, ancestors: nextAncestors });
+    }
+  }
+  return {
+    root: rootOcc,
+    parents: cleanNodes(parents),
+    peers: cleanNodes(peers),
+    count: count2,
+    truncated
+  };
+}
+function measureSlot(slot, nodeSize, moreSize, vGap) {
+  if (slot.kind === "more") {
+    return { slot, ownH: moreSize.h, blockH: moreSize.h, childMeasures: [], childrenH: 0 };
+  }
+  const occ = slot.occ;
+  const childSlots = occ.children.map((child) => ({ kind: "node", occ: child }));
+  if (occ.hidden > 0) {
+    childSlots.push({
+      kind: "more",
+      key: `${occ.key}#more`,
+      uid: occ.uid,
+      parentKey: occ.key,
+      depth: occ.depth + 1,
+      hidden: occ.hidden
+    });
+  }
+  const childMeasures = childSlots.map((child) => measureSlot(child, nodeSize, moreSize, vGap));
+  const childrenH = childMeasures.length ? childMeasures.reduce((sum, m) => sum + m.blockH, 0) + (childMeasures.length - 1) * vGap : 0;
+  const blockH = Math.max(nodeSize.h, childrenH);
+  return { slot, ownH: nodeSize.h, blockH, childMeasures, childrenH };
+}
+function placeSide({
+  rootKey,
+  rootSize,
+  nodeSize,
+  moreSize,
+  hGap,
+  vGap,
+  side,
+  childOccurrences,
+  extraMore,
+  items,
+  links
+}) {
+  const sign = side === "left" ? -1 : 1;
+  const topSlots = childOccurrences.map((occ) => ({ kind: "node", occ }));
+  if (extraMore > 0) {
+    topSlots.push({
+      kind: "more",
+      key: `${rootKey}#more`,
+      uid: rootKey,
+      parentKey: rootKey,
+      depth: 1,
+      hidden: extraMore
+    });
+  }
+  if (!topSlots.length) return;
+  const measures = topSlots.map((slot) => measureSlot(slot, nodeSize, moreSize, vGap));
+  const totalH = measures.reduce((sum, m) => sum + m.blockH, 0) + (measures.length - 1) * vGap;
+  function emit(measure, blockTop, parentBox, parentKey) {
+    const { slot, blockH, childMeasures, childrenH } = measure;
+    const depth = slot.kind === "more" ? slot.depth : slot.occ.depth;
+    const innerEdge = rootSize.w / 2 + depth * hGap + (depth - 1) * nodeSize.w;
+    if (slot.kind === "more") {
+      const w2 = Math.min(moreSize.w, nodeSize.w);
+      const h2 = Math.min(moreSize.h, nodeSize.h);
+      const x2 = sign * (innerEdge + w2 / 2);
+      const y2 = blockTop + blockH / 2;
+      const item2 = {
+        key: slot.key,
+        uid: slot.uid,
+        parentKey: slot.parentKey,
+        hidden: slot.hidden,
+        kind: "more",
+        zone: "south",
+        x: x2,
+        y: y2,
+        w: w2,
+        h: h2,
+        depth,
+        status: "more",
+        side
+      };
+      items.push(item2);
+      links.push({
+        fromKey: parentKey,
+        toKey: item2.key,
+        from: { x: parentBox.x + sign * (parentBox.w / 2), y: parentBox.y },
+        to: { x: item2.x - sign * (item2.w / 2), y: item2.y },
+        side
+      });
+      return;
+    }
+    const occ = slot.occ;
+    const w = nodeSize.w;
+    const h = nodeSize.h;
+    const x = sign * (innerEdge + w / 2);
+    const y = blockTop + blockH / 2;
+    const item = {
+      key: occ.key,
+      uid: occ.uid,
+      kind: "node",
+      zone: "south",
+      x,
+      y,
+      w,
+      h,
+      depth: occ.depth,
+      status: occ.status,
+      side
+    };
+    items.push(item);
+    links.push({
+      fromKey: parentKey,
+      toKey: item.key,
+      from: { x: parentBox.x + sign * (parentBox.w / 2), y: parentBox.y },
+      to: { x: item.x - sign * (item.w / 2), y: item.y },
+      side
+    });
+    if (!childMeasures.length) return;
+    let cursor2 = childrenH < blockH ? y - childrenH / 2 : blockTop;
+    for (const childMeasure of childMeasures) {
+      emit(childMeasure, cursor2, item, occ.key);
+      cursor2 += childMeasure.blockH + vGap;
+    }
+  }
+  const rootBox = { x: 0, y: 0, w: rootSize.w, h: rootSize.h };
+  let cursor = -totalH / 2;
+  for (const measure of measures) {
+    emit(measure, cursor, rootBox, rootKey);
+    cursor += measure.blockH + vGap;
+  }
+}
+function boxesOverlap(a, b, padX = 0, padY = 0) {
+  return Math.abs(a.x - b.x) * 2 < a.w + b.w + padX * 2 && Math.abs(a.y - b.y) * 2 < a.h + b.h + padY * 2;
+}
+function rowWidth(count2, itemW, gap) {
+  return count2 > 0 ? count2 * itemW + (count2 - 1) * gap : 0;
+}
+function peerZone(peer) {
+  if (peer?.zone === "east" || peer?.role === "challenger" || peer?.role === "next") return "east";
+  return "west";
+}
+function layoutTree(tree, options = {}) {
+  const direction = options.direction === "left" || options.direction === "balanced" ? options.direction : "right";
+  const nodeSize = {
+    w: positiveInt(options.node?.w, DEFAULT_NODE.w, 20),
+    h: positiveInt(options.node?.h, DEFAULT_NODE.h, 16)
+  };
+  const rootSize = {
+    w: positiveInt(options.root?.w, DEFAULT_ROOT.w, 40),
+    h: positiveInt(options.root?.h, DEFAULT_ROOT.h, 24)
+  };
+  const hGap = positiveInt(options.hGap, 56, 8);
+  const vGap = positiveInt(options.vGap, 10, 2);
+  const moreSize = {
+    w: Math.min(MORE_SIZE.w, nodeSize.w),
+    h: Math.min(MORE_SIZE.h, nodeSize.h)
+  };
+  const center = { x: 0, y: 0, w: rootSize.w, h: rootSize.h };
+  const items = [];
+  const links = [];
+  const rootOcc = tree?.root;
+  const rootKey = rootOcc?.key ?? "";
+  const rootChildren = Array.isArray(rootOcc?.children) ? rootOcc.children : [];
+  const rootHidden = positiveInt(rootOcc?.hidden, 0, 0);
+  if (direction === "balanced") {
+    const split = Math.ceil(rootChildren.length / 2);
+    const rightChildren = rootChildren.slice(0, split);
+    const leftChildren = rootChildren.slice(split);
+    const rightMore = leftChildren.length === 0 ? rootHidden : 0;
+    const leftMore = leftChildren.length > 0 ? rootHidden : 0;
+    placeSide({
+      rootKey,
+      rootSize,
+      nodeSize,
+      moreSize,
+      hGap,
+      vGap,
+      side: "right",
+      childOccurrences: rightChildren,
+      extraMore: rightMore,
+      items,
+      links
+    });
+    placeSide({
+      rootKey,
+      rootSize,
+      nodeSize,
+      moreSize,
+      hGap,
+      vGap,
+      side: "left",
+      childOccurrences: leftChildren,
+      extraMore: leftMore,
+      items,
+      links
+    });
+  } else {
+    placeSide({
+      rootKey,
+      rootSize,
+      nodeSize,
+      moreSize,
+      hGap,
+      vGap,
+      side: direction,
+      childOccurrences: rootChildren,
+      extraMore: rootHidden,
+      items,
+      links
+    });
+  }
+  const peers = Array.isArray(tree?.peers) ? tree.peers : [];
+  let peersOmitted = 0;
+  if (peers.length > 0) {
+    if (direction === "balanced") {
+      const peerGap = Math.max(36, vGap * 3);
+      if (peers.length <= BALANCED_PEER_CAP) {
+        const width = rowWidth(peers.length, nodeSize.w, COL_GAP2);
+        const y = -(rootSize.h / 2 + peerGap + nodeSize.h / 2);
+        const candidates = peers.map((peer, index) => ({
+          key: `peer:${peer.uid}`,
+          uid: peer.uid,
+          kind: "node",
+          zone: peerZone(peer),
+          x: -width / 2 + index * (nodeSize.w + COL_GAP2) + nodeSize.w / 2,
+          y,
+          w: nodeSize.w,
+          h: nodeSize.h,
+          depth: 1,
+          status: "leaf",
+          side: "north"
+        }));
+        const existing = [center, ...items];
+        const collides = candidates.some((cand) => existing.some((box) => boxesOverlap(cand, box, COL_GAP2 / 2, vGap)));
+        if (!collides) {
+          for (const item of candidates) {
+            items.push(item);
+            links.push({
+              fromKey: rootKey,
+              toKey: item.key,
+              from: { x: clamp(item.x, -rootSize.w / 2 + 16, rootSize.w / 2 - 16), y: -rootSize.h / 2 },
+              to: { x: item.x, y: item.y + item.h / 2 },
+              side: "north"
+            });
+          }
+        } else {
+          peersOmitted = peers.length;
+        }
+      } else {
+        peersOmitted = peers.length;
+      }
+    } else {
+      const peerSide = direction === "right" ? "left" : "right";
+      const sign = peerSide === "left" ? -1 : 1;
+      const peerX = sign * (rootSize.w / 2 + hGap + nodeSize.w / 2);
+      const totalH = peers.length * nodeSize.h + (peers.length - 1) * vGap;
+      peers.forEach((peer, index) => {
+        const y = -totalH / 2 + nodeSize.h / 2 + index * (nodeSize.h + vGap);
+        const item = {
+          key: `peer:${peer.uid}`,
+          uid: peer.uid,
+          kind: "node",
+          zone: peerZone(peer),
+          x: peerX,
+          y,
+          w: nodeSize.w,
+          h: nodeSize.h,
+          depth: 1,
+          status: "leaf",
+          side: peerSide
+        };
+        items.push(item);
+        links.push({
+          fromKey: rootKey,
+          toKey: item.key,
+          from: {
+            x: sign * (rootSize.w / 2),
+            y: clamp(item.y, -rootSize.h / 2 + 12, rootSize.h / 2 - 12)
+          },
+          to: {
+            x: item.x - sign * (item.w / 2),
+            y: item.y
+          },
+          side: peerSide
+        });
+      });
+    }
+  }
+  const parents = Array.isArray(tree?.parents) ? tree.parents : [];
+  if (parents.length > 0) {
+    const usedCols = Math.min(PARENT_COLUMNS, parents.length);
+    const maxHalfW = rowWidth(usedCols, nodeSize.w, COL_GAP2) / 2;
+    let bandMinY = -rootSize.h / 2;
+    for (const existing of items) {
+      if (Math.abs(existing.x) - existing.w / 2 <= maxHalfW + COL_GAP2) {
+        bandMinY = Math.min(bandMinY, existing.y - existing.h / 2);
+      }
+    }
+    const parentGap = Math.max(40, vGap * 3.5);
+    const rowStep = nodeSize.h + Math.max(12, vGap);
+    const totalRows = Math.ceil(parents.length / PARENT_COLUMNS);
+    parents.forEach((parent, index) => {
+      const row = Math.floor(index / PARENT_COLUMNS);
+      const col = index % PARENT_COLUMNS;
+      const inRow = row === totalRows - 1 ? parents.length - row * PARENT_COLUMNS : PARENT_COLUMNS;
+      const width = rowWidth(inRow, nodeSize.w, COL_GAP2);
+      const x = -width / 2 + col * (nodeSize.w + COL_GAP2) + nodeSize.w / 2;
+      const y = bandMinY - parentGap - nodeSize.h / 2 - row * rowStep;
+      const item = {
+        key: `parent:${parent.uid}`,
+        uid: parent.uid,
+        kind: "node",
+        zone: "north",
+        x,
+        y,
+        w: nodeSize.w,
+        h: nodeSize.h,
+        depth: 1,
+        status: "leaf",
+        side: "north"
+      };
+      items.push(item);
+      const toX = clamp(item.x * 0.72, item.x - item.w / 2 + 24, item.x + item.w / 2 - 24);
+      links.push({
+        fromKey: rootKey,
+        toKey: item.key,
+        from: { x: clamp(toX, -rootSize.w / 2 + 16, rootSize.w / 2 - 16), y: -rootSize.h / 2 },
+        to: { x: toX, y: item.y + item.h / 2 },
+        side: "north"
+      });
+    });
+  }
+  let minX = -center.w / 2;
+  let maxX = center.w / 2;
+  let minY = -center.h / 2;
+  let maxY = center.h / 2;
+  for (const item of items) {
+    minX = Math.min(minX, item.x - item.w / 2);
+    maxX = Math.max(maxX, item.x + item.w / 2);
+    minY = Math.min(minY, item.y - item.h / 2);
+    maxY = Math.max(maxY, item.y + item.h / 2);
+  }
+  return {
+    center,
+    items,
+    links,
+    bounds: { minX, minY, maxX, maxY },
+    peersOmitted
+  };
+}
+function toggleFold(state, occurrence, generations = 2) {
+  const next = cloneState(state);
+  if (!occurrence || typeof occurrence.key !== "string" || !occurrence.key) return next;
+  const depth = Number(occurrence.depth);
+  if (!Number.isFinite(depth) || depth <= 0) return next;
+  if (occurrence.status === "repeat" || occurrence.status === "leaf") return next;
+  const genLimit = positiveInt(generations, 2, 1);
+  const key = occurrence.key;
+  const isOpen = occurrence.status === "open" ? true : occurrence.status === "folded" ? false : depth < genLimit ? !next.folded.has(key) : next.opened.has(key);
+  if (isOpen) {
+    next.opened.delete(key);
+    if (depth < genLimit) next.folded.add(key);
+    else next.folded.delete(key);
+  } else {
+    next.folded.delete(key);
+    if (depth >= genLimit) next.opened.add(key);
+    else next.opened.delete(key);
+  }
+  return next;
+}
+function collectOccurrences(root) {
+  const out = [];
+  if (!root) return out;
+  const stack = [root];
+  while (stack.length > 0) {
+    const cur = stack.pop();
+    out.push(cur);
+    const kids = Array.isArray(cur.children) ? cur.children : [];
+    for (let i = kids.length - 1; i >= 0; i -= 1) {
+      if (kids[i]) stack.push(kids[i]);
+    }
+  }
+  return out;
+}
+function expandGeneration(tree, state) {
+  const next = cloneState(state);
+  const all = collectOccurrences(tree?.root);
+  const folded = all.filter((occ) => occ.depth > 0 && occ.status === "folded");
+  if (!folded.length) return next;
+  const minDepth = Math.min(...folded.map((occ) => occ.depth));
+  for (const occ of folded) {
+    if (occ.depth !== minDepth) continue;
+    const wasInFolded = next.folded.delete(occ.key);
+    if (!wasInFolded) next.opened.add(occ.key);
+  }
+  return next;
+}
+function collapseGeneration(tree, state) {
+  const next = cloneState(state);
+  const all = collectOccurrences(tree?.root);
+  const open = all.filter((occ) => occ.depth > 0 && occ.status === "open");
+  if (!open.length) return next;
+  const maxDepth = Math.max(...open.map((occ) => occ.depth));
+  for (const occ of open) {
+    if (occ.depth !== maxDepth) continue;
+    const wasInOpened = next.opened.delete(occ.key);
+    if (!wasInOpened) next.folded.add(occ.key);
+  }
+  return next;
+}
+function outlineItemFromOccurrence(occ) {
+  const node = occ?.node;
+  const uid = occ?.uid ?? node?.uid ?? "";
+  return {
+    uid,
+    title: typeof node?.title === "string" && node.title ? node.title : uid,
+    kind: node?.kind === "block" ? "block" : "page",
+    label: typeof node?.label === "string" ? node.label : "",
+    status: occ?.status ?? "leaf",
+    children: Array.isArray(occ?.children) ? occ.children.map(outlineItemFromOccurrence) : []
+  };
+}
+function outlineItemFromParent(parent) {
+  const uid = typeof parent?.uid === "string" ? parent.uid : "";
+  return {
+    uid,
+    title: typeof parent?.title === "string" && parent.title ? parent.title : uid,
+    kind: parent?.kind === "block" ? "block" : "page",
+    label: typeof parent?.label === "string" ? parent.label : "",
+    status: "leaf",
+    children: []
+  };
+}
+function treeOutline(tree) {
+  if (!tree?.root) return null;
+  return {
+    root: outlineItemFromOccurrence(tree.root),
+    parents: Array.isArray(tree.parents) ? tree.parents.map(outlineItemFromParent) : []
+  };
+}
+
 // src/view/features/mindmap.js
-function createMindMap() {
-  return { name: "mindmap" };
+var EXPANDED_SOUTH = /* @__PURE__ */ new Set(["south"]);
+function emptyState() {
+  return { folded: /* @__PURE__ */ new Set(), opened: /* @__PURE__ */ new Set(), limits: /* @__PURE__ */ new Map() };
+}
+function findOccurrence(root, key) {
+  if (!root || !key) return null;
+  if (root.key === key) return root;
+  const stack = [...root.children ?? []];
+  while (stack.length > 0) {
+    const cur = stack.pop();
+    if (!cur) continue;
+    if (cur.key === key) return cur;
+    for (const kid of cur.children ?? []) stack.push(kid);
+  }
+  return null;
+}
+function placeElement(element, box) {
+  element.style.width = `${box.w}px`;
+  element.style.height = `${box.h}px`;
+  element.style.transform = `translate(${box.x - box.w / 2}px, ${box.y - box.h / 2}px)`;
+}
+function chevronPath(status, side) {
+  if (status === "open") return "M2.2 3.6 L5 6.6 L7.8 3.6";
+  return side === "left" ? "M6.3 2.2 L3.3 5 L6.3 7.8" : "M3.7 2.2 L6.7 5 L3.7 7.8";
+}
+function buildChevron(ctx, status, side, count2, label) {
+  const btn = ctx.button("compass-mm-chevron", "", label);
+  btn.textContent = "";
+  const icon = ctx.svg("svg", "compass-mm-chevron-icon");
+  icon.setAttribute("viewBox", "0 0 10 10");
+  icon.setAttribute("width", "10");
+  icon.setAttribute("height", "10");
+  icon.setAttribute("aria-hidden", "true");
+  const path = ctx.svg("path", "compass-mm-chevron-stroke");
+  path.setAttribute("d", chevronPath(status, side));
+  icon.append(path);
+  const hasCount = typeof count2 === "number" && Number.isFinite(count2) && count2 > 0;
+  if (hasCount) {
+    const num = ctx.el("span", "compass-mm-count", String(count2));
+    if (side === "left") btn.append(num, icon);
+    else btn.append(icon, num);
+  } else {
+    btn.append(icon);
+  }
+  return btn;
+}
+function plexusApi() {
+  const api = globalThis.window?.RoamPlexus;
+  return api && api.apiVersion >= 1 ? api : null;
+}
+function createMindMap(ctx) {
+  if (!ctx) {
+    return {
+      name: "mindmap",
+      tree: () => null,
+      outline: () => null
+    };
+  }
+  const childCache = /* @__PURE__ */ new Map();
+  const stateByRoot = /* @__PURE__ */ new Map();
+  const itemEls = /* @__PURE__ */ new Map();
+  let layer = null;
+  let edgesEl = null;
+  let emptyEl = null;
+  let lastTree = null;
+  let lastDirection = null;
+  let pendingFit = false;
+  let lastNoticeKey = "";
+  if (ctx.dom?.world) {
+    layer = ctx.el("div", "compass-mindmap");
+    layer.hidden = true;
+    edgesEl = ctx.svg("svg", "compass-edges compass-mm-edges");
+    edgesEl.setAttribute("width", "1");
+    edgesEl.setAttribute("height", "1");
+    emptyEl = ctx.el("p", "compass-mm-empty", "Nothing branches from here yet.");
+    emptyEl.hidden = true;
+    layer.append(edgesEl, emptyEl);
+    ctx.lifecycle.node(layer, ctx.dom.world);
+  }
+  function isActive() {
+    const views = ctx.features?.get?.("views");
+    if (views?.current) return views.current()?.view === "mindmap";
+    return ctx.state?.settings?.view === "mindmap";
+  }
+  function stateFor(rootUid) {
+    if (!stateByRoot.has(rootUid)) stateByRoot.set(rootUid, emptyState());
+    return stateByRoot.get(rootUid);
+  }
+  function currentGenerations(settings = ctx.state?.settings) {
+    const raw = Number(settings?.mindmapGenerations);
+    if (!Number.isFinite(raw)) return 2;
+    return Math.min(5, Math.max(1, Math.trunc(raw)));
+  }
+  function currentDirection(settings = ctx.state?.settings) {
+    const dir = settings?.mindmapDirection;
+    return dir === "left" || dir === "balanced" ? dir : "right";
+  }
+  function childrenOf(uid, modelSettings2) {
+    if (childCache.has(uid)) return childCache.get(uid);
+    let kids = [];
+    try {
+      const snap = ctx.host.snapshot(uid, modelSettings2);
+      if (snap && !snap.missing) {
+        const sub = buildNeighborhood(snap, modelSettings2, {
+          expanded: EXPANDED_SOUTH,
+          regionLabel: plexusRegionLabels(plexusApi())
+        });
+        kids = sub.nodes.filter((node) => node.zone === "south");
+      }
+    } catch (error) {
+      console.error("[compass] mindmap", error);
+    }
+    childCache.set(uid, kids);
+    return kids;
+  }
+  function clearLayer() {
+    for (const element of itemEls.values()) element.remove();
+    itemEls.clear();
+    if (edgesEl) edgesEl.replaceChildren();
+    if (emptyEl) emptyEl.hidden = true;
+    if (layer) layer.hidden = true;
+    lastTree = null;
+    lastDirection = null;
+    pendingFit = false;
+    lastNoticeKey = "";
+  }
+  function onSettings() {
+    childCache.clear();
+  }
+  function clearView() {
+    clearLayer();
+  }
+  function onClose() {
+    childCache.clear();
+    clearLayer();
+  }
+  function renderRootNode(center, box) {
+    const key = center.uid;
+    let element = itemEls.get(key);
+    if (!element) {
+      element = ctx.el("div");
+      element.tabIndex = 0;
+      element.setAttribute("role", "button");
+      layer.append(element);
+      itemEls.set(key, element);
+    }
+    element.className = "compass-node compass-node-center";
+    element.dataset.uid = center.uid;
+    element.dataset.key = key;
+    element.dataset.zone = "center";
+    element.dataset.kind = center.kind || "page";
+    element.dataset.style = "center";
+    element.title = center.title;
+    element.setAttribute("aria-label", `Center: ${center.title}`);
+    const sig = `center|${center.kind}|${center.title}`;
+    if (element._mmSig !== sig) {
+      element._mmSig = sig;
+      const head = ctx.el("div", "compass-center-head");
+      const kind = ctx.el("span", "compass-kind", center.kind === "block" ? "Block" : "Page");
+      const title = ctx.el("span", "compass-node-title", center.title);
+      head.append(kind, title);
+      element.replaceChildren(head);
+    }
+    placeElement(element, box);
+  }
+  function renderItemNode(item, node, occ, isFaded) {
+    let element = itemEls.get(item.key);
+    if (!element) {
+      element = ctx.el("div");
+      element.tabIndex = 0;
+      element.setAttribute("role", "button");
+      layer.append(element);
+      itemEls.set(item.key, element);
+    }
+    const isRepeat = item.status === "repeat";
+    const classes = ["compass-node"];
+    if (isRepeat) classes.push("compass-mm-repeat");
+    if (isFaded) classes.push("compass-fade");
+    element.className = classes.join(" ");
+    const fullTitle = typeof node?.title === "string" && node.title ? node.title : item.uid;
+    const visibleTitle = typeof node?.alias === "string" && node.alias ? node.alias : fullTitle;
+    const relLabel = typeof node?.label === "string" && node.label ? node.label : "";
+    const nodeKind = node?.kind === "block" ? "block" : "page";
+    const nodeStyle = typeof node?.style === "string" && node.style ? node.style : "typed";
+    element.dataset.uid = item.uid;
+    element.dataset.key = item.key;
+    element.dataset.zone = item.zone;
+    element.dataset.kind = nodeKind;
+    element.dataset.style = nodeStyle;
+    element.dataset.status = item.status;
+    element.dataset.side = item.side;
+    if (isRepeat) {
+      element.title = "Shown elsewhere in this map";
+      element.setAttribute("aria-label", `${fullTitle} — Shown elsewhere in this map`);
+    } else {
+      const why = relLabel ? ` — ${relLabel}` : "";
+      element.title = `${fullTitle}${why}`;
+      element.setAttribute("aria-label", `${fullTitle}${why}`);
+    }
+    const isTreeBranch = Boolean(occ) && (item.status === "open" || item.status === "folded");
+    const cachedKids = childCache.get(item.uid);
+    const knownCount = occ?.childCount != null ? occ.childCount : Array.isArray(cachedKids) ? cachedKids.length : null;
+    const sig = `${visibleTitle}|${item.status}|${item.side}|${isTreeBranch ? 1 : 0}|${knownCount ?? ""}`;
+    if (element._mmSig !== sig) {
+      element._mmSig = sig;
+      const titleSpan = ctx.el("span", "compass-node-title", visibleTitle);
+      if (isTreeBranch) {
+        const expanded = item.status === "open";
+        const label = expanded ? `Fold ${fullTitle}` : `Expand ${fullTitle}`;
+        const chev = buildChevron(ctx, item.status, item.side, knownCount, label);
+        chev.tabIndex = -1;
+        chev.dataset.key = item.key;
+        chev.setAttribute("aria-expanded", expanded ? "true" : "false");
+        if (item.side === "left") element.replaceChildren(chev, titleSpan);
+        else element.replaceChildren(titleSpan, chev);
+      } else if (isRepeat) {
+        const mark = ctx.el("span", "compass-mm-repeat-mark", "↺");
+        mark.setAttribute("aria-hidden", "true");
+        if (item.side === "left") element.replaceChildren(mark, titleSpan);
+        else element.replaceChildren(titleSpan, mark);
+      } else {
+        element.replaceChildren(titleSpan);
+      }
+    }
+    placeElement(element, item);
+  }
+  function renderMoreItem(item) {
+    let element = itemEls.get(item.key);
+    if (!element) {
+      element = ctx.button("compass-mm-more", "", "Show more children");
+      layer.append(element);
+      itemEls.set(item.key, element);
+    }
+    element.className = "compass-mm-more";
+    element.dataset.key = item.key;
+    element.dataset.parentKey = item.parentKey ?? "";
+    const text = `+${item.hidden} more`;
+    if (element.textContent !== text) element.textContent = text;
+    placeElement(element, item);
+  }
+  function computeHiddenSet(drawnNodes, hood) {
+    const base = hiddenUids(drawnNodes, ctx.state?.lens);
+    const piped = ctx.features?.pipe ? ctx.features.pipe("hiddenUids", base, hood) : base;
+    const set = new Set(Array.isArray(piped) ? piped : base);
+    const fromLenses = ctx.features?.get?.("lenses")?.hiddenFor?.(drawnNodes);
+    if (fromLenses && typeof fromLenses[Symbol.iterator] === "function") {
+      for (const uid of fromLenses) set.add(uid);
+    }
+    return set;
+  }
+  function renderView({ hood, settings, navigate }) {
+    if (!isActive() || !hood?.center || !layer) return null;
+    layer.hidden = false;
+    const rootUid = hood.center.uid;
+    const generations = currentGenerations(settings);
+    const direction = currentDirection(settings);
+    if (!navigate && lastDirection !== null && lastDirection !== direction) {
+      pendingFit = true;
+    }
+    lastDirection = direction;
+    let children = hood.nodes.filter((node) => node.zone === "south");
+    if (hood.overflow?.south && ctx.state?.snapshot) {
+      let fullHood = buildNeighborhood(ctx.state.snapshot, settings?.model, {
+        expanded: EXPANDED_SOUTH,
+        regionLabel: plexusRegionLabels(plexusApi())
+      });
+      if (ctx.features?.pipe) fullHood = ctx.features.pipe("transformHood", fullHood);
+      children = fullHood.nodes.filter((node) => node.zone === "south");
+    }
+    const parents = hood.nodes.filter((node) => node.zone === "north");
+    const peers = hood.nodes.filter((node) => node.zone === "west" || node.zone === "east");
+    const built = buildTree({
+      root: hood.center,
+      children,
+      parents,
+      peers,
+      childrenOf: (uid) => childrenOf(uid, settings?.model),
+      state: stateFor(rootUid),
+      generations
+    });
+    lastTree = built;
+    const placed = layoutTree(built, { direction });
+    const occByKey = /* @__PURE__ */ new Map();
+    const walkOcc = (occ) => {
+      occByKey.set(occ.key, occ);
+      for (const child of occ.children) walkOcc(child);
+    };
+    walkOcc(built.root);
+    const nodeByKey = /* @__PURE__ */ new Map();
+    for (const [key, occ] of occByKey) {
+      if (occ.depth > 0) nodeByKey.set(key, occ.node);
+    }
+    for (const parent of built.parents) nodeByKey.set(`parent:${parent.uid}`, parent);
+    for (const peer of built.peers) nodeByKey.set(`peer:${peer.uid}`, peer);
+    const drawnNodes = [];
+    const seenNodeUids = /* @__PURE__ */ new Set();
+    for (const item of placed.items) {
+      if (item.kind !== "node") continue;
+      const node = nodeByKey.get(item.key);
+      if (!node || seenNodeUids.has(node.uid)) continue;
+      seenNodeUids.add(node.uid);
+      drawnNodes.push(node);
+    }
+    const hidden = computeHiddenSet(drawnNodes, hood);
+    const keepKeys = /* @__PURE__ */ new Set([hood.center.uid]);
+    for (const item of placed.items) keepKeys.add(item.key);
+    for (const [key, element] of itemEls) {
+      if (keepKeys.has(key)) continue;
+      element.remove();
+      itemEls.delete(key);
+    }
+    renderRootNode(hood.center, placed.center);
+    for (const item of placed.items) {
+      if (item.kind === "more") {
+        renderMoreItem(item);
+      } else {
+        const node = nodeByKey.get(item.key);
+        const occ = occByKey.get(item.key) ?? null;
+        renderItemNode(item, node, occ, hidden.has(item.uid));
+      }
+    }
+    edgesEl.replaceChildren();
+    const itemByKey = new Map(placed.items.map((item) => [item.key, item]));
+    for (const link of placed.links) {
+      const targetItem = itemByKey.get(link.toKey);
+      const targetNode = nodeByKey.get(link.toKey);
+      const vertical = link.side === "north";
+      const shape = ctx.curve(link.from.x, link.from.y, link.to.x, link.to.y, vertical);
+      const group = ctx.svg("g", "compass-edge");
+      if (targetItem?.uid) group.dataset.uid = targetItem.uid;
+      if (targetNode?.style) group.dataset.style = targetNode.style;
+      else if (targetItem?.kind === "more") group.dataset.style = "more";
+      const path = ctx.svg("path", "compass-edge-line");
+      path.setAttribute("d", shape.d);
+      group.append(path);
+      edgesEl.append(group);
+    }
+    const isEmptyRoot = built.root.children.length === 0 && built.parents.length === 0;
+    emptyEl.hidden = !isEmptyRoot;
+    const bounds = { ...placed.bounds };
+    if (isEmptyRoot) {
+      const emptyTop = placed.center.h / 2 + 24;
+      emptyEl.style.transform = `translate(-50%, ${emptyTop}px)`;
+      bounds.maxY = Math.max(bounds.maxY, emptyTop + 28);
+      bounds.minX = Math.min(bounds.minX, -140);
+      bounds.maxX = Math.max(bounds.maxX, 140);
+    }
+    if (built.truncated || placed.peersOmitted > 0) {
+      const noticeKey = `${rootUid}:${built.truncated ? 1 : 0}:${placed.peersOmitted}`;
+      if (noticeKey !== lastNoticeKey) {
+        lastNoticeKey = noticeKey;
+        const peerWord = placed.peersOmitted === 1 ? "peer" : "peers";
+        if (built.truncated && placed.peersOmitted > 0) {
+          ctx.setStatus(`Showing the first 300 nodes; ${placed.peersOmitted} ${peerWord} left out in balanced view.`);
+        } else if (built.truncated) {
+          ctx.setStatus("Showing the first 300 nodes.");
+        } else {
+          ctx.setStatus(`${placed.peersOmitted} ${peerWord} left out in balanced view.`);
+        }
+      }
+    } else {
+      lastNoticeKey = "";
+    }
+    const geometryItems = placed.items.filter((item) => item.kind === "node").map((item) => ({
+      key: item.key,
+      uid: item.uid,
+      zone: item.zone,
+      x: item.x,
+      y: item.y,
+      w: item.w,
+      h: item.h,
+      depth: item.depth,
+      status: item.status,
+      side: item.side
+    }));
+    return {
+      view: "mindmap",
+      geometry: {
+        center: placed.center,
+        items: geometryItems,
+        rows: [],
+        chips: [],
+        more: false,
+        bounds,
+        nodes: drawnNodes
+      }
+    };
+  }
+  function afterRender({ view }) {
+    if (view === "mindmap" && pendingFit) {
+      pendingFit = false;
+      ctx.fit(true);
+    }
+  }
+  function onStageClick(event) {
+    if (!isActive() || !lastTree) return false;
+    const target = event?.target;
+    const chevron = target?.closest?.(".compass-mm-chevron");
+    if (chevron) {
+      event.preventDefault?.();
+      const occ = findOccurrence(lastTree.root, chevron.dataset?.key);
+      if (occ) {
+        const rootUid = lastTree.root.uid;
+        stateByRoot.set(rootUid, toggleFold(stateFor(rootUid), occ, currentGenerations()));
+        ctx.render();
+      }
+      return true;
+    }
+    const moreBtn = target?.closest?.(".compass-mm-more");
+    if (moreBtn) {
+      event.preventDefault?.();
+      const parentKey = moreBtn.dataset?.parentKey;
+      if (parentKey) {
+        const rootUid = lastTree.root.uid;
+        const prev = stateFor(rootUid);
+        const nextLimits = new Map(prev.limits);
+        nextLimits.set(parentKey, (nextLimits.get(parentKey) ?? 12) + 12);
+        stateByRoot.set(rootUid, {
+          folded: new Set(prev.folded),
+          opened: new Set(prev.opened),
+          limits: nextLimits
+        });
+        ctx.render();
+      }
+      return true;
+    }
+    return false;
+  }
+  function onStageDoubleClick(event) {
+    if (!isActive()) return false;
+    if (event?.target?.closest?.(".compass-mm-chevron, .compass-mm-more")) {
+      event.preventDefault?.();
+      return true;
+    }
+    return false;
+  }
+  function onKey(event) {
+    if (!isActive() || !lastTree) return false;
+    if (!event?.altKey || event.key !== "Enter" || event.metaKey || event.ctrlKey || event.shiftKey) {
+      return false;
+    }
+    const activeEl = globalThis.document?.activeElement;
+    const nodeEl = activeEl?.closest?.(".compass-node") ?? event.target?.closest?.(".compass-node");
+    const key = nodeEl?.dataset?.key;
+    if (!key) return false;
+    const occ = findOccurrence(lastTree.root, key);
+    if (!occ) return false;
+    if (occ.depth > 0 && (occ.status === "open" || occ.status === "folded")) {
+      const rootUid = lastTree.root.uid;
+      stateByRoot.set(rootUid, toggleFold(stateFor(rootUid), occ, currentGenerations()));
+      ctx.render();
+      itemEls.get(key)?.focus?.({ preventScroll: true });
+    }
+    return true;
+  }
+  function runExpand() {
+    if (!lastTree) return;
+    const rootUid = lastTree.root.uid;
+    stateByRoot.set(rootUid, expandGeneration(lastTree, stateFor(rootUid)));
+    ctx.render();
+  }
+  function runCollapse() {
+    if (!lastTree) return;
+    const rootUid = lastTree.root.uid;
+    stateByRoot.set(rootUid, collapseGeneration(lastTree, stateFor(rootUid)));
+    ctx.render();
+  }
+  async function setDirection(value) {
+    lastDirection = value;
+    pendingFit = false;
+    await ctx.saveSetting(SETTING_IDS.mindmapDirection, value);
+    ctx.render();
+    ctx.fit(true);
+  }
+  function commands() {
+    if (!isActive()) return [];
+    return [
+      { id: "mm-expand", title: "Mind Map: expand one generation", hint: "", run: () => runExpand() },
+      { id: "mm-collapse", title: "Mind Map: collapse one generation", hint: "", run: () => runCollapse() },
+      { id: "mm-right", title: "Mind Map: grow right", hint: "", run: () => setDirection("right") },
+      { id: "mm-left", title: "Mind Map: grow left", hint: "", run: () => setDirection("left") },
+      { id: "mm-balanced", title: "Mind Map: grow both sides", hint: "", run: () => setDirection("balanced") }
+    ];
+  }
+  function stageMenu() {
+    if (!isActive()) return [];
+    return [
+      { title: "Expand one generation", run: () => runExpand() },
+      { title: "Collapse one generation", run: () => runCollapse() }
+    ];
+  }
+  function tree() {
+    return isActive() ? lastTree : null;
+  }
+  function outline() {
+    return isActive() && lastTree ? treeOutline(lastTree) : null;
+  }
+  return {
+    name: "mindmap",
+    onSettings,
+    renderView,
+    afterRender,
+    clearView,
+    onClose,
+    onStageClick,
+    onStageDoubleClick,
+    onKey,
+    commands,
+    stageMenu,
+    tree,
+    outline
+  };
 }
 
 // src/view/features/facets.js
@@ -2870,49 +5557,5326 @@ function createFacets() {
   return { name: "facets" };
 }
 
+// src/model/lens.js
+var FIELDS = Object.freeze({
+  node: Object.freeze([
+    Object.freeze({ field: "title", label: "Title" }),
+    Object.freeze({ field: "kind", label: "Kind" }),
+    Object.freeze({ field: "type", label: "Type" }),
+    Object.freeze({ field: "attr:", label: "Attribute…" })
+  ]),
+  relationship: Object.freeze([
+    Object.freeze({ field: "role", label: "Role" }),
+    Object.freeze({ field: "zone", label: "Zone" }),
+    Object.freeze({ field: "style", label: "Style" }),
+    Object.freeze({ field: "label", label: "Label" })
+  ])
+});
+var OPERATORS = Object.freeze([
+  Object.freeze({ op: "is", label: "Is", needsValue: true }),
+  Object.freeze({ op: "is-not", label: "Is not", needsValue: true }),
+  Object.freeze({ op: "contains", label: "Contains", needsValue: true }),
+  Object.freeze({ op: "not-contains", label: "Does not contain", needsValue: true }),
+  Object.freeze({ op: "exists", label: "Exists", needsValue: false }),
+  Object.freeze({ op: "missing", label: "Missing", needsValue: false })
+]);
+var EXAMPLE_LENSES = Object.freeze([
+  Object.freeze({
+    id: "typed-only",
+    name: "Typed relations only",
+    enabled: false,
+    scope: "relationship",
+    effect: "hide",
+    match: Object.freeze({
+      any: Object.freeze([
+        Object.freeze({ field: "style", op: "is", value: "link" }),
+        Object.freeze({ field: "style", op: "is", value: "mention" })
+      ])
+    }),
+    style: Object.freeze({ fill: "", border: "", text: "" })
+  }),
+  Object.freeze({
+    id: "highlight-challengers",
+    name: "Highlight challengers",
+    enabled: false,
+    scope: "relationship",
+    effect: "style",
+    match: Object.freeze({
+      any: Object.freeze([
+        Object.freeze({ field: "role", op: "is", value: "challenger" }),
+        Object.freeze({ field: "role", op: "is", value: "next" })
+      ])
+    }),
+    style: Object.freeze({ fill: "", border: "#ea580c", text: "" })
+  }),
+  Object.freeze({
+    id: "tasks",
+    name: "Tasks",
+    enabled: false,
+    scope: "node",
+    effect: "show",
+    match: Object.freeze({
+      all: Object.freeze([
+        Object.freeze({ field: "type", op: "is", value: "Task" })
+      ])
+    }),
+    style: Object.freeze({ fill: "", border: "", text: "" })
+  })
+]);
+var VALID_ID = /^[a-z0-9-]+$/;
+var SCOPES = /* @__PURE__ */ new Set(["node", "relationship"]);
+var EFFECTS = /* @__PURE__ */ new Set(["show", "hide", "style"]);
+var DIRECT_FIELDS = /* @__PURE__ */ new Set(["title", "kind", "group", "type", "role", "zone", "style", "label"]);
+var OPERATOR_BY_OP = new Map(OPERATORS.map((item) => [item.op, item]));
+var COLOR_CHARS = /^[A-Za-z0-9#(),.% ]+$/;
+var HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+var FUNC_COLOR = /^(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\((?=.*[0-9])[A-Za-z0-9,%. ]+\)$/i;
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+function slugLensId(name, existingIds = []) {
+  const base = String(name ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "lens";
+  const taken = existingIds instanceof Set ? existingIds : new Set(Array.isArray(existingIds) ? existingIds : []);
+  if (!taken.has(base)) return base;
+  let suffix = 2;
+  while (taken.has(`${base}-${suffix}`)) suffix += 1;
+  return `${base}-${suffix}`;
+}
+function isValidColor(value) {
+  if (!value || value.length > 40) return false;
+  if (!COLOR_CHARS.test(value)) return false;
+  return HEX_COLOR.test(value) || FUNC_COLOR.test(value);
+}
+function normalizeCondition(raw, errors) {
+  if (!isPlainObject(raw)) {
+    errors.push("Each condition must be an object.");
+    return null;
+  }
+  const rawField = typeof raw.field === "string" ? raw.field.trim() : "";
+  let field = "";
+  if (rawField.startsWith("attr:")) {
+    const attrName = rawField.slice(5).trim();
+    if (!attrName) errors.push("Enter an attribute name.");
+    else field = `attr:${attrName}`;
+  } else if (DIRECT_FIELDS.has(rawField)) {
+    field = rawField;
+  } else {
+    errors.push("Choose a valid condition field.");
+  }
+  const rawOp = typeof raw.op === "string" ? raw.op.trim() : "";
+  const operator = OPERATOR_BY_OP.get(rawOp);
+  if (!operator) {
+    errors.push("Choose a valid operator.");
+    return null;
+  }
+  if (!operator.needsValue) {
+    return field ? { field, op: operator.op } : null;
+  }
+  const value = typeof raw.value === "string" ? raw.value.trim() : "";
+  if (!value) {
+    errors.push("Enter a value for every condition.");
+    return null;
+  }
+  return field ? { field, op: operator.op, value } : null;
+}
+function validateLens(raw) {
+  if (!isPlainObject(raw)) return { ok: false, errors: ["Lens must be an object."] };
+  const errors = [];
+  const name = typeof raw.name === "string" ? raw.name.trim() : "";
+  if (!name) errors.push("Enter a name for the lens.");
+  let id = "";
+  if (raw.id === void 0) {
+    id = slugLensId(name);
+  } else if (typeof raw.id === "string" && VALID_ID.test(raw.id.trim())) {
+    id = raw.id.trim();
+  } else {
+    errors.push("Lens ID may only use lowercase letters, digits, and hyphens.");
+  }
+  let enabled = false;
+  if (raw.enabled !== void 0) {
+    if (typeof raw.enabled === "boolean") enabled = raw.enabled;
+    else errors.push("Enabled must be true or false.");
+  }
+  let scope = "node";
+  if (raw.scope !== void 0) {
+    if (SCOPES.has(raw.scope)) scope = raw.scope;
+    else errors.push("Scope must be node or relationship.");
+  }
+  const effect = typeof raw.effect === "string" ? raw.effect.trim() : "";
+  if (!EFFECTS.has(effect)) errors.push("Effect must be show, hide, or style.");
+  const match = {};
+  if (!isPlainObject(raw.match)) {
+    errors.push("Match rules are required.");
+  } else {
+    const hasAll = raw.match.all !== void 0;
+    const hasAny = raw.match.any !== void 0;
+    if (hasAll && !Array.isArray(raw.match.all)) errors.push("Match all must be a list.");
+    if (hasAny && !Array.isArray(raw.match.any)) errors.push("Match any must be a list.");
+    const rawAll = Array.isArray(raw.match.all) ? raw.match.all : [];
+    const rawAny = Array.isArray(raw.match.any) ? raw.match.any : [];
+    if (!rawAll.length && !rawAny.length) {
+      errors.push("Add at least one condition.");
+    } else {
+      const all = rawAll.map((item) => normalizeCondition(item, errors)).filter(Boolean);
+      const any = rawAny.map((item) => normalizeCondition(item, errors)).filter(Boolean);
+      if (all.length) match.all = all;
+      if (any.length) match.any = any;
+    }
+  }
+  const style = { fill: "", border: "", text: "" };
+  if (raw.style !== void 0 && !isPlainObject(raw.style)) {
+    errors.push("Style must be an object.");
+  } else if (raw.style) {
+    for (const key of ["fill", "border", "text"]) {
+      const rawColor = raw.style[key];
+      if (rawColor === void 0 || rawColor === "") continue;
+      if (typeof rawColor !== "string") {
+        errors.push(`Invalid ${key} color.`);
+        continue;
+      }
+      const trimmed = rawColor.trim();
+      if (!trimmed) continue;
+      if (!isValidColor(trimmed)) {
+        errors.push(`Invalid ${key} color.`);
+      } else {
+        style[key] = trimmed;
+      }
+    }
+  }
+  if (errors.length) return { ok: false, errors: [...new Set(errors)] };
+  return {
+    ok: true,
+    lens: { id, name, enabled, scope, effect, match, style }
+  };
+}
+function normalizeLenses(list) {
+  if (!Array.isArray(list)) return [];
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const item of list) {
+    const result = validateLens(item);
+    if (!result.ok || seen.has(result.lens.id)) continue;
+    seen.add(result.lens.id);
+    out.push(result.lens);
+  }
+  return out;
+}
+function factEntries(facts) {
+  if (!facts) return [];
+  if (facts instanceof Map) return [...facts.entries()];
+  if (Array.isArray(facts)) {
+    const out = [];
+    for (const fact of facts) {
+      if (typeof fact?.uid === "string" && fact.uid) out.push([fact.uid, fact]);
+    }
+    return out;
+  }
+  if (typeof facts === "object") return Object.entries(facts);
+  return [];
+}
+function evaluateLenses(lenses, facts) {
+  const hidden = /* @__PURE__ */ new Set();
+  const styles = /* @__PURE__ */ new Map();
+  const entries = factEntries(facts);
+  if (!entries.length) return { hidden, styles };
+  const active = Array.isArray(lenses) ? lenses.filter((lens) => lens?.enabled === true) : [];
+  const showLenses = active.filter((lens) => lens.effect === "show");
+  const hideLenses = active.filter((lens) => lens.effect === "hide");
+  const styleLenses = active.filter((lens) => lens.effect === "style");
+  for (const [uid, fact] of entries) {
+    if (typeof uid !== "string" || !uid || !fact || typeof fact !== "object") continue;
+    if (showLenses.length > 0 && !showLenses.some((lens) => matchConditions(lens.match, fact))) {
+      hidden.add(uid);
+      continue;
+    }
+    if (hideLenses.some((lens) => matchConditions(lens.match, fact))) {
+      hidden.add(uid);
+      continue;
+    }
+    if (!styleLenses.length) continue;
+    let fill = "";
+    let border = "";
+    let text = "";
+    for (const lens of styleLenses) {
+      if (!matchConditions(lens.match, fact)) continue;
+      if (lens.style?.fill) fill = lens.style.fill;
+      if (lens.style?.border) border = lens.style.border;
+      if (lens.style?.text) text = lens.style.text;
+    }
+    if (fill || border || text) {
+      styles.set(uid, { fill, border, text });
+    }
+  }
+  return { hidden, styles };
+}
+function typeFilter(facts, selectedTypes) {
+  const hidden = /* @__PURE__ */ new Set();
+  const selected = selectedTypes instanceof Set ? selectedTypes : new Set(Array.isArray(selectedTypes) ? selectedTypes : []);
+  if (selected.size === 0) return hidden;
+  for (const [uid, fact] of factEntries(facts)) {
+    if (typeof uid !== "string" || !uid || !fact || typeof fact !== "object") continue;
+    const type = typeof fact.type === "string" ? fact.type : "";
+    if (!selected.has(type)) hidden.add(uid);
+  }
+  return hidden;
+}
+function typesPresent(facts) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const [, fact] of factEntries(facts)) {
+    if (!fact || typeof fact !== "object") continue;
+    const type = typeof fact.type === "string" ? fact.type : "";
+    counts.set(type, (counts.get(type) ?? 0) + 1);
+  }
+  const named = [];
+  let untypedCount = 0;
+  for (const [type, count2] of counts.entries()) {
+    if (type === "") untypedCount = count2;
+    else named.push({ type, count: count2 });
+  }
+  named.sort((a, b) => b.count - a.count || (a.type < b.type ? -1 : a.type > b.type ? 1 : 0));
+  if (untypedCount > 0) named.push({ type: "", count: untypedCount });
+  return named;
+}
+function lensToJson(lens) {
+  const validated = validateLens(lens);
+  return JSON.stringify(validated.ok ? validated.lens : lens, null, 2);
+}
+function lensFromJson(text) {
+  if (typeof text !== "string" || !text.trim()) {
+    return { ok: false, errors: ["Paste lens JSON to import."] };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false, errors: ["Invalid JSON."] };
+  }
+  return validateLens(parsed);
+}
+
 // src/view/features/lenses.js
-function createLenses() {
-  return { name: "lenses" };
+var VIEW_BUTTONS = [
+  ["compass", "Compass"],
+  ["mindmap", "Mind Map"],
+  ["facets", "Facets"]
+];
+var KIND_BUTTONS = [
+  ["pages", "Pages"],
+  ["blocks", "Blocks"],
+  ["drawings", "Drawings"],
+  ["regions", "Regions"]
+];
+var COLOR_KEYS = [
+  ["fill", "Fill", "#fef3c7"],
+  ["border", "Border", "#ea580c"],
+  ["text", "Text", "#9a3412"]
+];
+var EFFECT_LABELS = {
+  show: "Show",
+  hide: "Hide",
+  style: "Style"
+};
+var OPERATOR_MAP = new Map(OPERATORS.map((item) => [item.op, item]));
+var SHORT_HEX = /^#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])$/;
+var FULL_HEX = /^#[0-9a-fA-F]{6}$/;
+function pickerHex(raw, fallback) {
+  if (typeof raw !== "string") return fallback;
+  const trimmed = raw.trim();
+  if (FULL_HEX.test(trimmed)) return trimmed.toLowerCase();
+  const short = SHORT_HEX.exec(trimmed);
+  if (short) return `#${short[1]}${short[1]}${short[2]}${short[2]}${short[3]}${short[3]}`.toLowerCase();
+  return fallback;
+}
+function setCssVar(element, name, value) {
+  if (typeof element?.style?.setProperty === "function") element.style.setProperty(name, value);
+  else if (element?.style) element.style[name] = value;
+}
+function removeCssVar(element, name) {
+  if (typeof element?.style?.removeProperty === "function") element.style.removeProperty(name);
+  else if (element?.style) delete element.style[name];
+}
+function boxesOverlap2(a, b) {
+  const dx = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+  const dy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+  return dx > 1 && dy > 1;
+}
+function cloneLens(lens) {
+  return {
+    id: lens.id,
+    name: lens.name,
+    enabled: Boolean(lens.enabled),
+    scope: lens.scope,
+    effect: lens.effect,
+    match: {
+      ...Array.isArray(lens.match?.all) ? { all: lens.match.all.map((c) => ({ ...c })) } : {},
+      ...Array.isArray(lens.match?.any) ? { any: lens.match.any.map((c) => ({ ...c })) } : {}
+    },
+    style: {
+      fill: lens.style?.fill ?? "",
+      border: lens.style?.border ?? "",
+      text: lens.style?.text ?? ""
+    }
+  };
+}
+function conditionToDraft(cond) {
+  const rawField = typeof cond?.field === "string" ? cond.field : "title";
+  if (rawField.startsWith("attr:")) {
+    return {
+      field: "attr:",
+      attrName: rawField.slice(5),
+      op: OPERATOR_MAP.has(cond?.op) ? cond.op : "is",
+      value: typeof cond?.value === "string" ? cond.value : ""
+    };
+  }
+  return {
+    field: rawField || "title",
+    attrName: "",
+    op: OPERATOR_MAP.has(cond?.op) ? cond.op : "is",
+    value: typeof cond?.value === "string" ? cond.value : ""
+  };
+}
+function makeEditorDraft(lens = null) {
+  const scope = lens?.scope === "relationship" ? "relationship" : "node";
+  const defaultField = FIELDS[scope][0].field;
+  const rawAny = Array.isArray(lens?.match?.any) ? lens.match.any : [];
+  const rawAll = Array.isArray(lens?.match?.all) ? lens.match.all : [];
+  const matchMode = rawAny.length > 0 && rawAll.length === 0 ? "any" : "all";
+  const sourceConds = matchMode === "any" ? rawAny : rawAll;
+  const conditions = sourceConds.length ? sourceConds.map(conditionToDraft) : [{ field: defaultField, attrName: "", op: "is", value: "" }];
+  const colors = {};
+  for (const [key, , fallback] of COLOR_KEYS) {
+    const raw = lens?.style?.[key] ?? "";
+    colors[key] = {
+      none: !raw,
+      picker: pickerHex(raw, fallback),
+      raw: raw || fallback
+    };
+  }
+  return {
+    editingId: lens?.id ?? null,
+    enabled: lens ? Boolean(lens.enabled) : false,
+    name: lens?.name ?? "",
+    scope,
+    effect: lens?.effect ?? "hide",
+    matchMode,
+    conditions,
+    colors,
+    errors: []
+  };
+}
+function createLenses(ctx) {
+  if (!ctx?.dom?.root) {
+    return {
+      name: "lenses",
+      open() {
+      },
+      close() {
+      },
+      toggle() {
+      },
+      hiddenFor: () => /* @__PURE__ */ new Set()
+    };
+  }
+  let lenses = normalizeLenses(ctx.state.settings?.lenses);
+  let unfilteredNodes = null;
+  const excludedTypes = /* @__PURE__ */ new Set();
+  let panelOpen = false;
+  let editorState = null;
+  let importState = null;
+  let savingCount = 0;
+  const barBtn = ctx.button("compass-vl-btn", "", "Views and lenses");
+  barBtn.setAttribute("aria-expanded", "false");
+  const barBtnText = ctx.el("span", "compass-vl-btn-text", "Views and lenses");
+  const badgeEl = ctx.el("span", "compass-vl-badge");
+  badgeEl.hidden = true;
+  barBtn.append(barBtnText, badgeEl);
+  ctx.addBarButton(barBtn);
+  const panel = ctx.el("div", "compass-vl-panel");
+  panel.hidden = true;
+  panel.setAttribute("role", "region");
+  panel.setAttribute("aria-label", "Views and lenses");
+  const head = ctx.el("div", "compass-vl-head");
+  const titleEl = ctx.el("p", "compass-vl-title", "Views and lenses");
+  const closeBtn = ctx.button("compass-vl-close", "×", "Close panel");
+  head.append(titleEl, closeBtn);
+  const viewSec = ctx.el("section", "compass-vl-section");
+  viewSec.dataset.section = "views";
+  const viewHead = ctx.el("div", "compass-vl-section-head");
+  viewHead.append(ctx.el("h3", "compass-vl-heading", "Canvas view"));
+  const viewSeg = ctx.el("div", "compass-vl-seg");
+  const viewBtnMap = /* @__PURE__ */ new Map();
+  for (const [viewId, label] of VIEW_BUTTONS) {
+    const btn = ctx.button("", label);
+    btn.dataset.view = viewId;
+    btn.setAttribute("aria-pressed", "false");
+    viewBtnMap.set(viewId, btn);
+    viewSeg.append(btn);
+  }
+  const facetsRow = ctx.el("div", "compass-vl-facets-row");
+  facetsRow.hidden = true;
+  const presetSelect = ctx.el("select", "compass-vl-preset-select");
+  presetSelect.setAttribute("aria-label", "Facets preset");
+  const editPresetsBtn = ctx.button("compass-vl-preset-edit", "Edit presets…");
+  facetsRow.append(presetSelect, editPresetsBtn);
+  viewSec.append(viewHead, viewSeg, facetsRow);
+  const qfSec = ctx.el("section", "compass-vl-section");
+  qfSec.dataset.section = "quick-filter";
+  const qfHead = ctx.el("div", "compass-vl-section-head");
+  qfHead.append(ctx.el("h3", "compass-vl-heading", "Quick filter"));
+  const clearBtn = ctx.button("compass-qf-clear", "Clear");
+  qfHead.append(clearBtn);
+  const keywordInput = ctx.el("input", "compass-qf-keyword");
+  keywordInput.type = "search";
+  keywordInput.autocomplete = "off";
+  keywordInput.placeholder = "Filter by title";
+  keywordInput.setAttribute("aria-label", "Filter by keyword");
+  const kindRow = ctx.el("div", "compass-qf-chips");
+  const kindBtnMap = /* @__PURE__ */ new Map();
+  for (const [kindKey, label] of KIND_BUTTONS) {
+    const btn = ctx.button("compass-qf-chip", label);
+    btn.dataset.kind = kindKey;
+    btn.setAttribute("aria-pressed", "true");
+    kindBtnMap.set(kindKey, btn);
+    kindRow.append(btn);
+  }
+  const typeRow = ctx.el("div", "compass-qf-types");
+  typeRow.hidden = true;
+  qfSec.append(qfHead, keywordInput, kindRow, typeRow);
+  const reflowSec = ctx.el("section", "compass-vl-section");
+  reflowSec.dataset.section = "after-filtering";
+  const reflowHead = ctx.el("div", "compass-vl-section-head");
+  reflowHead.append(ctx.el("h3", "compass-vl-heading", "After filtering"));
+  const radiosWrap = ctx.el("div", "compass-qf-radios");
+  const keepLabel = ctx.el("label", "compass-qf-radio");
+  const keepRadio = ctx.el("input");
+  keepRadio.type = "radio";
+  keepRadio.name = "compass-after-filtering";
+  keepRadio.value = "keep";
+  keepLabel.append(keepRadio, ctx.el("span", "", "Keep layout"));
+  const reflowLabel = ctx.el("label", "compass-qf-radio");
+  const reflowRadio = ctx.el("input");
+  reflowRadio.type = "radio";
+  reflowRadio.name = "compass-after-filtering";
+  reflowRadio.value = "reflow";
+  reflowLabel.append(reflowRadio, ctx.el("span", "", "Reflow"));
+  radiosWrap.append(keepLabel, reflowLabel);
+  reflowSec.append(reflowHead, radiosWrap);
+  const lensesSec = ctx.el("section", "compass-vl-section");
+  lensesSec.dataset.section = "lenses";
+  const lensesHead = ctx.el("div", "compass-vl-section-head");
+  lensesHead.append(ctx.el("h3", "compass-vl-heading", "Lenses"));
+  const lensEmpty = ctx.el("p", "compass-gl-empty", "No saved lenses yet.");
+  const lensList = ctx.el("div", "compass-gl-list");
+  const lensFooter = ctx.el("div", "compass-gl-footer");
+  const newLensBtn = ctx.button("compass-gl-new", "New lens");
+  const importBtn = ctx.button("compass-gl-import-open", "Import");
+  const examplesBtn = ctx.button("compass-gl-examples", "Add examples");
+  lensFooter.append(newLensBtn, importBtn, examplesBtn);
+  const editorWrap = ctx.el("div", "compass-gl-editor");
+  editorWrap.hidden = true;
+  const importWrap = ctx.el("div", "compass-gl-import");
+  importWrap.hidden = true;
+  lensesSec.append(lensesHead, lensEmpty, lensList, lensFooter, editorWrap, importWrap);
+  panel.append(head, viewSec, qfSec, reflowSec, lensesSec);
+  ctx.lifecycle.node(panel, ctx.dom.root);
+  function mapNeighborNodes() {
+    const viewName = ctx.dom.root.dataset?.view || "compass";
+    const geoNodes = ctx.state.geometry?.nodes;
+    if (viewName !== "compass" && !ctx.state.settings?.filterReflow && Array.isArray(geoNodes)) {
+      const centerUid = ctx.state.hood?.center?.uid ?? ctx.state.current;
+      return geoNodes.filter((node) => node && node.uid !== centerUid);
+    }
+    return unfilteredNodes ?? ctx.state.hood?.nodes ?? [];
+  }
+  function activeTypeHidden(facts) {
+    if (excludedTypes.size === 0) return typeFilter(facts, /* @__PURE__ */ new Set());
+    const known = /* @__PURE__ */ new Set();
+    for (const entry of typesPresent(facts)) known.add(entry.type);
+    const baseNodes = unfilteredNodes ?? ctx.state.hood?.nodes ?? [];
+    if (baseNodes.length) {
+      for (const entry of typesPresent(ctx.facts(baseNodes))) known.add(entry.type);
+    }
+    const selected = new Set([...known].filter((type) => !excludedTypes.has(type)));
+    if (selected.size === 0) return typeFilter(facts, /* @__PURE__ */ new Set(["\0none"]));
+    return typeFilter(facts, selected);
+  }
+  function hiddenFor(nodes) {
+    const list = Array.isArray(nodes) ? nodes : [];
+    if (!list.length) return /* @__PURE__ */ new Set();
+    const out = new Set(hiddenUids(list, ctx.state.lens));
+    const facts = ctx.facts(list);
+    for (const uid of activeTypeHidden(facts)) out.add(uid);
+    const { hidden } = evaluateLenses(lenses, facts);
+    for (const uid of hidden) out.add(uid);
+    return out;
+  }
+  function refreshCanvas() {
+    if (ctx.state.settings?.filterReflow) ctx.rebuild();
+    ctx.render();
+  }
+  async function persistLenses(nextList) {
+    lenses = normalizeLenses(nextList);
+    savingCount += 1;
+    try {
+      await ctx.saveSetting(SETTING_IDS.lenses, lenses);
+    } finally {
+      savingCount -= 1;
+    }
+    refreshCanvas();
+    syncPanel();
+  }
+  function updateBadge() {
+    const candidates = mapNeighborNodes();
+    const count2 = hiddenFor(candidates).size;
+    if (count2 > 0) {
+      badgeEl.hidden = false;
+      badgeEl.textContent = String(count2);
+      const label = count2 === 1 ? "Views and lenses (1 hidden)" : `Views and lenses (${count2} hidden)`;
+      barBtn.title = label;
+      barBtn.setAttribute("aria-label", label);
+    } else {
+      badgeEl.hidden = true;
+      badgeEl.textContent = "";
+      barBtn.title = "Views and lenses";
+      barBtn.setAttribute("aria-label", "Views and lenses");
+    }
+  }
+  function positionPanel() {
+    if (!panelOpen || panel.hidden) return;
+    const rootRect = ctx.dom.root.getBoundingClientRect();
+    if (!rootRect.width || !rootRect.height) return;
+    const btnRect = barBtn.getBoundingClientRect();
+    const barRect = ctx.dom.bar.getBoundingClientRect();
+    const anchorBottom = btnRect.height > 0 ? btnRect.bottom : barRect.bottom;
+    const top = Math.max(8, Math.round(anchorBottom - rootRect.top + 4));
+    const maxHeight = Math.max(140, Math.floor(rootRect.height - top - 10));
+    panel.style.top = `${top}px`;
+    panel.style.maxHeight = `${maxHeight}px`;
+    const panelWidth = panel.offsetWidth || 320;
+    const panelHeight = Math.min(panel.offsetHeight || 360, maxHeight);
+    const minLeft = 8;
+    const maxLeft = Math.max(minLeft, Math.floor(rootRect.width - panelWidth - 8));
+    const preferred = btnRect.width > 0 ? btnRect.left - rootRect.left : rootRect.width - panelWidth - 12;
+    let left = ctx.clamp(Math.round(preferred), minLeft, maxLeft);
+    const centerEl = ctx.dom.world.querySelector(".compass-node-center");
+    if (centerEl) {
+      const cRect = centerEl.getBoundingClientRect();
+      if (cRect.width > 0 && cRect.height > 0) {
+        const boxAt = (x) => ({
+          left: rootRect.left + x,
+          right: rootRect.left + x + panelWidth,
+          top: rootRect.top + top,
+          bottom: rootRect.top + top + panelHeight
+        });
+        if (boxesOverlap2(boxAt(left), cRect)) {
+          const rightClear = !boxesOverlap2(boxAt(maxLeft), cRect);
+          const leftClear = !boxesOverlap2(boxAt(minLeft), cRect);
+          if (rightClear && leftClear) {
+            left = Math.abs(maxLeft - left) <= Math.abs(minLeft - left) ? maxLeft : minLeft;
+          } else if (rightClear) {
+            left = maxLeft;
+          } else if (leftClear) {
+            left = minLeft;
+          }
+        }
+      }
+    }
+    panel.style.left = `${left}px`;
+  }
+  function currentViewInfo() {
+    const viewsFeature = ctx.features.get("views");
+    if (typeof viewsFeature?.current === "function") {
+      const info = viewsFeature.current();
+      if (info && typeof info.view === "string") return info;
+    }
+    return {
+      view: ctx.state.settings?.view || "compass",
+      preset: ctx.state.settings?.facetsPreset || "roles"
+    };
+  }
+  function syncViewsSection() {
+    const { view, preset } = currentViewInfo();
+    for (const [viewId, btn] of viewBtnMap.entries()) {
+      btn.setAttribute("aria-pressed", viewId === view ? "true" : "false");
+    }
+    if (view !== "facets") {
+      facetsRow.hidden = true;
+      return;
+    }
+    facetsRow.hidden = false;
+    const facetsFeature = ctx.features.get("facets");
+    if (typeof facetsFeature?.presets !== "function") {
+      presetSelect.hidden = true;
+      presetSelect.replaceChildren();
+    } else {
+      const presets = facetsFeature.presets() ?? [];
+      presetSelect.hidden = false;
+      presetSelect.replaceChildren();
+      for (const item of presets) {
+        if (!item || typeof item.id !== "string") continue;
+        const opt = ctx.el("option", "", item.name || item.id);
+        opt.value = item.id;
+        presetSelect.append(opt);
+      }
+      if (preset) presetSelect.value = preset;
+    }
+    editPresetsBtn.hidden = typeof facetsFeature?.openPresetEditor !== "function";
+  }
+  function syncQuickFilterSection() {
+    const currentLens = ctx.state.lens;
+    if (keywordInput.value !== currentLens.keyword) {
+      keywordInput.value = currentLens.keyword;
+    }
+    for (const [kindKey, btn] of kindBtnMap.entries()) {
+      btn.setAttribute("aria-pressed", currentLens[kindKey] ? "true" : "false");
+    }
+    const neighbors = mapNeighborNodes();
+    const present = neighbors.length ? typesPresent(ctx.facts(neighbors)) : [];
+    const hasNamedType = present.some((entry) => entry.type !== "");
+    if (!hasNamedType) {
+      typeRow.hidden = true;
+      typeRow.replaceChildren();
+      return;
+    }
+    typeRow.hidden = false;
+    typeRow.replaceChildren();
+    for (const entry of present) {
+      const labelText = entry.type === "" ? "No type" : entry.type;
+      const btn = ctx.button("compass-qf-chip", "");
+      btn.dataset.type = entry.type;
+      const active = !excludedTypes.has(entry.type);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+      btn.setAttribute("aria-label", `Type: ${labelText}`);
+      btn.title = `${labelText} (${entry.count})`;
+      const nameSpan = ctx.el("span", "compass-qf-type-label", labelText);
+      const countSpan = ctx.el("span", "compass-qf-count", String(entry.count));
+      btn.append(nameSpan, countSpan);
+      btn.addEventListener("click", () => {
+        if (excludedTypes.has(entry.type)) excludedTypes.delete(entry.type);
+        else excludedTypes.add(entry.type);
+        refreshCanvas();
+        syncPanel();
+      });
+      typeRow.append(btn);
+    }
+  }
+  function syncReflowSection() {
+    const reflow = Boolean(ctx.state.settings?.filterReflow);
+    keepRadio.checked = !reflow;
+    reflowRadio.checked = reflow;
+  }
+  function renderLensList() {
+    lensList.replaceChildren();
+    lensEmpty.hidden = lenses.length > 0;
+    lensList.hidden = lenses.length === 0;
+    examplesBtn.hidden = lenses.length > 0;
+    for (const lens of lenses) {
+      const row = ctx.el("div", "compass-gl-item");
+      row.dataset.lensId = lens.id;
+      const top = ctx.el("div", "compass-gl-item-top");
+      const toggleLabel = ctx.el("label", "compass-gl-toggle-label");
+      const checkbox = ctx.el("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = Boolean(lens.enabled);
+      checkbox.setAttribute("aria-label", `Enable ${lens.name}`);
+      checkbox.addEventListener("change", ctx.guard(async () => {
+        const next = lenses.map((item) => item.id === lens.id ? { ...cloneLens(item), enabled: checkbox.checked } : cloneLens(item));
+        await persistLenses(next);
+      }));
+      const nameSpan = ctx.el("span", "compass-gl-name", lens.name);
+      nameSpan.title = lens.name;
+      toggleLabel.append(checkbox, nameSpan);
+      const tag = ctx.el("span", "compass-gl-tag");
+      if (lens.effect === "style") {
+        const swatch = ctx.el("span", "compass-gl-swatch");
+        const fill = lens.style?.fill || lens.style?.border || lens.style?.text || "transparent";
+        const border = lens.style?.border || lens.style?.text || lens.style?.fill || "";
+        setCssVar(swatch, "background-color", fill);
+        if (border) setCssVar(swatch, "border-color", border);
+        tag.append(swatch);
+      }
+      tag.append(ctx.el("span", "", EFFECT_LABELS[lens.effect] || lens.effect));
+      top.append(toggleLabel, tag);
+      const actions = ctx.el("div", "compass-gl-item-actions");
+      const editBtn = ctx.button("compass-gl-edit", "Edit");
+      editBtn.addEventListener("click", () => {
+        importState = null;
+        editorState = makeEditorDraft(lens);
+        renderLensesMode();
+        positionPanel();
+      });
+      const copyBtn = ctx.button("compass-gl-copy", "Copy JSON");
+      copyBtn.addEventListener("click", ctx.guard(async () => {
+        const copied = await copyText(lensToJson(lens));
+        ctx.setStatus(copied ? "Copied lens JSON." : "Could not copy lens JSON.");
+      }));
+      const deleteBtn = ctx.button("compass-gl-delete", "Delete");
+      deleteBtn.addEventListener("click", ctx.guard(async () => {
+        const next = lenses.filter((item) => item.id !== lens.id).map(cloneLens);
+        await persistLenses(next);
+      }));
+      actions.append(editBtn, copyBtn, deleteBtn);
+      row.append(top, actions);
+      lensList.append(row);
+    }
+  }
+  function renderEditorErrors(errorListEl, errors) {
+    errorListEl.replaceChildren();
+    if (!errors?.length) {
+      errorListEl.hidden = true;
+      return;
+    }
+    errorListEl.hidden = false;
+    for (const msg of errors) {
+      errorListEl.append(ctx.el("li", "", msg));
+    }
+  }
+  function renderEditor() {
+    editorWrap.replaceChildren();
+    if (!editorState) return;
+    const draft = editorState;
+    const nameField = ctx.el("label", "compass-gl-field");
+    nameField.append(ctx.el("span", "compass-gl-label", "Name"));
+    const nameInput = ctx.el("input");
+    nameInput.type = "text";
+    nameInput.placeholder = "Lens name";
+    nameInput.dataset.editor = "name";
+    nameInput.value = draft.name;
+    nameInput.addEventListener("input", () => {
+      draft.name = nameInput.value;
+    });
+    nameField.append(nameInput);
+    const grid2 = ctx.el("div", "compass-gl-grid2");
+    const scopeField = ctx.el("label", "compass-gl-field");
+    scopeField.append(ctx.el("span", "compass-gl-label", "Scope"));
+    const scopeSelect = ctx.el("select");
+    scopeSelect.dataset.editor = "scope";
+    for (const [val, text] of [["node", "Node"], ["relationship", "Relationship"]]) {
+      const opt = ctx.el("option", "", text);
+      opt.value = val;
+      scopeSelect.append(opt);
+    }
+    scopeSelect.value = draft.scope;
+    const onScopeChange = () => {
+      const nextScope = scopeSelect.value === "relationship" ? "relationship" : "node";
+      if (nextScope === draft.scope) return;
+      draft.scope = nextScope;
+      const allowed = new Set(FIELDS[nextScope].map((item) => item.field));
+      for (const cond of draft.conditions) {
+        if (!allowed.has(cond.field)) {
+          cond.field = FIELDS[nextScope][0].field;
+          cond.attrName = "";
+        }
+      }
+      renderConditions();
+      positionPanel();
+    };
+    scopeSelect.addEventListener("change", onScopeChange);
+    scopeSelect.addEventListener("input", onScopeChange);
+    scopeField.append(scopeSelect);
+    const effectField = ctx.el("label", "compass-gl-field");
+    effectField.append(ctx.el("span", "compass-gl-label", "Effect"));
+    const effectSelect = ctx.el("select");
+    effectSelect.dataset.editor = "effect";
+    for (const [val, text] of [["show", "Show"], ["hide", "Hide"], ["style", "Style"]]) {
+      const opt = ctx.el("option", "", text);
+      opt.value = val;
+      effectSelect.append(opt);
+    }
+    effectSelect.value = draft.effect;
+    effectField.append(effectSelect);
+    grid2.append(scopeField, effectField);
+    const matchBar = ctx.el("div", "compass-gl-match-bar");
+    const matchSelect = ctx.el("select");
+    matchSelect.dataset.editor = "match";
+    matchSelect.setAttribute("aria-label", "Match mode");
+    for (const [val, text] of [["all", "Match all"], ["any", "Match any"]]) {
+      const opt = ctx.el("option", "", text);
+      opt.value = val;
+      matchSelect.append(opt);
+    }
+    matchSelect.value = draft.matchMode;
+    const onMatchChange = () => {
+      draft.matchMode = matchSelect.value === "any" ? "any" : "all";
+    };
+    matchSelect.addEventListener("change", onMatchChange);
+    matchSelect.addEventListener("input", onMatchChange);
+    const addCondBtn = ctx.button("compass-gl-add-cond", "Add condition");
+    addCondBtn.addEventListener("click", () => {
+      draft.conditions.push({
+        field: FIELDS[draft.scope][0].field,
+        attrName: "",
+        op: "is",
+        value: ""
+      });
+      renderConditions();
+      positionPanel();
+    });
+    matchBar.append(matchSelect, addCondBtn);
+    const condsBox = ctx.el("div", "compass-gl-conds");
+    function renderConditions() {
+      condsBox.replaceChildren();
+      const scopeFields = FIELDS[draft.scope] ?? FIELDS.node;
+      const scopeFieldSet = new Set(scopeFields.map((f) => f.field));
+      draft.conditions.forEach((cond, index) => {
+        const card = ctx.el("div", "compass-gl-cond");
+        card.dataset.condIndex = String(index);
+        const topRow = ctx.el("div", "compass-gl-cond-top");
+        const fieldSelect = ctx.el("select");
+        fieldSelect.dataset.cond = "field";
+        fieldSelect.setAttribute("aria-label", "Condition field");
+        for (const item of scopeFields) {
+          const opt = ctx.el("option", "", item.label);
+          opt.value = item.field;
+          fieldSelect.append(opt);
+        }
+        if (!scopeFieldSet.has(cond.field)) {
+          const extra = ctx.el("option", "", cond.field);
+          extra.value = cond.field;
+          fieldSelect.append(extra);
+        }
+        fieldSelect.value = cond.field;
+        const opSelect = ctx.el("select");
+        opSelect.dataset.cond = "op";
+        opSelect.setAttribute("aria-label", "Condition operator");
+        for (const item of OPERATORS) {
+          const opt = ctx.el("option", "", item.label);
+          opt.value = item.op;
+          opSelect.append(opt);
+        }
+        opSelect.value = cond.op;
+        const removeBtn = ctx.button("compass-gl-cond-remove", "×", "Remove condition");
+        removeBtn.addEventListener("click", () => {
+          draft.conditions.splice(index, 1);
+          renderConditions();
+          positionPanel();
+        });
+        topRow.append(fieldSelect, opSelect, removeBtn);
+        const attrInput = ctx.el("input");
+        attrInput.type = "text";
+        attrInput.placeholder = "Attribute name";
+        attrInput.dataset.cond = "attr";
+        attrInput.setAttribute("aria-label", "Attribute name");
+        attrInput.value = cond.attrName;
+        attrInput.hidden = cond.field !== "attr:";
+        attrInput.addEventListener("input", () => {
+          cond.attrName = attrInput.value;
+        });
+        const valueInput = ctx.el("input");
+        valueInput.type = "text";
+        valueInput.placeholder = "Value";
+        valueInput.dataset.cond = "value";
+        valueInput.setAttribute("aria-label", "Condition value");
+        valueInput.value = cond.value;
+        valueInput.hidden = !(OPERATOR_MAP.get(cond.op)?.needsValue ?? true);
+        valueInput.addEventListener("input", () => {
+          cond.value = valueInput.value;
+        });
+        const syncFieldVis = () => {
+          cond.field = fieldSelect.value;
+          attrInput.hidden = cond.field !== "attr:";
+          positionPanel();
+        };
+        fieldSelect.addEventListener("change", syncFieldVis);
+        fieldSelect.addEventListener("input", syncFieldVis);
+        const syncOpVis = () => {
+          cond.op = opSelect.value;
+          valueInput.hidden = !(OPERATOR_MAP.get(cond.op)?.needsValue ?? true);
+          positionPanel();
+        };
+        opSelect.addEventListener("change", syncOpVis);
+        opSelect.addEventListener("input", syncOpVis);
+        card.append(topRow, attrInput, valueInput);
+        condsBox.append(card);
+      });
+    }
+    renderConditions();
+    const colorsBox = ctx.el("div", "compass-gl-colors");
+    colorsBox.hidden = draft.effect !== "style";
+    for (const [key, labelText] of COLOR_KEYS) {
+      const state = draft.colors[key];
+      const row = ctx.el("div", "compass-gl-color-row");
+      row.append(ctx.el("span", "compass-gl-color-title", labelText));
+      const controls = ctx.el("div", "compass-gl-color-controls");
+      const picker = ctx.el("input", "compass-gl-color-picker");
+      picker.type = "color";
+      picker.dataset.color = key;
+      picker.setAttribute("aria-label", `${labelText} color`);
+      picker.value = state.picker;
+      picker.dataset.none = state.none ? "true" : "false";
+      const noneLabel = ctx.el("label", "compass-gl-none");
+      const noneCheck = ctx.el("input");
+      noneCheck.type = "checkbox";
+      noneCheck.dataset.colorNone = key;
+      noneCheck.checked = state.none;
+      noneLabel.append(noneCheck, ctx.el("span", "", "None"));
+      const onPickerInput = () => {
+        state.picker = picker.value;
+        state.raw = picker.value;
+        state.none = false;
+        noneCheck.checked = false;
+        picker.dataset.none = "false";
+      };
+      picker.addEventListener("input", onPickerInput);
+      picker.addEventListener("change", onPickerInput);
+      noneCheck.addEventListener("change", () => {
+        state.none = noneCheck.checked;
+        if (!state.none && !state.raw) state.raw = picker.value;
+        picker.dataset.none = state.none ? "true" : "false";
+      });
+      controls.append(picker, noneLabel);
+      row.append(controls);
+      colorsBox.append(row);
+    }
+    const onEffectChange = () => {
+      draft.effect = effectSelect.value;
+      colorsBox.hidden = draft.effect !== "style";
+      positionPanel();
+    };
+    effectSelect.addEventListener("change", onEffectChange);
+    effectSelect.addEventListener("input", onEffectChange);
+    const errorsEl = ctx.el("ul", "compass-gl-errors");
+    renderEditorErrors(errorsEl, draft.errors);
+    const formActions = ctx.el("div", "compass-gl-form-actions");
+    const cancelBtn = ctx.button("compass-gl-cancel", "Cancel");
+    cancelBtn.addEventListener("click", () => {
+      editorState = null;
+      renderLensesMode();
+      positionPanel();
+    });
+    const saveBtn = ctx.button("compass-gl-save", "Save");
+    saveBtn.addEventListener("click", ctx.guard(async () => {
+      const takenIds = new Set(
+        lenses.filter((item) => item.id !== draft.editingId).map((item) => item.id)
+      );
+      const id = draft.editingId || slugLensId(draft.name, takenIds);
+      const builtConditions = draft.conditions.map((cond) => ({
+        field: cond.field === "attr:" ? `attr:${cond.attrName.trim()}` : cond.field,
+        op: cond.op,
+        value: cond.value
+      }));
+      const rawStyle = draft.effect === "style" ? {
+        fill: draft.colors.fill.none ? "" : draft.colors.fill.raw,
+        border: draft.colors.border.none ? "" : draft.colors.border.raw,
+        text: draft.colors.text.none ? "" : draft.colors.text.raw
+      } : { fill: "", border: "", text: "" };
+      const validated = validateLens({
+        id,
+        name: draft.name,
+        enabled: draft.enabled,
+        scope: draft.scope,
+        effect: draft.effect,
+        match: { [draft.matchMode]: builtConditions },
+        style: rawStyle
+      });
+      if (!validated.ok) {
+        draft.errors = validated.errors;
+        renderEditorErrors(errorsEl, draft.errors);
+        positionPanel();
+        return;
+      }
+      const next = draft.editingId ? lenses.map((item) => item.id === draft.editingId ? validated.lens : cloneLens(item)) : [...lenses.map(cloneLens), validated.lens];
+      editorState = null;
+      await persistLenses(next);
+    }));
+    formActions.append(cancelBtn, saveBtn);
+    editorWrap.append(nameField, grid2, matchBar, condsBox, colorsBox, errorsEl, formActions);
+  }
+  function renderImportBox() {
+    importWrap.replaceChildren();
+    if (!importState) return;
+    const state = importState;
+    const areaField = ctx.el("label", "compass-gl-field");
+    areaField.append(ctx.el("span", "compass-gl-label", "Paste lens JSON"));
+    const area = ctx.el("textarea");
+    area.placeholder = '{\n  "name": "My lens",\n  ...\n}';
+    area.value = state.text;
+    area.addEventListener("input", () => {
+      state.text = area.value;
+    });
+    areaField.append(area);
+    const errorsEl = ctx.el("ul", "compass-gl-errors");
+    renderEditorErrors(errorsEl, state.errors);
+    const actions = ctx.el("div", "compass-gl-form-actions");
+    const cancelBtn = ctx.button("compass-gl-cancel", "Cancel");
+    cancelBtn.addEventListener("click", () => {
+      importState = null;
+      renderLensesMode();
+      positionPanel();
+    });
+    const submitBtn = ctx.button("compass-gl-save", "Import lens");
+    submitBtn.addEventListener("click", ctx.guard(async () => {
+      const parsed = lensFromJson(state.text);
+      if (!parsed.ok) {
+        state.errors = parsed.errors;
+        renderEditorErrors(errorsEl, state.errors);
+        positionPanel();
+        return;
+      }
+      const taken = new Set(lenses.map((item) => item.id));
+      const uniqueId = taken.has(parsed.lens.id) ? slugLensId(parsed.lens.id, taken) : parsed.lens.id;
+      const imported = { ...parsed.lens, id: uniqueId };
+      importState = null;
+      await persistLenses([...lenses.map(cloneLens), imported]);
+    }));
+    actions.append(cancelBtn, submitBtn);
+    importWrap.append(areaField, errorsEl, actions);
+  }
+  function renderLensesMode() {
+    if (editorState) {
+      lensEmpty.hidden = true;
+      lensList.hidden = true;
+      lensFooter.hidden = true;
+      importWrap.hidden = true;
+      editorWrap.hidden = false;
+      renderEditor();
+      return;
+    }
+    if (importState) {
+      lensEmpty.hidden = true;
+      lensList.hidden = true;
+      lensFooter.hidden = true;
+      editorWrap.hidden = true;
+      importWrap.hidden = false;
+      renderImportBox();
+      return;
+    }
+    editorWrap.hidden = true;
+    editorWrap.replaceChildren();
+    importWrap.hidden = true;
+    importWrap.replaceChildren();
+    lensFooter.hidden = false;
+    renderLensList();
+  }
+  function syncPanel() {
+    updateBadge();
+    if (!panelOpen) return;
+    syncViewsSection();
+    syncQuickFilterSection();
+    syncReflowSection();
+    if (!editorState && !importState) renderLensesMode();
+    positionPanel();
+  }
+  function open() {
+    panelOpen = true;
+    panel.hidden = false;
+    barBtn.setAttribute("aria-expanded", "true");
+    syncViewsSection();
+    syncQuickFilterSection();
+    syncReflowSection();
+    renderLensesMode();
+    positionPanel();
+  }
+  function close() {
+    panelOpen = false;
+    editorState = null;
+    importState = null;
+    panel.hidden = true;
+    barBtn.setAttribute("aria-expanded", "false");
+  }
+  function toggle() {
+    if (panelOpen) close();
+    else open();
+  }
+  function clearQuickFilter() {
+    excludedTypes.clear();
+    keywordInput.value = "";
+    ctx.setLens({ pages: true, blocks: true, drawings: true, regions: true, keyword: "" });
+    if (ctx.state.settings?.filterReflow) {
+      ctx.rebuild();
+      ctx.render();
+    }
+    syncPanel();
+  }
+  async function setReflow(nextReflow) {
+    await ctx.saveSetting(SETTING_IDS.filterReflow, Boolean(nextReflow));
+    ctx.rebuild();
+    ctx.render();
+    syncPanel();
+  }
+  async function toggleLensById(id) {
+    const hit = lenses.find((item) => item.id === id);
+    if (!hit) return;
+    const next = lenses.map((item) => item.id === id ? { ...cloneLens(item), enabled: !item.enabled } : cloneLens(item));
+    await persistLenses(next);
+  }
+  ctx.lifecycle.event(barBtn, "click", () => toggle());
+  ctx.lifecycle.event(closeBtn, "click", () => close());
+  for (const [viewId, btn] of viewBtnMap.entries()) {
+    ctx.lifecycle.event(btn, "click", ctx.guard(async () => {
+      const viewsFeature = ctx.features.get("views");
+      await viewsFeature?.set?.(viewId);
+      syncPanel();
+    }));
+  }
+  const onPresetChange = ctx.guard(async () => {
+    if (!presetSelect.value) return;
+    await ctx.features.get("views")?.set?.("facets", presetSelect.value);
+    syncPanel();
+  });
+  ctx.lifecycle.event(presetSelect, "change", onPresetChange);
+  ctx.lifecycle.event(editPresetsBtn, "click", () => {
+    ctx.features.get("facets")?.openPresetEditor?.();
+  });
+  ctx.lifecycle.event(keywordInput, "input", () => {
+    ctx.setLens({ keyword: keywordInput.value });
+    if (ctx.state.settings?.filterReflow) {
+      ctx.rebuild();
+      ctx.render();
+    }
+    syncPanel();
+  });
+  for (const [kindKey, btn] of kindBtnMap.entries()) {
+    ctx.lifecycle.event(btn, "click", () => {
+      const nextVal = !ctx.state.lens[kindKey];
+      ctx.setLens({ [kindKey]: nextVal });
+      if (ctx.state.settings?.filterReflow) {
+        ctx.rebuild();
+        ctx.render();
+      }
+      syncPanel();
+    });
+  }
+  ctx.lifecycle.event(clearBtn, "click", () => clearQuickFilter());
+  ctx.lifecycle.event(keepRadio, "change", ctx.guard(async () => {
+    if (keepRadio.checked) await setReflow(false);
+  }));
+  ctx.lifecycle.event(reflowRadio, "change", ctx.guard(async () => {
+    if (reflowRadio.checked) await setReflow(true);
+  }));
+  ctx.lifecycle.event(newLensBtn, "click", () => {
+    importState = null;
+    editorState = makeEditorDraft(null);
+    renderLensesMode();
+    positionPanel();
+  });
+  ctx.lifecycle.event(importBtn, "click", () => {
+    editorState = null;
+    importState = { text: "", errors: [] };
+    renderLensesMode();
+    positionPanel();
+  });
+  ctx.lifecycle.event(examplesBtn, "click", ctx.guard(async () => {
+    if (lenses.length > 0) return;
+    await persistLenses(EXAMPLE_LENSES.map(cloneLens));
+  }));
+  ctx.lifecycle.event(globalThis, "resize", () => {
+    if (panelOpen) positionPanel();
+  });
+  function onSettings(settings) {
+    if (!settings) return;
+    if (savingCount === 0) {
+      lenses = normalizeLenses(settings.lenses);
+    }
+    syncPanel();
+  }
+  function onClose() {
+    excludedTypes.clear();
+    unfilteredNodes = null;
+    close();
+    updateBadge();
+  }
+  function onEscape() {
+    if (!panelOpen) return false;
+    close();
+    return true;
+  }
+  function transformHood(hood) {
+    if (!hood || !Array.isArray(hood.nodes)) return hood;
+    unfilteredNodes = [...hood.nodes];
+    if (!ctx.state.settings?.filterReflow) return hood;
+    const hidden = hiddenFor(hood.nodes);
+    if (hidden.size === 0) return hood;
+    const remaining = hood.nodes.filter((node) => !hidden.has(node.uid));
+    const remainingUids = new Set(remaining.map((node) => node.uid));
+    const nextNodes = remaining.map((node) => node.via && !remainingUids.has(node.via) ? { ...node, via: null } : node);
+    return { ...hood, nodes: nextNodes };
+  }
+  function hiddenUids2(uids, hood) {
+    const nodes = hood?.nodes ?? [];
+    if (!nodes.length) return Array.isArray(uids) ? uids : [];
+    const out = new Set(Array.isArray(uids) ? uids : []);
+    const facts = ctx.facts(nodes);
+    for (const uid of activeTypeHidden(facts)) out.add(uid);
+    const { hidden } = evaluateLenses(lenses, facts);
+    for (const uid of hidden) out.add(uid);
+    return [...out];
+  }
+  function afterRender({ hood, geometry }) {
+    const centerUid = hood?.center?.uid ?? ctx.state.current;
+    const drawn = Array.isArray(geometry?.nodes) ? geometry.nodes : hood?.nodes ?? [];
+    const neighbors = drawn.filter((node) => node && node.uid !== centerUid);
+    const facts = neighbors.length ? ctx.facts(neighbors) : /* @__PURE__ */ new Map();
+    const hidden = new Set(hiddenUids(neighbors, ctx.state.lens));
+    for (const uid of activeTypeHidden(facts)) hidden.add(uid);
+    const evaluated = evaluateLenses(lenses, facts);
+    for (const uid of evaluated.hidden) hidden.add(uid);
+    for (const element of ctx.dom.world.querySelectorAll(".compass-node[data-uid]")) {
+      const uid = element.dataset?.uid;
+      const isCenter = uid === centerUid || element.classList.contains("compass-node-center");
+      if (isCenter) {
+        element.classList.toggle("compass-lensed", false);
+        removeCssVar(element, "--compass-lens-fill");
+        removeCssVar(element, "--compass-lens-border");
+        removeCssVar(element, "--compass-lens-text");
+        continue;
+      }
+      const isHidden = Boolean(uid && hidden.has(uid));
+      element.classList.toggle("compass-fade", isHidden);
+      const style = !isHidden && uid ? evaluated.styles.get(uid) : null;
+      if (style) {
+        element.classList.toggle("compass-lensed", true);
+        if (style.fill) setCssVar(element, "--compass-lens-fill", style.fill);
+        else removeCssVar(element, "--compass-lens-fill");
+        if (style.border) setCssVar(element, "--compass-lens-border", style.border);
+        else removeCssVar(element, "--compass-lens-border");
+        if (style.text) setCssVar(element, "--compass-lens-text", style.text);
+        else removeCssVar(element, "--compass-lens-text");
+      } else {
+        element.classList.toggle("compass-lensed", false);
+        removeCssVar(element, "--compass-lens-fill");
+        removeCssVar(element, "--compass-lens-border");
+        removeCssVar(element, "--compass-lens-text");
+      }
+    }
+    syncPanel();
+  }
+  function commands() {
+    return [
+      { id: "lenses-open", title: "Views and lenses", hint: "", run: () => open() },
+      { id: "filter-clear", title: "Clear filter", hint: "", run: () => clearQuickFilter() },
+      {
+        id: "filter-reflow",
+        title: "Toggle reflow after filtering",
+        hint: "",
+        run: ctx.guard(() => setReflow(!ctx.state.settings?.filterReflow))
+      },
+      ...lenses.map((lens) => ({
+        id: `lens-toggle-${lens.id}`,
+        title: `Lens: ${lens.name}`,
+        hint: "",
+        run: ctx.guard(() => toggleLensById(lens.id))
+      }))
+    ];
+  }
+  return {
+    name: "lenses",
+    open,
+    close,
+    toggle,
+    hiddenFor,
+    onSettings,
+    onClose,
+    onEscape,
+    transformHood,
+    hiddenUids: hiddenUids2,
+    afterRender,
+    commands
+  };
+}
+
+// src/model/group.js
+var GROUP_LABEL = Object.freeze({
+  page: "Pages",
+  block: "Blocks",
+  drawing: "Drawings",
+  region: "Regions",
+  board: "Boards",
+  card: "Cards",
+  empty: "Empty pages"
+});
+var AREAS = /* @__PURE__ */ new Set(["north", "south", "west", "east"]);
+var AREA_ROLE = Object.freeze({
+  north: "parent",
+  south: "child",
+  west: "friend",
+  east: "challenger"
+});
+function groupKey(fact) {
+  const type = typeof fact?.type === "string" ? fact.type.trim() : "";
+  if (type) return `type:${type}`;
+  const group = typeof fact?.group === "string" && fact.group ? fact.group : "page";
+  return `kind:${group}`;
+}
+function groupLabel(key) {
+  if (typeof key !== "string" || !key) return "";
+  if (key.startsWith("type:")) return key.slice(5);
+  const kind = key.startsWith("kind:") ? key.slice(5) : key;
+  return GROUP_LABEL[kind] ?? kind;
+}
+function factFor(facts, uid) {
+  if (!facts || typeof uid !== "string" || !uid) return null;
+  if (facts instanceof Map) return facts.get(uid) ?? null;
+  return facts[uid] ?? null;
+}
+function keyForNode(node, facts) {
+  const fact = factFor(facts, node?.uid);
+  if (fact) return groupKey(fact);
+  const style = typeof node?.style === "string" ? node.style : "";
+  const kind = typeof node?.kind === "string" ? node.kind : "";
+  return `kind:${style || kind || "page"}`;
+}
+function areaForZone(zone, oneSided) {
+  if (!AREAS.has(zone)) return null;
+  if (oneSided && (zone === "west" || zone === "east")) return "west";
+  return zone;
+}
+function makeGroupNode(area, key, bucket) {
+  const first = bucket[0];
+  const role = first.zone === area && typeof first.role === "string" && first.role ? first.role : AREA_ROLE[area];
+  const strength = Math.max(...bucket.map((item) => Number.isFinite(item.strength) ? item.strength : 0));
+  return {
+    uid: `group:${area}:${key}`,
+    kind: "group",
+    title: groupLabel(key),
+    count: bucket.length,
+    members: bucket.map((item) => item.uid),
+    zone: area,
+    role,
+    strength,
+    style: "group",
+    evidence: [{ kind: "group", role }],
+    label: "",
+    alias: "",
+    string: "",
+    editTime: 0,
+    createTime: 0,
+    writable: null,
+    via: null
+  };
+}
+function groupNodes(nodes, facts, { unfolded = /* @__PURE__ */ new Set(), oneSided = false } = {}) {
+  if (!Array.isArray(nodes)) return [];
+  const unfoldedSet = unfolded instanceof Set ? unfolded : new Set(Array.isArray(unfolded) ? unfolded : []);
+  const sharedSides = oneSided === true;
+  const buckets = /* @__PURE__ */ new Map();
+  const nodeGroupId = /* @__PURE__ */ new Map();
+  for (const node of nodes) {
+    if (!node || typeof node.uid !== "string" || !node.uid) continue;
+    const area = areaForZone(node.zone, sharedSides);
+    if (!area) continue;
+    const key = keyForNode(node, facts);
+    const id = `group:${area}:${key}`;
+    let bucket = buckets.get(id);
+    if (!bucket) {
+      bucket = { area, key, items: [] };
+      buckets.set(id, bucket);
+    }
+    bucket.items.push(node);
+    nodeGroupId.set(node.uid, id);
+  }
+  const foldedGroups = /* @__PURE__ */ new Map();
+  const foldedMembers = /* @__PURE__ */ new Set();
+  for (const [id, bucket] of buckets) {
+    if (bucket.items.length < 2 || unfoldedSet.has(id)) continue;
+    foldedGroups.set(id, makeGroupNode(bucket.area, bucket.key, bucket.items));
+    for (const member of bucket.items) foldedMembers.add(member.uid);
+  }
+  const emitted = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const node of nodes) {
+    if (!node || typeof node.uid !== "string" || !node.uid) continue;
+    const id = nodeGroupId.get(node.uid);
+    if (id && foldedGroups.has(id)) {
+      if (!emitted.has(id)) {
+        emitted.add(id);
+        out.push(foldedGroups.get(id));
+      }
+      continue;
+    }
+    if (node.zone === "siblings" && node.via && foldedMembers.has(node.via)) {
+      out.push({ ...node, via: null });
+    } else {
+      out.push(node);
+    }
+  }
+  return out;
 }
 
 // src/view/features/layout-options.js
-function createLayoutOptions() {
-  return { name: "layout" };
+var EXPANDABLE_ZONES = /* @__PURE__ */ new Set(["north", "south", "west", "east"]);
+var SUB_CAP = 4;
+function isExpandableNeighbor(node) {
+  if (!node || typeof node.uid !== "string" || !node.uid) return false;
+  if (!EXPANDABLE_ZONES.has(node.zone)) return false;
+  if (node.kind === "group") return false;
+  if (node.style === "board" || node.style === "card") return false;
+  return true;
+}
+function applyEdgeShape(edgeEl, shape) {
+  const hit = edgeEl.querySelector(".compass-edge-hit");
+  const line = edgeEl.querySelector(".compass-edge-line");
+  const label = edgeEl.querySelector(".compass-edge-label");
+  if (hit) hit.setAttribute("d", shape.d);
+  if (line) line.setAttribute("d", shape.d);
+  if (label) {
+    label.setAttribute("x", String(shape.mid[0]));
+    label.setAttribute("y", String(shape.mid[1] - 4));
+  }
+}
+function anchorRowUid(uid, hood, visibleRowUids, outlineOn) {
+  if (!outlineOn || !visibleRowUids.size) return null;
+  let at = uid;
+  while (at) {
+    if (visibleRowUids.has(at)) return at;
+    at = hood.outlineIndex?.get?.(at)?.parentUid ?? null;
+  }
+  return null;
+}
+function createLayoutOptions(ctx) {
+  let groupOn = Boolean(ctx?.state?.settings?.group);
+  let expandedOn = Boolean(ctx?.state?.settings?.expanded);
+  let flipOn = Boolean(ctx?.state?.settings?.flip);
+  let oneSidedOn = Boolean(ctx?.state?.settings?.oneSided);
+  let trackpadOn = Boolean(ctx?.state?.settings?.trackpad);
+  let saving = 0;
+  const unfoldedByCenter = /* @__PURE__ */ new Map();
+  const childrenCache = /* @__PURE__ */ new Map();
+  let originalNodes = /* @__PURE__ */ new Map();
+  let unfoldedGroupByMember = /* @__PURE__ */ new Map();
+  const groupButton = ctx?.button?.("compass-group", "Group", "Group nodes by type") ?? null;
+  const expandedButton = ctx?.button?.("compass-expanded", "Expanded", "Expanded view") ?? null;
+  function syncButtons() {
+    if (groupButton) groupButton.setAttribute("aria-pressed", groupOn ? "true" : "false");
+    if (expandedButton) expandedButton.setAttribute("aria-pressed", expandedOn ? "true" : "false");
+  }
+  if (groupButton) {
+    syncButtons();
+    ctx?.addBarButton?.(groupButton);
+    ctx?.lifecycle?.event?.(groupButton, "click", ctx.guard ? ctx.guard(() => toggleGroup()) : () => toggleGroup());
+  }
+  if (expandedButton) {
+    syncButtons();
+    ctx?.addBarButton?.(expandedButton);
+    ctx?.lifecycle?.event?.(expandedButton, "click", ctx.guard ? ctx.guard(() => toggleExpanded()) : () => toggleExpanded());
+  }
+  ctx?.lifecycle?.add?.(() => {
+    groupButton?.remove?.();
+    expandedButton?.remove?.();
+  });
+  function isCompassView() {
+    const view = ctx?.features?.get?.("views")?.current?.()?.view;
+    return !view || view === "compass";
+  }
+  function syncRootAttributes(activeCompass) {
+    const root = ctx?.dom?.root;
+    if (!root?.dataset) return;
+    if (activeCompass && flipOn) root.dataset.flip = "true";
+    else delete root.dataset.flip;
+    if (activeCompass && oneSidedOn) root.dataset.oneSided = "true";
+    else delete root.dataset.oneSided;
+  }
+  function onSettings(settings) {
+    childrenCache.clear();
+    if (!settings || saving > 0) return;
+    groupOn = Boolean(settings.group);
+    expandedOn = Boolean(settings.expanded);
+    flipOn = Boolean(settings.flip);
+    oneSidedOn = Boolean(settings.oneSided);
+    trackpadOn = Boolean(settings.trackpad);
+    syncButtons();
+  }
+  function onNavigate({ uid, previous, changed } = {}) {
+    if (!changed) return;
+    if (previous) unfoldedByCenter.delete(previous);
+    if (uid) unfoldedByCenter.delete(uid);
+  }
+  function onClose() {
+    unfoldedByCenter.clear();
+    childrenCache.clear();
+    originalNodes = /* @__PURE__ */ new Map();
+    unfoldedGroupByMember = /* @__PURE__ */ new Map();
+    syncRootAttributes(false);
+  }
+  async function persistOption(id, value, { rebuild = false, fit = false } = {}) {
+    saving += 1;
+    try {
+      await ctx?.saveSetting?.(id, value);
+      if (rebuild) ctx?.rebuild?.();
+      ctx?.render?.();
+      if (fit && isCompassView()) ctx?.fit?.(true);
+    } catch (error) {
+      console.error("[compass] layout", error);
+    } finally {
+      saving -= 1;
+    }
+  }
+  async function toggleGroup() {
+    groupOn = !groupOn;
+    if (!groupOn) unfoldedByCenter.clear();
+    syncButtons();
+    await persistOption(SETTING_IDS.group, groupOn, { rebuild: true });
+  }
+  async function toggleExpanded() {
+    expandedOn = !expandedOn;
+    if (!expandedOn) childrenCache.clear();
+    syncButtons();
+    await persistOption(SETTING_IDS.expanded, expandedOn);
+  }
+  async function toggleFlip() {
+    flipOn = !flipOn;
+    await persistOption(SETTING_IDS.flip, flipOn, { fit: true });
+  }
+  async function toggleOneSided() {
+    oneSidedOn = !oneSidedOn;
+    await persistOption(SETTING_IDS.oneSided, oneSidedOn, { rebuild: true, fit: true });
+  }
+  async function toggleTrackpad() {
+    trackpadOn = !trackpadOn;
+    await persistOption(SETTING_IDS.trackpad, trackpadOn);
+  }
+  function transformHood(hood) {
+    originalNodes = /* @__PURE__ */ new Map();
+    unfoldedGroupByMember = /* @__PURE__ */ new Map();
+    if (!hood || !Array.isArray(hood.nodes)) return hood;
+    if (!groupOn || !isCompassView()) return hood;
+    for (const node of hood.nodes) {
+      if (node?.uid) originalNodes.set(node.uid, node);
+    }
+    const factMap = ctx?.facts?.(hood.nodes) ?? /* @__PURE__ */ new Map();
+    const centerUid = hood.center?.uid || ctx?.state?.current || "";
+    const unfolded = unfoldedByCenter.get(centerUid) ?? /* @__PURE__ */ new Set();
+    const allGrouped = groupNodes(hood.nodes, factMap, { unfolded: /* @__PURE__ */ new Set(), oneSided: oneSidedOn });
+    if (unfolded.size > 0) {
+      for (const item of allGrouped) {
+        if (item.kind !== "group" || !unfolded.has(item.uid)) continue;
+        for (const memberUid of item.members) unfoldedGroupByMember.set(memberUid, item.uid);
+      }
+    }
+    const nodes = unfolded.size > 0 ? groupNodes(hood.nodes, factMap, { unfolded, oneSided: oneSidedOn }) : allGrouped;
+    return { ...hood, nodes };
+  }
+  function childrenFor(uid, centerUid) {
+    if (!expandedOn || !uid) return [];
+    let raw = childrenCache.get(uid);
+    if (!raw) {
+      const model = ctx?.state?.settings?.model;
+      raw = [];
+      try {
+        const snap = ctx?.host?.snapshot?.(uid, model);
+        if (snap && !snap.missing) {
+          raw = buildNeighborhood(snap, model).nodes.filter((child) => child.zone === "south");
+        }
+      } catch (error) {
+        console.error("[compass] expanded", error);
+        raw = [];
+      }
+      childrenCache.set(uid, raw);
+    }
+    return centerUid ? raw.filter((child) => child.uid !== centerUid) : raw;
+  }
+  function layoutOptions(options) {
+    if (!isCompassView()) return options;
+    const next = { ...options };
+    if (flipOn) next.flip = true;
+    if (oneSidedOn) next.oneSided = true;
+    if (expandedOn) {
+      const hood = ctx?.state?.hood;
+      const centerUid = hood?.center?.uid || ctx?.state?.current || "";
+      const sub = {};
+      for (const node of hood?.nodes ?? []) {
+        if (!isExpandableNeighbor(node)) continue;
+        const count2 = childrenFor(node.uid, centerUid).length;
+        if (count2 > 0) {
+          sub[node.uid] = Math.min(count2, SUB_CAP) + (count2 > SUB_CAP ? 1 : 0);
+        }
+      }
+      next.sub = sub;
+    }
+    return next;
+  }
+  function hiddenUids2(uids, hood) {
+    if (!Array.isArray(uids) || !hood || !Array.isArray(hood.nodes)) return uids;
+    const groups = hood.nodes.filter((node) => node?.kind === "group");
+    if (!groups.length) return uids;
+    const groupById = new Map(groups.map((item) => [item.uid, item]));
+    const lensesFeature = ctx?.features?.get?.("lenses");
+    const lensState = ctx?.state?.lens ?? { pages: true, blocks: true, drawings: true, regions: true, keyword: "" };
+    const hiddenGroups = /* @__PURE__ */ new Set();
+    for (const group of groups) {
+      const members = (group.members ?? []).map((id) => originalNodes.get(id)).filter(Boolean);
+      if (!members.length) continue;
+      const hiddenMembers = typeof lensesFeature?.hiddenFor === "function" ? lensesFeature.hiddenFor(members) : new Set(hiddenUids(members, lensState));
+      const keyword = String(lensState.keyword ?? "").trim().toLowerCase();
+      const titleHit = !keyword || typeof group.title === "string" && group.title.toLowerCase().includes(keyword);
+      const everyMemberHidden = members.every((member) => hiddenMembers?.has?.(member.uid));
+      if (everyMemberHidden && (!keyword || !titleHit)) hiddenGroups.add(group.uid);
+    }
+    return uids.filter((id) => !groupById.has(id) || hiddenGroups.has(id));
+  }
+  function lateralEdgeFromCenter(center, box) {
+    const sign = box.x < 0 ? -1 : 1;
+    const sx = sign * (center.w / 2);
+    const sy = ctx.clamp(box.y, -center.h / 2 + 12, center.h / 2 - 12);
+    const ex = box.x - sign * (box.w / 2);
+    return ctx.curve(sx, sy, ex, box.y, false);
+  }
+  function lateralEdgeFromRow(center, row, box) {
+    const sign = box.x < 0 ? -1 : 1;
+    const sx = sign * (center.w / 2);
+    const end = [box.x - sign * (box.w / 2), box.y];
+    const c1 = [sx + sign * 48, row.y];
+    const c2 = [end[0] - sign * 48, end[1]];
+    return {
+      d: `M${sx},${row.y} C${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${end[0]},${end[1]}`,
+      mid: [(sx + 3 * c1[0] + 3 * c2[0] + end[0]) / 8, (row.y + 3 * c1[1] + 3 * c2[1] + end[1]) / 8]
+    };
+  }
+  function siblingEdge(via, box) {
+    const sign = box.x < 0 ? -1 : 1;
+    const sx = via.x;
+    const sy = via.y - via.h / 2;
+    const ex = box.x - sign * (box.w / 2);
+    const lift = Math.min(sy, box.y) - 36;
+    return {
+      d: `M${sx},${sy} C${sx},${lift} ${ex - sign * 36},${lift} ${ex},${box.y}`,
+      mid: [(sx + ex) / 2, lift]
+    };
+  }
+  function fixEdges(hood, geometry, boxes) {
+    const edgeLayer = ctx?.dom?.edgeLayer;
+    if (!edgeLayer || !geometry || !geometry.flip && !geometry.oneSided) return;
+    const edgesByUid = /* @__PURE__ */ new Map();
+    for (const edgeEl of edgeLayer.querySelectorAll(".compass-edge:not(.compass-cross)")) {
+      if (edgeEl.dataset.style === "card") continue;
+      const uid = edgeEl.dataset.uid;
+      if (!uid) continue;
+      let list = edgesByUid.get(uid);
+      if (!list) {
+        list = [];
+        edgesByUid.set(uid, list);
+      }
+      list.push(edgeEl);
+    }
+    const rows = geometry.rows ?? [];
+    const rowBoxes = new Map(rows.map((row) => [row.uid, row]));
+    const visibleRowUids = new Set(rowBoxes.keys());
+    const outlineOn = Boolean(ctx?.state?.settings?.outline);
+    for (const node of hood.nodes ?? []) {
+      const box = boxes.get(node.uid);
+      if (!box) continue;
+      const needsFix = box.zone === "west" && box.x > 0 || box.zone === "east" && box.x < 0 || box.zone === "siblings" && box.x < 0;
+      if (!needsFix) continue;
+      const edgeEls = edgesByUid.get(node.uid);
+      if (!edgeEls?.length) continue;
+      if (node.zone === "siblings") {
+        const via = node.via ? boxes.get(node.via) : null;
+        if (via) applyEdgeShape(edgeEls[0], siblingEdge(via, box));
+        for (let i = 1; i < edgeEls.length; i += 1) {
+          applyEdgeShape(edgeEls[i], lateralEdgeFromCenter(geometry.center, box));
+        }
+        continue;
+      }
+      const anchors = /* @__PURE__ */ new Set();
+      for (const item of node.evidence ?? []) {
+        const rowUid = item.sourceUid ? anchorRowUid(item.sourceUid, hood, visibleRowUids, outlineOn) : null;
+        if (rowUid && (item.kind === "link" || item.kind === "typed" && item.direction === "out")) anchors.add(rowUid);
+        else anchors.add("");
+      }
+      const anchorList = [...anchors];
+      for (let i = 0; i < edgeEls.length; i += 1) {
+        const anchor = i < anchorList.length ? anchorList[i] : "";
+        const shape = anchor && rowBoxes.has(anchor) ? lateralEdgeFromRow(geometry.center, rowBoxes.get(anchor), box) : lateralEdgeFromCenter(geometry.center, box);
+        applyEdgeShape(edgeEls[i], shape);
+      }
+    }
+  }
+  function afterRender({ hood, geometry, boxes, nodeEls, view } = {}) {
+    syncButtons();
+    if (view !== "compass" || !hood || !nodeEls) {
+      syncRootAttributes(false);
+      return;
+    }
+    syncRootAttributes(true);
+    const centerUid = hood.center?.uid || ctx?.state?.current || "";
+    for (const node of hood.nodes ?? []) {
+      const element = nodeEls.get(node.uid);
+      if (!element) continue;
+      if (node.kind === "group") {
+        element.classList.add("compass-node-group");
+        element.dataset.kind = "group";
+        const titleEl = element.querySelector(".compass-node-title");
+        if (titleEl) titleEl.textContent = node.title;
+        if (!element.querySelector(".compass-group-count")) {
+          element.append(ctx.el("span", "compass-group-count", String(node.count)));
+        }
+        const memberTitles = (node.members ?? []).slice(0, 8).map((id) => originalNodes.get(id)?.title || id);
+        const remaining = (node.members?.length ?? 0) - memberTitles.length;
+        element.title = remaining > 0 ? `${memberTitles.join(", ")} (+${remaining} more)` : memberTitles.join(", ");
+        continue;
+      }
+      if (expandedOn && isExpandableNeighbor(node)) {
+        const children = childrenFor(node.uid, centerUid);
+        if (children.length > 0) {
+          element.classList.add("compass-node-expanded");
+          const subs = ctx.el("div", "compass-subs");
+          for (const child of children.slice(0, SUB_CAP)) {
+            const label = child.alias || child.title;
+            const row = ctx.el("div", "compass-sub", label);
+            row.dataset.uid = child.uid;
+            row.setAttribute("role", "button");
+            row.tabIndex = 0;
+            row.title = child.title;
+            subs.append(row);
+          }
+          if (children.length > SUB_CAP) {
+            subs.append(ctx.el("div", "compass-sub-more", `+${children.length - SUB_CAP} more`));
+          }
+          element.append(subs);
+        }
+      }
+    }
+    if (boxes) fixEdges(hood, geometry, boxes);
+  }
+  function unfoldGroup(groupId, focusFirst = false) {
+    const centerUid = ctx?.state?.current;
+    if (!centerUid || !groupId) return false;
+    const currentNode = (ctx?.state?.hood?.nodes ?? []).find((n) => n.uid === groupId);
+    const firstMemberUid = currentNode?.members?.[0] ?? null;
+    let unfolded = unfoldedByCenter.get(centerUid);
+    if (!unfolded) {
+      unfolded = /* @__PURE__ */ new Set();
+      unfoldedByCenter.set(centerUid, unfolded);
+    }
+    unfolded.add(groupId);
+    ctx?.rebuild?.();
+    ctx?.render?.();
+    if (focusFirst && firstMemberUid) {
+      ctx?.state?.nodeEls?.get?.(firstMemberUid)?.focus?.({ preventScroll: true });
+    }
+    return true;
+  }
+  function foldGroup(groupId) {
+    const centerUid = ctx?.state?.current;
+    if (!centerUid || !groupId) return;
+    const unfolded = unfoldedByCenter.get(centerUid);
+    if (!unfolded || !unfolded.has(groupId)) return;
+    unfolded.delete(groupId);
+    ctx?.rebuild?.();
+    ctx?.render?.();
+  }
+  function onStageClick(event) {
+    if (!isCompassView()) return false;
+    const target = event?.target;
+    if (!target || typeof target.closest !== "function") return false;
+    if (target.closest(".compass-sub-more")) return true;
+    const subEl = target.closest(".compass-sub[data-uid]");
+    if (subEl?.dataset?.uid) {
+      ctx?.focusUid?.(subEl.dataset.uid);
+      return true;
+    }
+    const groupEl = target.closest('.compass-node[data-kind="group"]');
+    if (groupEl?.dataset?.uid) {
+      return unfoldGroup(groupEl.dataset.uid, false);
+    }
+    return false;
+  }
+  function onStageDoubleClick(event) {
+    if (!isCompassView()) return false;
+    const target = event?.target;
+    if (!target || typeof target.closest !== "function") return false;
+    if (target.closest(".compass-sub-more")) return true;
+    const subEl = target.closest(".compass-sub[data-uid]");
+    if (subEl?.dataset?.uid) {
+      event.preventDefault?.();
+      void ctx?.openSidebar?.(subEl.dataset.uid);
+      return true;
+    }
+    if (target.closest('.compass-node[data-kind="group"]')) {
+      event.preventDefault?.();
+      return true;
+    }
+    return false;
+  }
+  function onKey(event) {
+    if (!isCompassView()) return false;
+    const target = event?.target;
+    if (!target || typeof target.closest !== "function") return false;
+    const subEl = target.closest(".compass-sub[data-uid]");
+    if (subEl?.dataset?.uid && (event.key === "Enter" || event.key === " ")) {
+      ctx?.focusUid?.(subEl.dataset.uid);
+      return true;
+    }
+    const groupEl = target.closest('.compass-node[data-kind="group"]');
+    if (groupEl?.dataset?.uid && (event.key === "Enter" || event.key === " ")) {
+      return unfoldGroup(groupEl.dataset.uid, true);
+    }
+    return false;
+  }
+  function nodeMenu(uid, node) {
+    if (!isCompassView() || !groupOn) return [];
+    if (node?.kind === "group") {
+      return [{ title: "Unfold group", run: () => unfoldGroup(uid, false) }];
+    }
+    const groupId = unfoldedGroupByMember.get(uid);
+    if (groupId) {
+      return [{ title: "Fold group", run: () => foldGroup(groupId) }];
+    }
+    return [];
+  }
+  function onWheel(event) {
+    if (!trackpadOn || !isCompassView()) return false;
+    event.preventDefault();
+    const { zoom, panX, panY } = ctx.state;
+    if (event.ctrlKey || event.metaKey) {
+      const rect = ctx.dom.stage.getBoundingClientRect();
+      const ox = event.clientX - rect.left - rect.width / 2;
+      const oy = event.clientY - rect.top - rect.height / 2;
+      const wx = (ox - panX) / zoom;
+      const wy = (oy - panY) / zoom;
+      const factor = ctx.clamp(Math.exp(-event.deltaY * 0.01), 0.8, 1.2);
+      const nextZoom = ctx.clamp(zoom * factor, 0.25, 2.5);
+      ctx.setCamera({
+        zoom: nextZoom,
+        panX: ox - wx * nextZoom,
+        panY: oy - wy * nextZoom
+      }, false);
+      return true;
+    }
+    const dx = Number.isFinite(event.deltaX) ? event.deltaX : 0;
+    const dy = Number.isFinite(event.deltaY) ? event.deltaY : 0;
+    ctx.setCamera({ panX: panX - dx, panY: panY - dy }, false);
+    return true;
+  }
+  function commands() {
+    return [
+      { id: "layout-group", title: "Toggle grouping by type", hint: "", run: () => toggleGroup() },
+      { id: "layout-expanded", title: "Toggle expanded view", hint: "", run: () => toggleExpanded() },
+      { id: "layout-flip", title: "Flip East–West", hint: "", run: () => toggleFlip() },
+      { id: "layout-one-sided", title: "Toggle one-sided layout", hint: "", run: () => toggleOneSided() },
+      { id: "layout-trackpad", title: "Toggle trackpad navigation", hint: "", run: () => toggleTrackpad() }
+    ];
+  }
+  return {
+    name: "layout",
+    toggleGroup,
+    toggleExpanded,
+    onSettings,
+    onNavigate,
+    onClose,
+    transformHood,
+    layoutOptions,
+    hiddenUids: hiddenUids2,
+    afterRender,
+    onStageClick,
+    onStageDoubleClick,
+    onKey,
+    nodeMenu,
+    onWheel,
+    commands
+  };
+}
+
+// src/model/keynav.js
+var DIRECTIONS = /* @__PURE__ */ new Set(["up", "down", "left", "right"]);
+var SHORTCUTS = Object.freeze([
+  Object.freeze({ keys: "Arrow keys", action: "Move selection across the map", group: "Move and select" }),
+  Object.freeze({ keys: "Alt+Arrow keys", action: "Jump to the area in that direction", group: "Move and select" }),
+  Object.freeze({ keys: "Alt+0", action: "Select the center card", group: "Move and select" }),
+  Object.freeze({ keys: "Letters, digits, Space", action: "Type to select a visible node", group: "Move and select" }),
+  Object.freeze({ keys: "Tab / Shift+Tab", action: "Next or previous match while selecting", group: "Move and select" }),
+  Object.freeze({ keys: "Escape", action: "Clear phrase, exit Zen or close Compass", group: "Move and select" }),
+  Object.freeze({ keys: "Enter / Space", action: "Center the selected node", group: "Actions" }),
+  Object.freeze({ keys: "Shift+Enter", action: "Open the selected node in the sidebar", group: "Actions" }),
+  Object.freeze({ keys: "Ctrl/Cmd+Enter", action: "Open the selected node in the main window", group: "Actions" }),
+  Object.freeze({ keys: "Backspace / Shift+Backspace", action: "Back or forward in history", group: "Actions" }),
+  Object.freeze({ keys: "Alt+Left / Alt+Right", action: "Back or forward from the center", group: "Actions" }),
+  Object.freeze({ keys: "Ctrl/Cmd+Arrow keys", action: "Add a related page on that side", group: "Actions" }),
+  Object.freeze({ keys: "Alt+P", action: "Pin or unpin the selected node", group: "Actions" }),
+  Object.freeze({ keys: "Alt+B", action: "Open periodic pins", group: "Actions" }),
+  Object.freeze({ keys: "Alt+H", action: "Toggle trail", group: "Actions" }),
+  Object.freeze({ keys: "Alt+M", action: "Open the selected node menu", group: "Actions" }),
+  Object.freeze({ keys: "Alt+/ or Ctrl/Cmd+F", action: "Focus the search box", group: "Actions" }),
+  Object.freeze({ keys: "Alt+.", action: "Open the command palette", group: "Actions" }),
+  Object.freeze({ keys: "Alt+?", action: "Show keyboard help", group: "Actions" })
+]);
+function keyOf(item) {
+  if (typeof item?.key === "string" && item.key) return item.key;
+  if (typeof item?.uid === "string" && item.uid) return item.uid;
+  return "";
+}
+function normalizeItems(items) {
+  if (!Array.isArray(items)) return [];
+  const out = [];
+  for (const raw of items) {
+    const key = keyOf(raw);
+    if (!key || !Number.isFinite(raw?.x) || !Number.isFinite(raw?.y)) continue;
+    out.push({
+      key,
+      uid: typeof raw.uid === "string" ? raw.uid : key,
+      zone: typeof raw.zone === "string" ? raw.zone : "",
+      x: raw.x,
+      y: raw.y,
+      w: Number.isFinite(raw.w) ? raw.w : 0,
+      h: Number.isFinite(raw.h) ? raw.h : 0
+    });
+  }
+  return out;
+}
+function axes(dx, dy, direction) {
+  if (direction === "up") return { primary: -dy, sideways: Math.abs(dx) };
+  if (direction === "down") return { primary: dy, sideways: Math.abs(dx) };
+  if (direction === "left") return { primary: -dx, sideways: Math.abs(dy) };
+  if (direction === "right") return { primary: dx, sideways: Math.abs(dy) };
+  return null;
+}
+function inCone(dx, dy, direction) {
+  const projected = axes(dx, dy, direction);
+  return Boolean(projected && projected.primary > 0 && projected.sideways <= projected.primary);
+}
+function readingOrder(a, b) {
+  return a.y - b.y || a.x - b.x;
+}
+function bestByScore(pool, origin, direction) {
+  let best = null;
+  let bestScore = Infinity;
+  let bestDist = Infinity;
+  for (const item of pool) {
+    if (item.key === origin.key) continue;
+    const dx = item.x - origin.x;
+    const dy = item.y - origin.y;
+    const projected = axes(dx, dy, direction);
+    if (!projected || projected.primary <= 0) continue;
+    const score2 = projected.primary + 2 * projected.sideways;
+    const dist = Math.hypot(dx, dy);
+    if (score2 < bestScore || score2 === bestScore && dist < bestDist || score2 === bestScore && dist === bestDist && best && readingOrder(item, best) < 0) {
+      best = item;
+      bestScore = score2;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+function step(items, currentKey, direction) {
+  if (!DIRECTIONS.has(direction)) return null;
+  const list = normalizeItems(items);
+  if (!list.length) return null;
+  const current = typeof currentKey === "string" && currentKey ? list.find((item) => item.key === currentKey) ?? null : null;
+  if (!current || current.zone === "center") {
+    const ox = current ? current.x : 0;
+    const oy = current ? current.y : 0;
+    let nearest = null;
+    let nearestDist = Infinity;
+    for (const item of list) {
+      if (item.zone === "center" || item.key === current?.key) continue;
+      const dx = item.x - ox;
+      const dy = item.y - oy;
+      if (!inCone(dx, dy, direction)) continue;
+      const dist = Math.hypot(dx, dy);
+      if (dist < nearestDist || dist === nearestDist && nearest && readingOrder(item, nearest) < 0) {
+        nearest = item;
+        nearestDist = dist;
+      }
+    }
+    return nearest ? nearest.key : null;
+  }
+  if (current.zone) {
+    const sameZone = list.filter((item) => item.zone === current.zone);
+    const within = bestByScore(sameZone, current, direction);
+    if (within) return within.key;
+  }
+  const crossed = bestByScore(list, current, direction);
+  return crossed ? crossed.key : null;
+}
+function jump(items, direction) {
+  if (!DIRECTIONS.has(direction)) return null;
+  const list = normalizeItems(items);
+  if (!list.length) return null;
+  const center = list.find((item) => item.zone === "center") ?? null;
+  const cx = center ? center.x : 0;
+  const cy = center ? center.y : 0;
+  const byZone = /* @__PURE__ */ new Map();
+  for (const item of list) {
+    if (!item.zone || item.zone === "center") continue;
+    const group = byZone.get(item.zone);
+    if (group) group.push(item);
+    else byZone.set(item.zone, [item]);
+  }
+  let bestMembers = null;
+  let bestPrimary = -Infinity;
+  for (const members of byZone.values()) {
+    let sumDx = 0;
+    let sumDy = 0;
+    for (const item of members) {
+      sumDx += item.x - cx;
+      sumDy += item.y - cy;
+    }
+    const avgDx = sumDx / members.length;
+    const avgDy = sumDy / members.length;
+    if (!inCone(avgDx, avgDy, direction)) continue;
+    const projected = axes(avgDx, avgDy, direction);
+    if (projected && projected.primary > bestPrimary) {
+      bestPrimary = projected.primary;
+      bestMembers = members;
+    }
+  }
+  if (!bestMembers) return null;
+  let nearest = null;
+  let nearestDist = Infinity;
+  for (const item of bestMembers) {
+    const dist = Math.hypot(item.x - cx, item.y - cy);
+    if (dist < nearestDist || dist === nearestDist && nearest && readingOrder(item, nearest) < 0) {
+      nearest = item;
+      nearestDist = dist;
+    }
+  }
+  return nearest ? nearest.key : null;
+}
+function readLabel(labels, key) {
+  if (!labels) return "";
+  const raw = labels instanceof Map ? labels.get(key) : labels[key];
+  return typeof raw === "string" ? raw : "";
+}
+function matches(items, labels, phrase) {
+  if (typeof phrase !== "string" || phrase.length === 0) return [];
+  const list = normalizeItems(items);
+  if (!list.length || !labels) return [];
+  const needle = phrase.toLowerCase();
+  const hits = [];
+  for (const item of list) {
+    const label = readLabel(labels, item.key);
+    if (label && label.toLowerCase().includes(needle)) hits.push(item);
+  }
+  hits.sort(readingOrder);
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const item of hits) {
+    if (seen.has(item.key)) continue;
+    seen.add(item.key);
+    out.push(item.key);
+  }
+  return out;
+}
+function cycle(keys, currentKey, delta = 1) {
+  if (!Array.isArray(keys) || keys.length === 0) return null;
+  const index = keys.indexOf(currentKey);
+  if (index < 0) return keys[0];
+  const stepCount = Number.isFinite(delta) ? Math.trunc(delta) : 1;
+  const next = ((index + stepCount) % keys.length + keys.length) % keys.length;
+  return keys[next];
 }
 
 // src/view/features/keys.js
-function createKeys() {
-  return { name: "keys" };
+var ARROW_DIR = Object.freeze({
+  ArrowUp: "up",
+  ArrowDown: "down",
+  ArrowLeft: "left",
+  ArrowRight: "right"
+});
+var PHRASE_TIMEOUT_MS = 4e3;
+var HELP_GROUPS = Object.freeze(["Move and select", "Actions"]);
+function escapeSelector(value) {
+  if (typeof globalThis.CSS?.escape === "function") return globalThis.CSS.escape(value);
+  return String(value).replace(/["\\]/g, "\\$&");
+}
+function isPhraseChar(key, hasPhrase) {
+  if (key === " ") return hasPhrase;
+  return typeof key === "string" && key.length === 1 && /[\p{L}\p{N}]/u.test(key);
+}
+function createKeys(ctx) {
+  let phrase = "";
+  let phraseTimer = null;
+  let helpOpen = false;
+  let savedFocus = null;
+  let pill = null;
+  let helpBackdrop = null;
+  let closeHelpBtn = null;
+  if (ctx?.el && ctx?.button && ctx?.lifecycle && ctx?.dom?.stage && ctx?.dom?.root) {
+    pill = ctx.el("div", "compass-select-pill");
+    pill.hidden = true;
+    pill.setAttribute("role", "status");
+    pill.setAttribute("aria-live", "polite");
+    ctx.lifecycle.node(pill, ctx.dom.stage);
+    helpBackdrop = ctx.el("div", "compass-help-backdrop");
+    helpBackdrop.hidden = true;
+    const panel = ctx.el("div", "compass-help");
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-modal", "true");
+    panel.setAttribute("aria-label", "Keyboard shortcuts");
+    const head = ctx.el("div", "compass-help-head");
+    const title = ctx.el("h2", "compass-help-title", "Keyboard shortcuts");
+    closeHelpBtn = ctx.button("compass-help-close", "×", "Close keyboard help");
+    head.append(title, closeHelpBtn);
+    const body = ctx.el("div", "compass-help-body");
+    for (const groupName of HELP_GROUPS) {
+      const group = ctx.el("section", "compass-help-group");
+      group.append(ctx.el("h3", "compass-help-group-title", groupName));
+      const rows = ctx.el("div", "compass-help-rows");
+      for (const item of SHORTCUTS) {
+        if (item.group !== groupName) continue;
+        const row = ctx.el("div", "compass-help-row");
+        row.append(
+          ctx.el("kbd", "compass-help-keys", item.keys),
+          ctx.el("span", "compass-help-action", item.action)
+        );
+        rows.append(row);
+      }
+      group.append(rows);
+      body.append(group);
+    }
+    panel.append(head, body);
+    helpBackdrop.append(panel);
+    ctx.lifecycle.node(helpBackdrop, ctx.dom.root);
+    ctx.lifecycle.event(helpBackdrop, "pointerdown", (event) => {
+      event.stopPropagation();
+      if (event.target === helpBackdrop) closeHelp();
+    });
+    ctx.lifecycle.event(helpBackdrop, "click", (event) => {
+      event.stopPropagation();
+    });
+    ctx.lifecycle.event(closeHelpBtn, "click", () => {
+      closeHelp();
+    });
+    ctx.lifecycle.event(helpBackdrop, "keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeHelp();
+      }
+    });
+  }
+  function clearPhrase() {
+    phrase = "";
+    if (ctx?.cancel) phraseTimer = ctx.cancel(phraseTimer);
+    if (pill) {
+      pill.hidden = true;
+      pill.textContent = "";
+    }
+  }
+  function armPhraseTimer() {
+    if (!ctx?.later || !ctx?.cancel) return;
+    phraseTimer = ctx.cancel(phraseTimer);
+    phraseTimer = ctx.later(clearPhrase, PHRASE_TIMEOUT_MS);
+  }
+  function updatePill(matchedKeys, activeKey) {
+    if (!pill) return;
+    if (!phrase) {
+      pill.hidden = true;
+      pill.textContent = "";
+      return;
+    }
+    if (matchedKeys.length > 0) {
+      const index = Math.max(0, matchedKeys.indexOf(activeKey));
+      pill.textContent = `Select: ${phrase} — ${index + 1} of ${matchedKeys.length}`;
+    } else {
+      pill.textContent = `Select: ${phrase} — no match`;
+    }
+    pill.hidden = false;
+  }
+  function elementFor(item) {
+    if (!item) return null;
+    const world = ctx?.dom?.world;
+    if (typeof item.key === "string" && item.key && world) {
+      const byKey = world.querySelector(`.compass-node[data-key="${escapeSelector(item.key)}"]`);
+      if (byKey) return byKey;
+    }
+    if (typeof item.uid === "string" && item.uid) {
+      const mapped = ctx?.state?.nodeEls?.get?.(item.uid);
+      if (mapped) return mapped;
+      if (world) {
+        if (item.zone === "center") {
+          const centerEl = world.querySelector(".compass-node-center");
+          if (centerEl) return centerEl;
+        }
+        const byUid = world.querySelector(`.compass-node[data-uid="${escapeSelector(item.uid)}"]`);
+        if (byUid) return byUid;
+      }
+    }
+    return null;
+  }
+  function collectScene() {
+    const geometry = ctx?.state?.geometry;
+    const hood = ctx?.state?.hood;
+    if (!geometry || !hood?.center) {
+      return { items: [], elements: /* @__PURE__ */ new Map(), itemMap: /* @__PURE__ */ new Map(), labels: /* @__PURE__ */ new Map(), centerKey: null };
+    }
+    const items = [];
+    const elements = /* @__PURE__ */ new Map();
+    const itemMap = /* @__PURE__ */ new Map();
+    const labels = /* @__PURE__ */ new Map();
+    const centerKey = hood.center.uid;
+    const centerItem = {
+      key: centerKey,
+      uid: centerKey,
+      zone: "center",
+      x: geometry.center?.x ?? 0,
+      y: geometry.center?.y ?? 0,
+      w: geometry.center?.w ?? 240,
+      h: geometry.center?.h ?? 56
+    };
+    const centerEl = elementFor(centerItem);
+    if (centerEl && !centerEl.classList.contains("compass-fade")) {
+      items.push(centerItem);
+      elements.set(centerKey, centerEl);
+      itemMap.set(centerKey, centerItem);
+      const centerTitle = centerEl.querySelector(".compass-node-title")?.textContent ?? "";
+      if (centerTitle) labels.set(centerKey, centerTitle);
+    }
+    for (const raw of geometry.items ?? []) {
+      const key = typeof raw?.key === "string" && raw.key ? raw.key : raw?.uid;
+      if (!key) continue;
+      const item = { ...raw, key };
+      const nodeEl = elementFor(item);
+      if (!nodeEl || nodeEl.classList.contains("compass-fade")) continue;
+      items.push(item);
+      elements.set(key, nodeEl);
+      itemMap.set(key, item);
+      const text = nodeEl.querySelector(".compass-node-title")?.textContent ?? "";
+      if (text) labels.set(key, text);
+    }
+    return { items, elements, itemMap, labels, centerKey: centerEl ? centerKey : null };
+  }
+  function focusedNodeElement() {
+    const active = globalThis.document?.activeElement;
+    if (!active || !ctx?.dom?.world?.contains?.(active)) return null;
+    return active.closest?.(".compass-node") ?? null;
+  }
+  function keyOfElement(nodeEl, centerKey) {
+    if (!nodeEl) return null;
+    if (nodeEl.classList.contains("compass-node-center")) return centerKey || nodeEl.dataset.uid || null;
+    return nodeEl.dataset.key || nodeEl.dataset.uid || null;
+  }
+  function ensureInView(item) {
+    const stage = ctx?.dom?.stage;
+    if (!item || typeof stage?.getBoundingClientRect !== "function" || typeof ctx?.setCamera !== "function") return;
+    const rect = stage.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const zoom = ctx.state?.zoom || 1;
+    const panX = ctx.state?.panX || 0;
+    const panY = ctx.state?.panY || 0;
+    const margin = 16;
+    const halfW = Math.max(0, rect.width / 2 - margin);
+    const halfH = Math.max(0, rect.height / 2 - margin);
+    const w = Number.isFinite(item.w) ? item.w : 0;
+    const h = Number.isFinite(item.h) ? item.h : 0;
+    const left = panX + (item.x - w / 2) * zoom;
+    const right = panX + (item.x + w / 2) * zoom;
+    const top = panY + (item.y - h / 2) * zoom;
+    const bottom = panY + (item.y + h / 2) * zoom;
+    let nextPanX = panX;
+    let nextPanY = panY;
+    if (w * zoom > halfW * 2) nextPanX = -item.x * zoom;
+    else if (left < -halfW) nextPanX += -halfW - left;
+    else if (right > halfW) nextPanX -= right - halfW;
+    if (h * zoom > halfH * 2) nextPanY = -item.y * zoom;
+    else if (top < -halfH) nextPanY += -halfH - top;
+    else if (bottom > halfH) nextPanY -= bottom - halfH;
+    if (nextPanX !== panX || nextPanY !== panY) {
+      ctx.setCamera({ panX: nextPanX, panY: nextPanY }, true);
+    }
+  }
+  function selectKey(scene, targetKey) {
+    if (!targetKey) return false;
+    const nodeEl = scene.elements.get(targetKey);
+    if (!nodeEl) return false;
+    nodeEl.focus({ preventScroll: true });
+    ensureInView(scene.itemMap.get(targetKey));
+    return true;
+  }
+  function focusCenter() {
+    clearPhrase();
+    const scene = collectScene();
+    if (scene.centerKey) selectKey(scene, scene.centerKey);
+  }
+  function help() {
+    clearPhrase();
+    ctx?.hideFloating?.();
+    if (!helpOpen) {
+      const active = globalThis.document?.activeElement;
+      savedFocus = active && ctx?.dom?.root?.contains?.(active) ? active : null;
+    }
+    helpOpen = true;
+    if (helpBackdrop) {
+      helpBackdrop.hidden = false;
+      closeHelpBtn?.focus({ preventScroll: true });
+    }
+  }
+  function closeHelp(restore = true) {
+    if (!helpOpen) return;
+    helpOpen = false;
+    if (helpBackdrop) helpBackdrop.hidden = true;
+    const target = savedFocus;
+    savedFocus = null;
+    if (restore && target?.isConnected && ctx?.state?.isOpen) {
+      target.focus({ preventScroll: true });
+    }
+  }
+  function openCenterZonePop(arrowKey) {
+    const flipped = Boolean(ctx?.state?.geometry?.flip ?? ctx?.state?.settings?.flip);
+    let zone = "south";
+    if (arrowKey === "ArrowUp") zone = "north";
+    else if (arrowKey === "ArrowDown") zone = "south";
+    else if (arrowKey === "ArrowLeft") zone = flipped ? "east" : "west";
+    else if (arrowKey === "ArrowRight") zone = flipped ? "west" : "east";
+    const centerEl = ctx?.dom?.world?.querySelector?.(".compass-node-center") ?? (ctx?.state?.current ? ctx?.state?.nodeEls?.get?.(ctx.state.current) : null);
+    const rect = centerEl?.getBoundingClientRect?.() ?? ctx?.dom?.stage?.getBoundingClientRect?.();
+    let x = NaN;
+    let y = NaN;
+    if (rect) {
+      if (arrowKey === "ArrowUp") {
+        x = rect.left + rect.width / 2;
+        y = rect.top - 8;
+      } else if (arrowKey === "ArrowDown") {
+        x = rect.left + rect.width / 2;
+        y = rect.bottom + 8;
+      } else if (arrowKey === "ArrowLeft") {
+        x = rect.left - 8;
+        y = rect.top + rect.height / 2;
+      } else {
+        x = rect.right + 8;
+        y = rect.top + rect.height / 2;
+      }
+    }
+    ctx?.openZonePop?.(zone, x, y);
+  }
+  function notifyWander(event) {
+    if (event?.target === globalThis.document?.body) {
+      ctx?.features?.get?.("wander")?.pause?.();
+    }
+  }
+  function onKey(event) {
+    if (!event) return false;
+    if (helpOpen) {
+      if (event.altKey && !event.ctrlKey && !event.metaKey) {
+        if (event.code === "Slash" && event.shiftKey || event.key === "?") {
+          closeHelp();
+          return true;
+        }
+        if (!event.shiftKey && (event.code === "Period" || event.key === ".")) {
+          closeHelp(false);
+          ctx?.features?.get?.("palette")?.open?.();
+          return true;
+        }
+      }
+      if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "PageDown" || event.key === "PageUp") {
+        return false;
+      }
+      return true;
+    }
+    if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+      if (!event.shiftKey && event.key === "Enter") {
+        const nodeEl = focusedNodeElement();
+        if (!nodeEl?.dataset?.uid) return false;
+        clearPhrase();
+        notifyWander(event);
+        void ctx?.openMain?.(nodeEl.dataset.uid);
+        return true;
+      }
+      if (!event.shiftKey && ARROW_DIR[event.key]) {
+        if (!ctx?.state?.current) return false;
+        clearPhrase();
+        notifyWander(event);
+        openCenterZonePop(event.key);
+        return true;
+      }
+      return false;
+    }
+    if (event.altKey && !event.ctrlKey && !event.metaKey) {
+      if (event.code === "Slash" && event.shiftKey || event.key === "?") {
+        notifyWander(event);
+        help();
+        return true;
+      }
+      if (!event.shiftKey && (event.code === "Slash" || event.key === "/")) {
+        clearPhrase();
+        notifyWander(event);
+        ctx?.dom?.searchInput?.focus?.();
+        ctx?.dom?.searchInput?.select?.();
+        return true;
+      }
+      if (!event.shiftKey && (event.code === "Period" || event.key === ".")) {
+        clearPhrase();
+        notifyWander(event);
+        ctx?.features?.get?.("palette")?.open?.();
+        return true;
+      }
+      if (!event.shiftKey && (event.code === "Digit0" || event.code === "Numpad0" || event.key === "0")) {
+        notifyWander(event);
+        focusCenter();
+        return true;
+      }
+      if (!event.shiftKey && (event.code === "KeyP" || event.key?.toLowerCase?.() === "p")) {
+        clearPhrase();
+        notifyWander(event);
+        const uid = focusedNodeElement()?.dataset?.uid || ctx?.state?.current;
+        if (uid && ctx?.togglePin) {
+          if (ctx.guard) ctx.guard(() => ctx.togglePin(uid))();
+          else void ctx.togglePin(uid);
+        }
+        return true;
+      }
+      if (!event.shiftKey && (event.code === "KeyB" || event.key?.toLowerCase?.() === "b")) {
+        clearPhrase();
+        notifyWander(event);
+        ctx?.features?.get?.("pins")?.openPicker?.();
+        return true;
+      }
+      if (!event.shiftKey && (event.code === "KeyH" || event.key?.toLowerCase?.() === "h")) {
+        clearPhrase();
+        notifyWander(event);
+        ctx?.features?.get?.("trail")?.toggle?.();
+        return true;
+      }
+      if (!event.shiftKey && (event.code === "KeyM" || event.key?.toLowerCase?.() === "m")) {
+        clearPhrase();
+        notifyWander(event);
+        const nodeEl = focusedNodeElement();
+        if (nodeEl && !nodeEl.classList.contains("compass-node-center") && nodeEl.dataset.uid) {
+          const rect = nodeEl.getBoundingClientRect();
+          ctx?.showMenu?.(nodeEl.dataset.uid, rect.left + 8, rect.bottom);
+        }
+        return true;
+      }
+      if (!event.shiftKey && ARROW_DIR[event.key]) {
+        const direction = ARROW_DIR[event.key];
+        const nodeEl = focusedNodeElement();
+        const atCenterOrNone = !nodeEl || nodeEl.classList.contains("compass-node-center");
+        if ((direction === "left" || direction === "right") && atCenterOrNone) {
+          clearPhrase();
+          return false;
+        }
+        clearPhrase();
+        notifyWander(event);
+        const scene = collectScene();
+        const target = jump(scene.items, direction);
+        if (target) selectKey(scene, target);
+        return true;
+      }
+      return false;
+    }
+    if (event.ctrlKey || event.metaKey || event.altKey) return false;
+    if (ARROW_DIR[event.key] && !event.shiftKey) {
+      clearPhrase();
+      notifyWander(event);
+      const scene = collectScene();
+      const currentKey = keyOfElement(focusedNodeElement(), scene.centerKey);
+      const target = step(scene.items, currentKey, ARROW_DIR[event.key]);
+      if (target) selectKey(scene, target);
+      return true;
+    }
+    if (event.key === "Enter") {
+      if (phrase) clearPhrase();
+      return false;
+    }
+    if (event.key === "Tab") {
+      if (!phrase) return false;
+      notifyWander(event);
+      armPhraseTimer();
+      const scene = collectScene();
+      const matched = matches(scene.items, scene.labels, phrase);
+      const currentKey = keyOfElement(focusedNodeElement(), scene.centerKey);
+      let chosen = currentKey;
+      if (matched.length > 0) {
+        chosen = cycle(matched, currentKey, event.shiftKey ? -1 : 1);
+        selectKey(scene, chosen);
+      }
+      updatePill(matched, chosen);
+      return true;
+    }
+    if (event.key === "Backspace") {
+      notifyWander(event);
+      if (phrase) {
+        const chars = Array.from(phrase);
+        chars.pop();
+        phrase = chars.join("");
+        if (!phrase) {
+          clearPhrase();
+          return true;
+        }
+        armPhraseTimer();
+        const scene = collectScene();
+        const matched = matches(scene.items, scene.labels, phrase);
+        const chosen = matched[0] ?? null;
+        if (chosen) selectKey(scene, chosen);
+        updatePill(matched, chosen);
+        return true;
+      }
+      if (event.shiftKey) ctx?.goForward?.();
+      else ctx?.goBack?.();
+      return true;
+    }
+    if (isPhraseChar(event.key, phrase.length > 0)) {
+      const nextPhrase = phrase + event.key;
+      const scene = collectScene();
+      const matched = matches(scene.items, scene.labels, nextPhrase);
+      if (!phrase && matched.length === 0) return false;
+      notifyWander(event);
+      phrase = nextPhrase;
+      armPhraseTimer();
+      const chosen = matched[0] ?? null;
+      if (chosen) selectKey(scene, chosen);
+      updatePill(matched, chosen);
+      return true;
+    }
+    return false;
+  }
+  function onEscape() {
+    if (helpOpen) {
+      closeHelp();
+      return true;
+    }
+    if (phrase) {
+      clearPhrase();
+      return true;
+    }
+    return false;
+  }
+  function onNavigate() {
+    clearPhrase();
+  }
+  function onClose() {
+    clearPhrase();
+    closeHelp(false);
+  }
+  function commands() {
+    return [
+      { id: "keys-help", title: "Keyboard help", hint: "Alt+?", run: () => help() },
+      { id: "select-center", title: "Select the center", hint: "Alt+0", run: () => focusCenter() }
+    ];
+  }
+  return {
+    name: "keys",
+    help,
+    onKey,
+    onEscape,
+    onNavigate,
+    onClose,
+    commands
+  };
 }
 
 // src/view/features/palette.js
-function createPalette() {
-  return { name: "palette" };
+function escapeSelector2(value) {
+  if (typeof globalThis.CSS?.escape === "function") return globalThis.CSS.escape(value);
+  return String(value).replace(/["\\]/g, "\\$&");
+}
+function createPalette(ctx) {
+  let isOpen = false;
+  let allCommands = [];
+  let shown = [];
+  let activeIndex = 0;
+  let savedUid = null;
+  let savedKey = null;
+  let backdrop = null;
+  let dialog = null;
+  let input = null;
+  let listEl = null;
+  if (ctx?.el && ctx?.button && ctx?.lifecycle && ctx?.dom?.root) {
+    backdrop = ctx.el("div", "compass-palette-backdrop");
+    backdrop.hidden = true;
+    dialog = ctx.el("div", "compass-palette");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-label", "Command palette");
+    input = ctx.el("input", "compass-palette-input");
+    input.type = "text";
+    input.autocomplete = "off";
+    input.placeholder = "Type a command";
+    input.setAttribute("aria-label", "Type a command");
+    listEl = ctx.el("div", "compass-palette-list");
+    listEl.setAttribute("role", "listbox");
+    dialog.append(input, listEl);
+    backdrop.append(dialog);
+    ctx.lifecycle.node(backdrop, ctx.dom.root);
+    ctx.lifecycle.event(backdrop, "pointerdown", (event) => {
+      event.stopPropagation();
+      if (event.target === backdrop) closePalette(true);
+    });
+    ctx.lifecycle.event(backdrop, "click", (event) => {
+      event.stopPropagation();
+    });
+    ctx.lifecycle.event(listEl, "mousedown", (event) => {
+      event.preventDefault();
+    });
+    ctx.lifecycle.event(listEl, "click", (event) => {
+      const row = event.target?.closest?.(".compass-palette-item");
+      if (!row) return;
+      const index = Number(row.dataset.index);
+      if (Number.isInteger(index) && shown[index]) execute(shown[index]);
+    });
+    ctx.lifecycle.event(input, "input", () => {
+      filterCommands(input.value);
+    });
+    ctx.lifecycle.event(dialog, "keydown", (event) => {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!shown.length) return;
+        activeIndex = Math.min(shown.length - 1, activeIndex + 1);
+        markActive();
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!shown.length) return;
+        activeIndex = Math.max(0, activeIndex - 1);
+        markActive();
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        const chosen = shown[activeIndex];
+        if (chosen) execute(chosen);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closePalette(true);
+      }
+    });
+  }
+  function collectCommands() {
+    const raw = ctx?.commands?.() ?? [];
+    const seenIds = /* @__PURE__ */ new Set();
+    const out = [];
+    for (let index = 0; index < raw.length; index += 1) {
+      const cmd = raw[index];
+      if (!cmd || typeof cmd.run !== "function") continue;
+      const title = typeof cmd.title === "string" ? cmd.title.trim() : "";
+      if (!title) continue;
+      const hasId = typeof cmd.id === "string" && cmd.id.trim() !== "";
+      const id = hasId ? cmd.id.trim() : "";
+      if (id) {
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
+      }
+      out.push({
+        key: id || `__cmd_${index}`,
+        id,
+        title,
+        hint: typeof cmd.hint === "string" ? cmd.hint.trim() : "",
+        run: cmd.run
+      });
+    }
+    return out;
+  }
+  function markActive() {
+    if (!listEl) return;
+    const rows = [...listEl.querySelectorAll(".compass-palette-item")];
+    rows.forEach((row, index) => {
+      const active = index === activeIndex;
+      row.classList.toggle("compass-palette-item-active", active);
+      row.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    rows[activeIndex]?.scrollIntoView?.({ block: "nearest" });
+  }
+  function renderList() {
+    if (!listEl) return;
+    listEl.replaceChildren();
+    if (!shown.length) {
+      listEl.append(ctx.el("div", "compass-palette-empty", "No matching commands"));
+      return;
+    }
+    for (let index = 0; index < shown.length; index += 1) {
+      const cmd = shown[index];
+      const active = index === activeIndex;
+      const item = ctx.button(
+        `compass-palette-item${active ? " compass-palette-item-active" : ""}`
+      );
+      item.dataset.index = String(index);
+      if (cmd.id) item.dataset.command = cmd.id;
+      item.setAttribute("role", "option");
+      item.setAttribute("aria-selected", active ? "true" : "false");
+      item.append(ctx.el("span", "compass-palette-title", cmd.title));
+      if (cmd.hint) item.append(ctx.el("span", "compass-palette-hint", cmd.hint));
+      listEl.append(item);
+    }
+  }
+  function filterCommands(rawQuery) {
+    const query = String(rawQuery ?? "").trim();
+    if (!query) {
+      shown = [...allCommands];
+    } else {
+      const byKey = new Map(allCommands.map((cmd) => [cmd.key, cmd]));
+      const adapted = allCommands.map((cmd) => ({ uid: cmd.key, title: cmd.title }));
+      const ranked = rankTitles(adapted, query, Math.max(50, allCommands.length));
+      shown = ranked.map((entry) => byKey.get(entry.uid)).filter(Boolean);
+    }
+    activeIndex = shown.length ? 0 : -1;
+    renderList();
+  }
+  function restoreNodeFocus() {
+    const uid = savedUid;
+    const key = savedKey;
+    savedUid = null;
+    savedKey = null;
+    if (!ctx?.state?.isOpen) return;
+    const world = ctx?.dom?.world;
+    let target = null;
+    if (key && world) {
+      target = world.querySelector(`.compass-node[data-key="${escapeSelector2(key)}"]`);
+    }
+    if (!target && uid) {
+      target = ctx?.state?.nodeEls?.get?.(uid) ?? world?.querySelector?.(`.compass-node[data-uid="${escapeSelector2(uid)}"]`) ?? null;
+    }
+    if (target?.isConnected) target.focus({ preventScroll: true });
+  }
+  function closePalette(restore = true) {
+    if (!isOpen) return;
+    isOpen = false;
+    if (backdrop) backdrop.hidden = true;
+    if (listEl) listEl.replaceChildren();
+    shown = [];
+    allCommands = [];
+    activeIndex = 0;
+    if (restore) restoreNodeFocus();
+    else {
+      savedUid = null;
+      savedKey = null;
+    }
+  }
+  function execute(cmd) {
+    closePalette(true);
+    if (ctx?.guard) ctx.guard(cmd.run)();
+    else cmd.run();
+  }
+  function open() {
+    if (!isOpen) {
+      const active = globalThis.document?.activeElement;
+      const nodeEl = active?.closest?.(".compass-node");
+      if (nodeEl && ctx?.dom?.root?.contains?.(nodeEl)) {
+        savedUid = nodeEl.dataset.uid || null;
+        savedKey = nodeEl.dataset.key || null;
+      } else {
+        savedUid = null;
+        savedKey = null;
+      }
+    }
+    ctx?.hideFloating?.();
+    allCommands = collectCommands();
+    isOpen = true;
+    if (input) input.value = "";
+    filterCommands("");
+    if (backdrop) backdrop.hidden = false;
+    input?.focus({ preventScroll: true });
+  }
+  function onEscape() {
+    if (!isOpen) return false;
+    closePalette(true);
+    return true;
+  }
+  function onClose() {
+    closePalette(false);
+  }
+  function stageMenu() {
+    return [
+      { title: "Command palette…", run: () => open() },
+      { title: "Keyboard help", run: () => ctx?.features?.get?.("keys")?.help?.() }
+    ];
+  }
+  return {
+    name: "palette",
+    open,
+    onEscape,
+    onClose,
+    stageMenu
+  };
+}
+
+// src/model/wander.js
+var MIN_SECONDS = 3;
+var MAX_SECONDS = 15;
+var DEFAULT_SECONDS = 6;
+function clampSeconds(value) {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return DEFAULT_SECONDS;
+    return Math.min(MAX_SECONDS, Math.max(MIN_SECONDS, Math.trunc(value)));
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return DEFAULT_SECONDS;
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) return DEFAULT_SECONDS;
+    return Math.min(MAX_SECONDS, Math.max(MIN_SECONDS, Math.trunc(parsed)));
+  }
+  return DEFAULT_SECONDS;
+}
+function pickNext(candidates, recent, random = Math.random) {
+  if (!candidates || typeof candidates[Symbol.iterator] !== "function") return null;
+  const visited = /* @__PURE__ */ new Set();
+  if (recent && typeof recent[Symbol.iterator] !== "function") {
+  } else if (recent) {
+    for (const uid of recent) {
+      if (typeof uid === "string" && uid) visited.add(uid);
+    }
+  }
+  const unvisited = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const uid of candidates) {
+    if (typeof uid !== "string" || !uid || seen.has(uid) || visited.has(uid)) continue;
+    seen.add(uid);
+    unvisited.push(uid);
+  }
+  if (!unvisited.length) return null;
+  const fn = typeof random === "function" ? random : Math.random;
+  const raw = Number(fn());
+  const unit = Number.isFinite(raw) ? Math.min(0.999999999999, Math.max(0, raw)) : 0;
+  return unvisited[Math.floor(unit * unvisited.length)];
+}
+function reduce(state, event) {
+  const mode = state?.mode === "playing" || state?.mode === "paused" ? state.mode : "idle";
+  const reason = typeof state?.reason === "string" && state.reason ? state.reason : null;
+  const type = typeof event === "string" ? event : event?.type;
+  if (type === "stop") return { mode: "idle", reason: null };
+  if (mode === "idle") {
+    if (type === "start") return { mode: "playing", reason: null };
+    return { mode: "idle", reason: null };
+  }
+  if (mode === "playing") {
+    if (type === "pause" || type === "manual") return { mode: "paused", reason: null };
+    if (type === "exhausted") return { mode: "paused", reason: "exhausted" };
+    return { mode: "playing", reason: null };
+  }
+  if (type === "resume" || type === "start") return { mode: "playing", reason: null };
+  if (type === "exhausted") return { mode: "paused", reason: "exhausted" };
+  return { mode: "paused", reason };
 }
 
 // src/view/features/wander.js
-function createWander() {
-  return { name: "wander" };
+var HIGHLIGHT_MS = 900;
+var EXHAUSTED_STATUS = "Nowhere new from here. Pick a direction or press Play.";
+function escapeSelector3(value) {
+  if (typeof globalThis.CSS?.escape === "function") return globalThis.CSS.escape(value);
+  return String(value).replace(/["\\]/g, "\\$&");
+}
+function createWander(ctx) {
+  let state = { mode: "idle", reason: null };
+  let pace = clampSeconds(ctx?.state?.settings?.wanderSeconds);
+  let wasZen = false;
+  let recent = [];
+  let stepTimer = null;
+  let moveTimer = null;
+  let wanderNavigating = false;
+  let savingPace = 0;
+  let strip = null;
+  let noteEl = null;
+  let toggleBtn = null;
+  let slider = null;
+  let paceValue = null;
+  let stopBtn = null;
+  if (ctx?.el && ctx?.button && ctx?.lifecycle && ctx?.dom?.stage && ctx?.dom?.root) {
+    strip = ctx.el("div", "compass-wander-strip");
+    strip.hidden = true;
+    strip.dataset.mode = "idle";
+    noteEl = ctx.el("div", "compass-wander-note", EXHAUSTED_STATUS);
+    noteEl.hidden = true;
+    toggleBtn = ctx.button("compass-wander-toggle", "Pause", "Pause wandering");
+    const paceWrap = ctx.el("label", "compass-wander-pace-wrap");
+    const paceCaption = ctx.el("span", "compass-wander-pace-caption", "Pace");
+    slider = ctx.el("input", "compass-wander-pace");
+    slider.type = "range";
+    slider.min = "3";
+    slider.max = "15";
+    slider.step = "1";
+    slider.value = String(pace);
+    slider.setAttribute("aria-label", "Wander pace in seconds");
+    paceValue = ctx.el("span", "compass-wander-pace-value", `${pace}s`);
+    paceWrap.append(paceCaption, slider, paceValue);
+    stopBtn = ctx.button("compass-wander-stop", "×", "Stop wandering");
+    strip.append(noteEl, toggleBtn, paceWrap, stopBtn);
+    ctx.lifecycle.node(strip, ctx.dom.stage);
+    for (const type of ["pointerdown", "click", "dblclick", "contextmenu", "wheel"]) {
+      ctx.lifecycle.event(strip, type, (event) => {
+        event.stopPropagation();
+      });
+    }
+    ctx.lifecycle.event(toggleBtn, "click", () => {
+      if (state.mode === "playing") pauseByButton();
+      else if (state.mode === "paused") resumeWalk();
+    });
+    ctx.lifecycle.event(stopBtn, "click", () => {
+      stop();
+    });
+    ctx.lifecycle.event(slider, "input", () => {
+      pace = clampSeconds(slider.value);
+      syncPaceUi();
+      if (state.mode === "playing" && moveTimer == null) {
+        scheduleNextStep();
+      }
+      persistPace(pace);
+    });
+    ctx.lifecycle.event(ctx.dom.root, "pointerdown", (event) => {
+      if (state.mode !== "playing") return;
+      if (strip && strip.contains(event.target)) return;
+      pauseManual();
+    }, true);
+    ctx.lifecycle.event(ctx.dom.root, "wheel", (event) => {
+      if (state.mode !== "playing") return;
+      if (strip && strip.contains(event.target)) return;
+      pauseManual();
+    }, { capture: true, passive: true });
+    ctx.lifecycle.event(ctx.dom.root, "keydown", (event) => {
+      if (state.mode !== "playing") return;
+      if (strip && strip.contains(event.target)) return;
+      pauseManual();
+    }, true);
+  }
+  function syncPaceUi() {
+    if (slider) slider.value = String(pace);
+    if (paceValue) paceValue.textContent = `${pace}s`;
+  }
+  function persistPace(seconds) {
+    if (typeof ctx?.saveSetting !== "function") return;
+    savingPace += 1;
+    Promise.resolve(ctx.saveSetting(SETTING_IDS.wanderSeconds, String(seconds))).catch((error) => console.error("[compass] wander", error)).finally(() => {
+      savingPace -= 1;
+    });
+  }
+  function clearHighlight() {
+    const world = ctx?.dom?.world;
+    if (!world?.querySelectorAll) return;
+    for (const el2 of world.querySelectorAll(".compass-wander-next")) {
+      el2.classList.remove("compass-wander-next");
+    }
+  }
+  function clearTimers() {
+    if (ctx?.cancel) {
+      stepTimer = ctx.cancel(stepTimer);
+      moveTimer = ctx.cancel(moveTimer);
+    } else {
+      stepTimer = null;
+      moveTimer = null;
+    }
+    clearHighlight();
+  }
+  function syncStripUi() {
+    const active = state.mode !== "idle";
+    ctx?.dom?.root?.classList?.toggle?.("compass-wandering", active);
+    if (!strip) return;
+    strip.hidden = !active;
+    strip.dataset.mode = state.mode;
+    if (toggleBtn) {
+      const playing = state.mode === "playing";
+      const label = playing ? "Pause wandering" : "Resume wandering";
+      toggleBtn.textContent = playing ? "Pause" : "Play";
+      toggleBtn.title = label;
+      toggleBtn.setAttribute("aria-label", label);
+    }
+    if (noteEl) {
+      noteEl.hidden = state.reason !== "exhausted";
+    }
+    syncPaceUi();
+  }
+  function elementForItem(item) {
+    const world = ctx?.dom?.world;
+    if (typeof item?.key === "string" && item.key && world) {
+      const byKey = world.querySelector(`.compass-node[data-key="${escapeSelector3(item.key)}"]`);
+      if (byKey) return byKey;
+    }
+    if (typeof item?.uid === "string" && item.uid) {
+      const mapped = ctx?.state?.nodeEls?.get?.(item.uid);
+      if (mapped) return mapped;
+      if (world) {
+        const byUid = world.querySelector(`.compass-node[data-uid="${escapeSelector3(item.uid)}"]`);
+        if (byUid) return byUid;
+      }
+    }
+    return null;
+  }
+  function currentCandidates() {
+    const geometry = ctx?.state?.geometry;
+    const hood = ctx?.state?.hood;
+    if (!geometry?.items) return { uids: [], elements: /* @__PURE__ */ new Map() };
+    const nodeByUid = /* @__PURE__ */ new Map();
+    for (const node of hood?.nodes ?? []) {
+      if (node?.uid) nodeByUid.set(node.uid, node);
+    }
+    for (const node of geometry.nodes ?? []) {
+      if (node?.uid && !nodeByUid.has(node.uid)) nodeByUid.set(node.uid, node);
+    }
+    const uids = [];
+    const elements = /* @__PURE__ */ new Map();
+    const seen = /* @__PURE__ */ new Set();
+    for (const item of geometry.items) {
+      const uid = item?.uid;
+      if (typeof uid !== "string" || !uid || uid === ctx?.state?.current || seen.has(uid)) continue;
+      const node = nodeByUid.get(uid);
+      if (!node) continue;
+      if (node.kind !== "page" && node.kind !== "block") continue;
+      if (node.kind === "group" || node.style === "board" || node.style === "card") continue;
+      const el2 = elementForItem(item);
+      if (!el2 || el2.classList.contains("compass-fade")) continue;
+      seen.add(uid);
+      uids.push(uid);
+      elements.set(uid, el2);
+    }
+    return { uids, elements };
+  }
+  function scheduleNextStep() {
+    clearTimers();
+    if (state.mode !== "playing" || !ctx?.later) return;
+    stepTimer = ctx.later(() => {
+      stepTimer = null;
+      if (state.mode !== "playing" || !ctx?.state?.isOpen) return;
+      const { uids, elements } = currentCandidates();
+      const targetUid = pickNext(uids, recent);
+      if (!targetUid) {
+        state = reduce(state, "exhausted");
+        syncStripUi();
+        ctx?.setStatus?.(EXHAUSTED_STATUS);
+        return;
+      }
+      const targetEl = elements.get(targetUid);
+      targetEl?.classList.add("compass-wander-next");
+      moveTimer = ctx.later(() => {
+        moveTimer = null;
+        clearHighlight();
+        if (state.mode !== "playing" || !ctx?.state?.isOpen) return;
+        if (!recent.includes(targetUid)) recent.push(targetUid);
+        wanderNavigating = true;
+        try {
+          ctx?.focusUid?.(targetUid);
+        } finally {
+          wanderNavigating = false;
+        }
+        if (state.mode === "playing") scheduleNextStep();
+      }, HIGHLIGHT_MS);
+    }, pace * 1e3);
+  }
+  function isActive() {
+    return state.mode !== "idle";
+  }
+  function pauseByButton() {
+    if (state.mode !== "playing") return;
+    clearTimers();
+    state = reduce(state, "pause");
+    syncStripUi();
+  }
+  function pauseManual() {
+    if (state.mode !== "playing") return;
+    clearTimers();
+    state = reduce(state, "manual");
+    syncStripUi();
+  }
+  function resumeWalk() {
+    if (state.mode !== "paused") return;
+    const { uids } = currentCandidates();
+    if (state.reason === "exhausted" || pickNext(uids, recent) == null) {
+      recent = ctx?.state?.current ? [ctx.state.current] : [];
+    }
+    if (state.reason === "exhausted") ctx?.setStatus?.("");
+    state = reduce(state, "resume");
+    syncStripUi();
+    scheduleNextStep();
+  }
+  function start() {
+    const firstActivation = !isActive();
+    if (firstActivation) {
+      const zenFeature = ctx?.features?.get?.("zen");
+      wasZen = Boolean(zenFeature?.isZen?.() ?? ctx?.dom?.root?.classList?.contains?.("compass-zen"));
+      if (zenFeature?.setZen) zenFeature.setZen(true);
+      else ctx?.dom?.root?.classList?.add?.("compass-zen");
+      recent = ctx?.state?.current ? [ctx.state.current] : [];
+      pace = clampSeconds(ctx?.state?.settings?.wanderSeconds ?? pace);
+    } else if (state.reason === "exhausted") {
+      recent = ctx?.state?.current ? [ctx.state.current] : [];
+      ctx?.setStatus?.("");
+    }
+    state = reduce(state, "start");
+    syncStripUi();
+    scheduleNextStep();
+  }
+  function stop({ closing = false } = {}) {
+    if (!isActive()) return;
+    clearTimers();
+    if (state.reason === "exhausted") ctx?.setStatus?.("");
+    state = reduce(state, "stop");
+    recent = [];
+    syncStripUi();
+    if (!closing) {
+      const zenFeature = ctx?.features?.get?.("zen");
+      if (zenFeature?.setZen) zenFeature.setZen(wasZen);
+      else ctx?.dom?.root?.classList?.toggle?.("compass-zen", wasZen);
+    }
+    wasZen = false;
+  }
+  function onSettings(settings) {
+    if (!settings || savingPace > 0) return;
+    pace = clampSeconds(settings.wanderSeconds);
+    syncPaceUi();
+  }
+  function onNavigate({ uid } = {}) {
+    if (!isActive()) return;
+    if (uid && !recent.includes(uid)) recent.push(uid);
+    if (!wanderNavigating && state.mode === "playing") {
+      pauseManual();
+    }
+  }
+  function onWheel(event) {
+    if (state.mode === "playing" && (!strip || !strip.contains(event?.target))) {
+      pauseManual();
+    }
+    return false;
+  }
+  function onKey(event) {
+    if (state.mode === "playing" && (!strip || !strip.contains(event?.target))) {
+      pauseManual();
+    }
+    return false;
+  }
+  function onEscape() {
+    if (!isActive()) return false;
+    stop();
+    return true;
+  }
+  function onClose() {
+    stop({ closing: true });
+  }
+  function commands() {
+    return [
+      {
+        id: "wander",
+        title: isActive() ? "Stop wandering" : "Wander",
+        hint: "",
+        run: () => isActive() ? stop() : start()
+      }
+    ];
+  }
+  function stageMenu() {
+    return [
+      { title: "Wander", run: () => start() }
+    ];
+  }
+  return {
+    name: "wander",
+    start,
+    stop: () => stop(),
+    pause: pauseManual,
+    isActive,
+    onSettings,
+    onNavigate,
+    onWheel,
+    onKey,
+    onEscape,
+    onClose,
+    commands,
+    stageMenu
+  };
 }
 
 // src/view/features/zen.js
-function createZen() {
-  return { name: "zen" };
+function createZen(ctx) {
+  let zen = false;
+  let full = false;
+  let zenBtn = null;
+  let fullBtn = null;
+  if (ctx?.el && ctx?.button && ctx?.lifecycle && ctx?.dom?.stage) {
+    const cluster = ctx.el("div", "compass-corner");
+    const fitBtn = ctx.button("compass-corner-btn compass-corner-fit", "Fit", "Fit to screen");
+    zenBtn = ctx.button("compass-corner-btn compass-corner-zen", "Zen", "Toggle Zen mode");
+    zenBtn.setAttribute("aria-pressed", "false");
+    fullBtn = ctx.button("compass-corner-btn compass-corner-full", "Full", "Toggle fullscreen");
+    fullBtn.setAttribute("aria-pressed", "false");
+    cluster.append(fitBtn, zenBtn, fullBtn);
+    ctx.lifecycle.node(cluster, ctx.dom.stage);
+    ctx.lifecycle.event(cluster, "pointerdown", (event) => {
+      event.stopPropagation();
+    });
+    ctx.lifecycle.event(cluster, "click", (event) => {
+      event.stopPropagation();
+    });
+    ctx.lifecycle.event(cluster, "dblclick", (event) => {
+      event.stopPropagation();
+    });
+    ctx.lifecycle.event(fitBtn, "click", () => {
+      ctx?.fit?.(true);
+    });
+    ctx.lifecycle.event(zenBtn, "click", () => {
+      toggleZen();
+    });
+    ctx.lifecycle.event(fullBtn, "click", () => {
+      toggleFull();
+    });
+  }
+  function isZen() {
+    return zen;
+  }
+  function setZen(on) {
+    zen = Boolean(on);
+    ctx?.dom?.root?.classList?.toggle?.("compass-zen", zen);
+    zenBtn?.setAttribute("aria-pressed", zen ? "true" : "false");
+    if (zen) {
+      const active = globalThis.document?.activeElement;
+      if (active && (ctx?.dom?.bar?.contains?.(active) || ctx?.dom?.pinRow?.contains?.(active))) {
+        active.blur?.();
+      }
+    }
+  }
+  function toggleZen() {
+    setZen(!zen);
+  }
+  function setFull(on) {
+    full = Boolean(on);
+    ctx?.dom?.root?.classList?.toggle?.("compass-full", full);
+    fullBtn?.setAttribute("aria-pressed", full ? "true" : "false");
+  }
+  function toggleFull() {
+    setFull(!full);
+  }
+  function onEscape() {
+    if (zen) {
+      setZen(false);
+      return true;
+    }
+    if (full) {
+      setFull(false);
+      return true;
+    }
+    return false;
+  }
+  function onClose() {
+    setZen(false);
+    setFull(false);
+  }
+  function commands() {
+    return [
+      { id: "zen", title: "Toggle Zen mode", hint: "", run: () => toggleZen() },
+      { id: "fullscreen", title: "Toggle fullscreen", hint: "", run: () => toggleFull() }
+    ];
+  }
+  function stageMenu() {
+    return [
+      { title: "Toggle Zen mode", run: () => toggleZen() },
+      { title: "Toggle fullscreen", run: () => toggleFull() }
+    ];
+  }
+  return {
+    name: "zen",
+    isZen,
+    setZen,
+    toggleZen,
+    toggleFull,
+    onEscape,
+    onClose,
+    commands,
+    stageMenu
+  };
+}
+
+// src/model/outline-export.js
+var INDENT = "    ";
+var SIDES = Object.freeze([
+  Object.freeze(["north", "Parents"]),
+  Object.freeze(["south", "Children"]),
+  Object.freeze(["west", "Friends"]),
+  Object.freeze(["east", "Challengers"]),
+  Object.freeze(["siblings", "Siblings"])
+]);
+function resolveOptions(options) {
+  if (Array.isArray(options)) {
+    return { labels: "visible", hidden: /* @__PURE__ */ new Set(), warnings: options };
+  }
+  const raw = options && typeof options === "object" ? options : {};
+  const labels = raw.labels === "none" || raw.labels === "all" ? raw.labels : "visible";
+  const hidden = raw.hidden instanceof Set ? raw.hidden : new Set(Array.isArray(raw.hidden) ? raw.hidden : []);
+  const warnings = Array.isArray(raw.warnings) ? raw.warnings : null;
+  return { labels, hidden, warnings };
+}
+function createTracker() {
+  return {
+    unlinked: /* @__PURE__ */ new Set(),
+    hidden: /* @__PURE__ */ new Set()
+  };
+}
+function flushWarnings(tracker, target) {
+  if (!Array.isArray(target)) return;
+  const unlinkedCount = tracker.unlinked.size;
+  if (unlinkedCount > 0) {
+    target.push(
+      unlinkedCount === 1 ? "1 title could not be written as a link." : `${unlinkedCount} titles could not be written as a link.`
+    );
+  }
+  const hiddenCount = tracker.hidden.size;
+  if (hiddenCount > 0) {
+    target.push(
+      hiddenCount === 1 ? "1 hidden node was left out." : `${hiddenCount} hidden nodes were left out.`
+    );
+  }
+}
+function groupText(node) {
+  const alias = typeof node?.alias === "string" ? node.alias.trim() : "";
+  const title = typeof node?.title === "string" ? node.title.trim() : "";
+  const fallback = typeof node?.uid === "string" ? node.uid.trim() : "";
+  const base = alias || title || fallback || "Group";
+  const count2 = Number.isFinite(node?.count) ? node.count : Array.isArray(node?.members) ? node.members.length : Array.isArray(node?.nodes) ? node.nodes.length : Array.isArray(node?.uids) ? node.uids.length : Array.isArray(node?.items) ? node.items.length : null;
+  if (count2 == null) return base;
+  if (base.includes(`(${count2})`) || new RegExp(`(?:^|\\D)${count2}(?:\\D|$)`).test(base)) {
+    return base;
+  }
+  return `${title || base} (${count2})`;
+}
+function formatNodeRef(node, tracker) {
+  if (!node || typeof node !== "object") return "";
+  if (node.kind === "group") return groupText(node);
+  if (node.kind === "block") {
+    const uid = typeof node.uid === "string" ? node.uid.trim() : "";
+    if (uid) return `((${uid}))`;
+    return typeof node.title === "string" ? node.title.trim() : "";
+  }
+  const title = typeof node.title === "string" && node.title ? node.title : typeof node.uid === "string" ? node.uid : "";
+  if (!title) return "";
+  if (title.includes("]]")) {
+    tracker.unlinked.add(typeof node.uid === "string" && node.uid ? `uid:${node.uid}` : `title:${title}`);
+    return title;
+  }
+  return `[[${title}]]`;
+}
+function untypedEvidenceLabel(node) {
+  const kinds = [];
+  const add = (value) => {
+    if (value && !kinds.includes(value)) kinds.push(value);
+  };
+  if (Array.isArray(node?.evidence)) {
+    for (const item of node.evidence) {
+      if (!item || typeof item !== "object") continue;
+      if (item.kind === "typed") {
+        const parts = [item.attribute, ...Array.isArray(item.labels) ? item.labels : []].filter(Boolean);
+        if (parts.length) add(parts.join(" · "));
+      } else if (item.kind === "structural") {
+        if (item.note === "day") add("day");
+        else if (item.note === "namespace") add("namespace");
+        else if (typeof item.note === "string" && item.note.trim()) add(item.note.trim());
+      } else if (item.kind === "link" || item.kind === "mention" || item.kind === "sibling" || item.kind === "namespace" || item.kind === "day") {
+        add(item.kind);
+      }
+    }
+  }
+  if (!kinds.length) {
+    const style = typeof node?.style === "string" ? node.style.trim() : "";
+    if (style === "link" || style === "mention" || style === "sibling" || style === "namespace" || style === "day") {
+      add(style);
+    } else if (style === "structural") {
+      add(node?.role === "previous" || node?.role === "next" ? "day" : "namespace");
+    } else if (node?.role === "sibling") {
+      add("sibling");
+    }
+  }
+  return kinds.join(" | ");
+}
+function relationLabel(node, labelsMode) {
+  if (labelsMode === "none") return "";
+  const explicit = typeof node?.label === "string" ? node.label.trim() : "";
+  if (explicit) return explicit;
+  if (labelsMode !== "all" || node?.kind === "group") return "";
+  return untypedEvidenceLabel(node);
+}
+function formatBulletText(node, labelsMode, tracker) {
+  const ref = formatNodeRef(node, tracker);
+  if (!ref) return "";
+  const rel = relationLabel(node, labelsMode);
+  return rel ? `${ref} — ${rel}` : ref;
+}
+function lineAt(depth, text) {
+  return `${INDENT.repeat(depth)}- ${text}`;
+}
+function compassOutline(hood, options = {}) {
+  const { labels, hidden, warnings } = resolveOptions(options);
+  const center = hood?.center;
+  if (!center || typeof center !== "object") return "";
+  const tracker = createTracker();
+  const topText = formatNodeRef(center, tracker);
+  if (!topText) return "";
+  const lines = [lineAt(0, topText)];
+  const nodes = Array.isArray(hood?.nodes) ? hood.nodes : [];
+  for (const [zone, heading] of SIDES) {
+    const section = [];
+    for (const node of nodes) {
+      if (!node || node.zone !== zone) continue;
+      if (typeof node.uid === "string" && node.uid && hidden.has(node.uid)) {
+        tracker.hidden.add(node.uid);
+        continue;
+      }
+      const bullet = formatBulletText(node, labels, tracker);
+      if (bullet) section.push(lineAt(2, bullet));
+    }
+    if (section.length > 0) {
+      lines.push(lineAt(1, heading), ...section);
+    }
+  }
+  flushWarnings(tracker, warnings);
+  return lines.join("\n");
+}
+function treeOutline2(outline, options = {}) {
+  const { labels, hidden, warnings } = resolveOptions(options);
+  const root = outline?.root;
+  if (!root || typeof root !== "object") return "";
+  const tracker = createTracker();
+  const rootText = formatNodeRef(root, tracker);
+  if (!rootText) return "";
+  const lines = [lineAt(0, rootText)];
+  function writeItem(item, depth, out) {
+    if (!item || typeof item !== "object") return;
+    if (typeof item.uid === "string" && item.uid && hidden.has(item.uid)) {
+      tracker.hidden.add(item.uid);
+      return;
+    }
+    const repeat = item.status === "repeat" || item.repeat === true;
+    const base = formatBulletText(item, labels, tracker);
+    if (!base) return;
+    out.push(lineAt(depth, repeat ? `${base} ↺` : base));
+    if (repeat || !Array.isArray(item.children)) return;
+    for (const child of item.children) {
+      writeItem(child, depth + 1, out);
+    }
+  }
+  const parents = Array.isArray(outline?.parents) ? outline.parents : [];
+  if (parents.length > 0) {
+    const parentLines = [];
+    for (const parent of parents) {
+      writeItem(parent, 2, parentLines);
+    }
+    if (parentLines.length > 0) {
+      lines.push(lineAt(1, "Parents"), ...parentLines);
+    }
+  }
+  const rootRepeat = root.status === "repeat" || root.repeat === true;
+  if (!rootRepeat && Array.isArray(root.children)) {
+    for (const child of root.children) {
+      writeItem(child, 1, lines);
+    }
+  }
+  flushWarnings(tracker, warnings);
+  return lines.join("\n");
+}
+function lookupNode(nodesByUid, uid) {
+  if (!uid || !nodesByUid) return null;
+  if (nodesByUid instanceof Map) return nodesByUid.get(uid) ?? null;
+  if (typeof nodesByUid === "object") return nodesByUid[uid] ?? null;
+  return null;
+}
+function resolveFacetEntry(entry, nodesByUid) {
+  if (typeof entry === "string") {
+    const trimmed = entry.trim();
+    if (!trimmed) return null;
+    return lookupNode(nodesByUid, trimmed) ?? { uid: trimmed, kind: "page", title: trimmed };
+  }
+  if (!entry || typeof entry !== "object") return null;
+  const uid = typeof entry.uid === "string" ? entry.uid : "";
+  const stored = uid ? lookupNode(nodesByUid, uid) : null;
+  return stored ? { ...entry, ...stored } : entry;
+}
+function facetsOutline(classified, nodesByUid, center, options = {}) {
+  const { labels, hidden, warnings } = resolveOptions(options);
+  const effectiveCenter = center ?? classified?.center;
+  if (!classified || typeof classified !== "object" || !effectiveCenter || typeof effectiveCenter !== "object") {
+    return "";
+  }
+  const tracker = createTracker();
+  const topText = formatNodeRef(effectiveCenter, tracker);
+  if (!topText) return "";
+  const lines = [lineAt(0, topText)];
+  function writeBucket(heading, rawEntries) {
+    if (!heading || !Array.isArray(rawEntries) || rawEntries.length === 0) return;
+    const section = [];
+    for (const raw of rawEntries) {
+      const node = resolveFacetEntry(raw, nodesByUid);
+      if (!node) continue;
+      if (typeof node.uid === "string" && node.uid && hidden.has(node.uid)) {
+        tracker.hidden.add(node.uid);
+        continue;
+      }
+      const bullet = formatBulletText(node, labels, tracker);
+      if (bullet) section.push(lineAt(2, bullet));
+    }
+    if (section.length > 0) {
+      lines.push(lineAt(1, heading), ...section);
+    }
+  }
+  const categories = Array.isArray(classified.categories) ? classified.categories : Array.isArray(classified.buckets) ? classified.buckets : Array.isArray(classified.columns) ? classified.columns : [];
+  for (const cat of categories) {
+    if (!cat || typeof cat !== "object") continue;
+    const heading = String(cat.label ?? cat.name ?? cat.title ?? cat.id ?? "").trim();
+    const entries = cat.uids ?? cat.nodes ?? cat.items ?? cat.members ?? [];
+    writeBucket(heading, entries);
+  }
+  writeBucket("Unassigned", classified.unassigned);
+  writeBucket("Conflicting", classified.conflicting ?? classified.conflicts);
+  flushWarnings(tracker, warnings);
+  return lines.join("\n");
+}
+function breadcrumbs(entries, options = {}) {
+  const { warnings } = resolveOptions(options);
+  if (!Array.isArray(entries) || entries.length === 0) return "";
+  const valid = entries.filter((item) => item && typeof item === "object");
+  if (valid.length === 0) return "";
+  const hasTimestamps = valid.some((item) => Number.isFinite(item.at));
+  const ordered = hasTimestamps ? [...valid].sort((a, b) => {
+    const atA = Number.isFinite(a.at) ? a.at : -Infinity;
+    const atB = Number.isFinite(b.at) ? b.at : -Infinity;
+    return atB - atA;
+  }) : valid;
+  const tracker = createTracker();
+  const lines = [];
+  for (const entry of ordered) {
+    const ref = formatNodeRef(entry, tracker);
+    if (ref) lines.push(lineAt(0, ref));
+  }
+  flushWarnings(tracker, warnings);
+  return lines.join("\n");
+}
+
+// src/model/paint.js
+function clamp2(value, low, high) {
+  return Math.max(low, Math.min(high, value));
+}
+function fmt(value) {
+  const rounded = Math.round(value * 100) / 100;
+  return Object.is(rounded, -0) ? "0" : String(rounded);
+}
+function resolveDash(dashed, scale) {
+  if (!dashed || dashed === "none" || dashed === "solid") return [];
+  if (Array.isArray(dashed)) {
+    return dashed.map((item) => Number(item) * scale).filter((num) => Number.isFinite(num) && num > 0).map((num) => Math.max(0.5, Math.round(num * 100) / 100));
+  }
+  if (typeof dashed === "string") {
+    const trimmed = dashed.trim().toLowerCase();
+    if (!trimmed || trimmed === "none" || trimmed === "solid") return [];
+    if (trimmed === "dotted") return [fmtNum(2 * scale), fmtNum(3 * scale)];
+    if (trimmed === "dashed") return [fmtNum(5 * scale), fmtNum(4 * scale)];
+    const matches2 = trimmed.match(/[-+]?(?:\d+\.?\d*|\.\d+)/g);
+    if (matches2) {
+      return matches2.map((raw) => Number(raw) * scale).filter((num) => Number.isFinite(num) && num > 0).map((num) => Math.max(0.5, fmtNum(num)));
+    }
+    return [];
+  }
+  if (dashed === true) return [fmtNum(5 * scale), fmtNum(4 * scale)];
+  return [];
+}
+function fmtNum(value) {
+  return Math.round(value * 100) / 100;
+}
+function scaleFont(font, scale, bold = false) {
+  const raw = typeof font === "string" && font.trim() ? font.trim() : "13px sans-serif";
+  const scaled = raw.replace(
+    /(\d+(?:\.\d+)?)px(\s*\/\s*(\d+(?:\.\d+)?)px)?/i,
+    (_all, size, slashPart, lineHeight) => {
+      const nextSize = fmt(Math.max(1, Number(size) * scale));
+      if (!slashPart || !lineHeight) return `${nextSize}px`;
+      const nextLh = fmt(Math.max(1, Number(lineHeight) * scale));
+      return `${nextSize}px/${nextLh}px`;
+    }
+  );
+  if (bold && !/\b(?:bold|[6-9]00)\b/i.test(scaled)) {
+    return `600 ${scaled}`;
+  }
+  return scaled;
+}
+var PATH_TOKEN = /[MmLlHhVvCcSsQqTtAaZz]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g;
+var CMD_ARITY = Object.freeze({
+  M: 2,
+  L: 2,
+  H: 1,
+  V: 1,
+  C: 6,
+  S: 4,
+  Q: 4,
+  T: 2,
+  A: 7,
+  Z: 0
+});
+function transformPath(d, originX, originY, scale) {
+  if (typeof d !== "string" || !d.trim()) return null;
+  const tokens = d.match(PATH_TOKEN);
+  if (!tokens || !tokens.length) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let hasPoint = false;
+  const mark = (wx, wy) => {
+    if (!Number.isFinite(wx) || !Number.isFinite(wy)) return;
+    hasPoint = true;
+    if (wx < minX) minX = wx;
+    if (wx > maxX) maxX = wx;
+    if (wy < minY) minY = wy;
+    if (wy > maxY) maxY = wy;
+  };
+  const pxX = (wx) => fmt((wx - originX) * scale);
+  const pxY = (wy) => fmt((wy - originY) * scale);
+  let cx = 0;
+  let cy = 0;
+  let sx = 0;
+  let sy = 0;
+  let cmd = "";
+  const parts = [];
+  let idx = 0;
+  while (idx < tokens.length) {
+    const tok = tokens[idx];
+    if (/^[A-Za-z]$/.test(tok)) {
+      cmd = tok;
+      idx += 1;
+      if (cmd.toUpperCase() === "Z") {
+        cx = sx;
+        cy = sy;
+        parts.push("Z");
+        cmd = "";
+      }
+      continue;
+    }
+    if (!cmd) {
+      idx += 1;
+      continue;
+    }
+    const upper = cmd.toUpperCase();
+    const arity = CMD_ARITY[upper];
+    if (!arity || idx + arity > tokens.length) break;
+    const nums = [];
+    let validNums = true;
+    for (let k = 0; k < arity; k += 1) {
+      const val = Number(tokens[idx + k]);
+      if (!Number.isFinite(val)) {
+        validNums = false;
+        break;
+      }
+      nums.push(val);
+    }
+    if (!validNums) break;
+    idx += arity;
+    const rel = cmd !== upper;
+    if (upper === "M") {
+      const wx = rel ? cx + nums[0] : nums[0];
+      const wy = rel ? cy + nums[1] : nums[1];
+      mark(wx, wy);
+      cx = wx;
+      cy = wy;
+      sx = wx;
+      sy = wy;
+      parts.push(`M${pxX(wx)},${pxY(wy)}`);
+      cmd = rel ? "l" : "L";
+    } else if (upper === "L") {
+      const wx = rel ? cx + nums[0] : nums[0];
+      const wy = rel ? cy + nums[1] : nums[1];
+      mark(wx, wy);
+      cx = wx;
+      cy = wy;
+      parts.push(`L${pxX(wx)},${pxY(wy)}`);
+    } else if (upper === "H") {
+      const wx = rel ? cx + nums[0] : nums[0];
+      mark(wx, cy);
+      cx = wx;
+      parts.push(`L${pxX(wx)},${pxY(cy)}`);
+    } else if (upper === "V") {
+      const wy = rel ? cy + nums[0] : nums[0];
+      mark(cx, wy);
+      cy = wy;
+      parts.push(`L${pxX(cx)},${pxY(wy)}`);
+    } else if (upper === "C") {
+      const x1 = rel ? cx + nums[0] : nums[0];
+      const y1 = rel ? cy + nums[1] : nums[1];
+      const x2 = rel ? cx + nums[2] : nums[2];
+      const y2 = rel ? cy + nums[3] : nums[3];
+      const x = rel ? cx + nums[4] : nums[4];
+      const y = rel ? cy + nums[5] : nums[5];
+      mark(x1, y1);
+      mark(x2, y2);
+      mark(x, y);
+      cx = x;
+      cy = y;
+      parts.push(`C${pxX(x1)},${pxY(y1)} ${pxX(x2)},${pxY(y2)} ${pxX(x)},${pxY(y)}`);
+    } else if (upper === "S") {
+      const x2 = rel ? cx + nums[0] : nums[0];
+      const y2 = rel ? cy + nums[1] : nums[1];
+      const x = rel ? cx + nums[2] : nums[2];
+      const y = rel ? cy + nums[3] : nums[3];
+      mark(x2, y2);
+      mark(x, y);
+      cx = x;
+      cy = y;
+      parts.push(`S${pxX(x2)},${pxY(y2)} ${pxX(x)},${pxY(y)}`);
+    } else if (upper === "Q") {
+      const x1 = rel ? cx + nums[0] : nums[0];
+      const y1 = rel ? cy + nums[1] : nums[1];
+      const x = rel ? cx + nums[2] : nums[2];
+      const y = rel ? cy + nums[3] : nums[3];
+      mark(x1, y1);
+      mark(x, y);
+      cx = x;
+      cy = y;
+      parts.push(`Q${pxX(x1)},${pxY(y1)} ${pxX(x)},${pxY(y)}`);
+    } else if (upper === "T") {
+      const x = rel ? cx + nums[0] : nums[0];
+      const y = rel ? cy + nums[1] : nums[1];
+      mark(x, y);
+      cx = x;
+      cy = y;
+      parts.push(`T${pxX(x)},${pxY(y)}`);
+    } else if (upper === "A") {
+      const rx = Math.abs(nums[0]);
+      const ry = Math.abs(nums[1]);
+      const rot = nums[2];
+      const large = nums[3] ? 1 : 0;
+      const sweep = nums[4] ? 1 : 0;
+      const x = rel ? cx + nums[5] : nums[5];
+      const y = rel ? cy + nums[6] : nums[6];
+      mark(x - rx, y - ry);
+      mark(x + rx, y + ry);
+      mark(x, y);
+      cx = x;
+      cy = y;
+      parts.push(`A${fmt(rx * scale)},${fmt(ry * scale)} ${fmt(rot)} ${large} ${sweep} ${pxX(x)},${pxY(y)}`);
+    }
+  }
+  if (!hasPoint || !parts.length) return null;
+  return { d: parts.join(" "), minX, minY, maxX, maxY };
+}
+function rectOutside(x, y, w, h, scopeMinX, scopeMinY, scopeMaxX, scopeMaxY) {
+  if (!(w > 0) || !(h > 0)) return true;
+  return x + w <= scopeMinX || x >= scopeMaxX || y + h <= scopeMinY || y >= scopeMaxY;
+}
+function pathOutside(bbox, scopeMinX, scopeMinY, scopeMaxX, scopeMaxY) {
+  const outX = bbox.minX < bbox.maxX ? bbox.maxX <= scopeMinX || bbox.minX >= scopeMaxX : bbox.minX < scopeMinX || bbox.minX > scopeMaxX;
+  if (outX) return true;
+  const outY = bbox.minY < bbox.maxY ? bbox.maxY <= scopeMinY || bbox.minY >= scopeMaxY : bbox.minY < scopeMinY || bbox.minY > scopeMaxY;
+  return outY;
+}
+function fallbackBounds(boxes, regions) {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const list of [boxes, regions]) {
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      if (!item || !Number.isFinite(item.x) || !Number.isFinite(item.y)) continue;
+      const w = Number.isFinite(item.w) ? item.w : 0;
+      const h = Number.isFinite(item.h) ? item.h : 0;
+      minX = Math.min(minX, item.x);
+      minY = Math.min(minY, item.y);
+      maxX = Math.max(maxX, item.x + w);
+      maxY = Math.max(maxY, item.y + h);
+    }
+  }
+  if (!Number.isFinite(minX)) return { minX: 0, minY: 0, maxX: 100, maxY: 100 };
+  return { minX, minY, maxX, maxY };
+}
+function fitText(text, maxWidth, measure) {
+  const str = String(text ?? "");
+  if (!str) return "";
+  if (typeof measure !== "function") return str;
+  if (!Number.isFinite(maxWidth) || maxWidth <= 0) return "";
+  if (measure(str) <= maxWidth) return str;
+  if (measure("…") > maxWidth) return "";
+  const chars = Array.from(str);
+  let low = 0;
+  let high = chars.length - 1;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    const candidate = `${chars.slice(0, mid).join("")}…`;
+    if (measure(candidate) <= maxWidth) low = mid;
+    else high = mid - 1;
+  }
+  return `${chars.slice(0, low).join("")}…`;
+}
+function paintPlan({
+  boxes = [],
+  paths = [],
+  regions = [],
+  labels = [],
+  bounds = null,
+  viewport = null,
+  scope = "all",
+  scale = 1,
+  transparent = false,
+  paper = "#ffffff",
+  maxSide = 8192,
+  pad: pad3 = 24
+} = {}) {
+  const padding = Number.isFinite(pad3) && pad3 >= 0 ? pad3 : 24;
+  let originX;
+  let originY;
+  let worldW;
+  let worldH;
+  if (scope === "viewport" && viewport && Number.isFinite(viewport.x) && Number.isFinite(viewport.y) && Number.isFinite(viewport.w) && Number.isFinite(viewport.h)) {
+    originX = viewport.x;
+    originY = viewport.y;
+    worldW = Math.max(1, viewport.w);
+    worldH = Math.max(1, viewport.h);
+  } else {
+    const b = bounds && Number.isFinite(bounds.minX) && Number.isFinite(bounds.minY) && Number.isFinite(bounds.maxX) && Number.isFinite(bounds.maxY) ? bounds : fallbackBounds(boxes, regions);
+    originX = b.minX - padding;
+    originY = b.minY - padding;
+    worldW = Math.max(1, b.maxX - b.minX + padding * 2);
+    worldH = Math.max(1, b.maxY - b.minY + padding * 2);
+  }
+  const scopeMinX = originX;
+  const scopeMinY = originY;
+  const scopeMaxX = originX + worldW;
+  const scopeMaxY = originY + worldH;
+  const requestedScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  const limit = Number.isFinite(maxSide) && maxSide > 0 ? maxSide : 8192;
+  let effectiveScale = requestedScale;
+  let reduced = false;
+  const warnings = [];
+  if (worldW * requestedScale > limit || worldH * requestedScale > limit) {
+    effectiveScale = Math.min(limit / worldW, limit / worldH);
+    reduced = true;
+    warnings.push("The image was reduced to fit the size limit.");
+  }
+  const s = effectiveScale;
+  const width = Math.min(Math.floor(limit), Math.max(1, Math.round(worldW * s)));
+  const height = Math.min(Math.floor(limit), Math.max(1, Math.round(worldH * s)));
+  const effectiveScaleRounded = Math.round(s * 1e4) / 1e4;
+  const ops = [];
+  if (!transparent) {
+    ops.push({
+      op: "rect",
+      layer: "background",
+      x: 0,
+      y: 0,
+      w: width,
+      h: height,
+      fill: paper || "#ffffff",
+      stroke: null,
+      lineWidth: 0,
+      dash: [],
+      radius: 0,
+      opacity: 1
+    });
+  }
+  if (Array.isArray(regions)) {
+    for (const region of regions) {
+      if (!region || typeof region !== "object") continue;
+      const rx = Number(region.x);
+      const ry = Number(region.y);
+      const rw = Number(region.w);
+      const rh = Number(region.h);
+      if (!Number.isFinite(rx) || !Number.isFinite(ry) || !Number.isFinite(rw) || !Number.isFinite(rh)) continue;
+      if (rectOutside(rx, ry, rw, rh, scopeMinX, scopeMinY, scopeMaxX, scopeMaxY)) continue;
+      const px = fmtNum((rx - originX) * s);
+      const py = fmtNum((ry - originY) * s);
+      const pw = fmtNum(rw * s);
+      const ph = fmtNum(rh * s);
+      const opacity = Number.isFinite(region.opacity) ? clamp2(region.opacity, 0, 1) : 1;
+      const radius = Math.max(0, Math.min(pw / 2, ph / 2, fmtNum((Number(region.radius) || 0) * s)));
+      ops.push({
+        op: "rect",
+        layer: "region",
+        x: px,
+        y: py,
+        w: pw,
+        h: ph,
+        fill: region.fill || null,
+        stroke: region.stroke || null,
+        lineWidth: region.stroke ? Math.max(0.5, fmtNum((Number(region.width) || 1) * s)) : 0,
+        dash: resolveDash(region.dashed, s),
+        radius,
+        opacity
+      });
+      const regionLabel = typeof region.label === "string" ? region.label.trim() : "";
+      if (regionLabel) {
+        const insetX = fmtNum(12 * s);
+        const insetY = fmtNum(16 * s);
+        ops.push({
+          op: "text",
+          layer: "region",
+          x: fmtNum(px + insetX),
+          y: fmtNum(py + insetY),
+          text: regionLabel,
+          color: region.color || "#000000",
+          font: scaleFont(region.font || "600 12px sans-serif", s),
+          bold: true,
+          maxWidth: Math.max(0, fmtNum(pw - insetX * 2)),
+          align: "left",
+          baseline: "middle",
+          halo: null,
+          haloWidth: 0,
+          opacity
+        });
+      }
+    }
+  }
+  if (Array.isArray(paths)) {
+    for (const path of paths) {
+      if (!path || typeof path !== "object") continue;
+      const parsed = transformPath(path.d, originX, originY, s);
+      if (!parsed) continue;
+      if (pathOutside(parsed, scopeMinX, scopeMinY, scopeMaxX, scopeMaxY)) continue;
+      const opacity = Number.isFinite(path.opacity) ? clamp2(path.opacity, 0, 1) : 1;
+      if (opacity <= 0) continue;
+      ops.push({
+        op: "path",
+        layer: "path",
+        d: parsed.d,
+        stroke: path.stroke || "#888888",
+        lineWidth: Math.max(0.5, fmtNum((Number(path.width) || 1.25) * s)),
+        dash: resolveDash(path.dashed, s),
+        opacity
+      });
+    }
+  }
+  if (Array.isArray(boxes)) {
+    for (const box of boxes) {
+      if (!box || typeof box !== "object") continue;
+      const bx = Number(box.x);
+      const by = Number(box.y);
+      const bw = Number(box.w);
+      const bh = Number(box.h);
+      if (!Number.isFinite(bx) || !Number.isFinite(by) || !Number.isFinite(bw) || !Number.isFinite(bh)) continue;
+      if (rectOutside(bx, by, bw, bh, scopeMinX, scopeMinY, scopeMaxX, scopeMaxY)) continue;
+      const opacity = Number.isFinite(box.opacity) ? clamp2(box.opacity, 0, 1) : 1;
+      if (opacity <= 0) continue;
+      const px = fmtNum((bx - originX) * s);
+      const py = fmtNum((by - originY) * s);
+      const pw = fmtNum(bw * s);
+      const ph = fmtNum(bh * s);
+      const radius = Math.max(0, Math.min(pw / 2, ph / 2, fmtNum((Number(box.radius) || 0) * s)));
+      const strokeWidth = Number(box.borderWidth ?? box.width) || 1.25;
+      ops.push({
+        op: "rect",
+        layer: "box",
+        x: px,
+        y: py,
+        w: pw,
+        h: ph,
+        fill: box.fill || null,
+        stroke: box.stroke || null,
+        lineWidth: box.stroke ? Math.max(0.5, fmtNum(strokeWidth * s)) : 0,
+        dash: resolveDash(box.dashed, s),
+        radius,
+        opacity
+      });
+      const boxText = typeof box.text === "string" ? box.text.trim() : "";
+      if (boxText) {
+        const padX = fmtNum((Number.isFinite(box.padX) ? box.padX : 10) * s);
+        const align = box.align === "center" ? "center" : "left";
+        const tx = align === "center" ? fmtNum(px + pw / 2) : fmtNum(px + padX);
+        const ty = fmtNum(py + ph / 2);
+        ops.push({
+          op: "text",
+          layer: "box",
+          x: tx,
+          y: ty,
+          text: boxText,
+          color: box.color || "#000000",
+          font: scaleFont(box.font, s, Boolean(box.bold)),
+          bold: Boolean(box.bold),
+          maxWidth: Math.max(0, fmtNum(pw - padX * 2)),
+          align,
+          baseline: "middle",
+          halo: null,
+          haloWidth: 0,
+          opacity
+        });
+      }
+    }
+  }
+  if (Array.isArray(labels)) {
+    for (const label of labels) {
+      if (!label || typeof label !== "object") continue;
+      const lx = Number(label.x);
+      const ly = Number(label.y);
+      const text = typeof label.text === "string" ? label.text.trim() : "";
+      if (!text || !Number.isFinite(lx) || !Number.isFinite(ly)) continue;
+      if (lx < scopeMinX || lx > scopeMaxX || ly < scopeMinY || ly > scopeMaxY) continue;
+      const opacity = Number.isFinite(label.opacity) ? clamp2(label.opacity, 0, 1) : 1;
+      if (opacity <= 0) continue;
+      const halo = label.halo !== void 0 ? label.halo : transparent ? null : paper || null;
+      ops.push({
+        op: "text",
+        layer: "label",
+        x: fmtNum((lx - originX) * s),
+        y: fmtNum((ly - originY) * s),
+        text,
+        color: label.color || "#000000",
+        font: scaleFont(label.font || "11px sans-serif", s, Boolean(label.bold)),
+        bold: Boolean(label.bold),
+        maxWidth: fmtNum((Number(label.maxWidth) || 260) * s),
+        align: label.align || "center",
+        baseline: label.baseline || "alphabetic",
+        halo,
+        haloWidth: halo ? fmtNum(4 * s) : 0,
+        opacity
+      });
+    }
+  }
+  return {
+    width,
+    height,
+    scale: reduced ? effectiveScaleRounded : effectiveScale,
+    reduced,
+    ops,
+    warnings
+  };
 }
 
 // src/view/features/export.js
-function createExport() {
-  return { name: "export" };
+function safeFilename(title, ext) {
+  const cleaned = String(title ?? "").trim().replace(/[/\\:*?"<>|\u0000-\u001f]+/g, "-").replace(/\s+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, 80).toLowerCase();
+  return `compass-${cleaned || "map"}.${ext}`;
+}
+function getStyle(element) {
+  const fn = globalThis.getComputedStyle;
+  if (typeof fn !== "function" || !element) return null;
+  try {
+    return fn(element);
+  } catch {
+    return null;
+  }
+}
+function nonTransparent(color) {
+  if (typeof color !== "string") return null;
+  const trimmed = color.trim();
+  if (!trimmed || trimmed === "transparent" || trimmed === "none" || trimmed === "rgba(0, 0, 0, 0)") {
+    return null;
+  }
+  return trimmed;
+}
+function isBoldStyle(style) {
+  const weight = style?.fontWeight;
+  if (!weight) return false;
+  if (weight === "bold" || weight === "bolder") return true;
+  const num = Number(weight);
+  return Number.isFinite(num) && num >= 600;
+}
+function fontFromStyle(style, fallback) {
+  if (!style) return fallback;
+  const size = style.fontSize;
+  const family = style.fontFamily;
+  if (!size || !family) {
+    return typeof style.font === "string" && style.font.trim() ? style.font.trim() : fallback;
+  }
+  const slope = style.fontStyle && style.fontStyle !== "normal" ? `${style.fontStyle} ` : "";
+  const weight = style.fontWeight && style.fontWeight !== "normal" && style.fontWeight !== "400" ? `${style.fontWeight} ` : "";
+  return `${slope}${weight}${size} ${family}`;
+}
+function collectTreeNodes(outline, extraNodes) {
+  const map = /* @__PURE__ */ new Map();
+  const add = (node) => {
+    if (!node || typeof node.uid !== "string" || !node.uid) return;
+    if (!map.has(node.uid)) map.set(node.uid, node);
+  };
+  for (const node of extraNodes ?? []) add(node);
+  const walk2 = (item) => {
+    if (!item || typeof item !== "object") return;
+    add(item);
+    if (Array.isArray(item.children)) {
+      for (const child of item.children) walk2(child);
+    }
+  };
+  if (Array.isArray(outline?.parents)) {
+    for (const parent of outline.parents) walk2(parent);
+  }
+  if (Array.isArray(outline?.root?.children)) {
+    for (const child of outline.root.children) walk2(child);
+  }
+  return [...map.values()];
+}
+function drawRoundedRect(ctx2d, x, y, w, h, r) {
+  const radius = Math.max(0, Math.min(r || 0, w / 2, h / 2));
+  ctx2d.beginPath();
+  if (radius <= 0) {
+    ctx2d.rect(x, y, w, h);
+  } else if (typeof ctx2d.roundRect === "function") {
+    ctx2d.roundRect(x, y, w, h, radius);
+  } else {
+    ctx2d.moveTo(x + radius, y);
+    ctx2d.arcTo(x + w, y, x + w, y + h, radius);
+    ctx2d.arcTo(x + w, y + h, x, y + h, radius);
+    ctx2d.arcTo(x, y + h, x, y, radius);
+    ctx2d.arcTo(x, y, x + w, y, radius);
+    ctx2d.closePath();
+  }
+}
+function executePlan(canvas, plan) {
+  canvas.width = plan.width;
+  canvas.height = plan.height;
+  const ctx2d = typeof canvas.getContext === "function" ? canvas.getContext("2d") : null;
+  if (!ctx2d) return false;
+  ctx2d.clearRect(0, 0, plan.width, plan.height);
+  for (const op of plan.ops) {
+    ctx2d.save();
+    if (Number.isFinite(op.opacity) && op.opacity < 1) {
+      ctx2d.globalAlpha = Math.max(0, op.opacity);
+    }
+    if (op.op === "rect") {
+      drawRoundedRect(ctx2d, op.x, op.y, op.w, op.h, op.radius);
+      if (nonTransparent(op.fill)) {
+        ctx2d.fillStyle = op.fill;
+        ctx2d.fill();
+      }
+      if (nonTransparent(op.stroke) && op.lineWidth > 0) {
+        ctx2d.strokeStyle = op.stroke;
+        ctx2d.lineWidth = op.lineWidth;
+        if (typeof ctx2d.setLineDash === "function") {
+          ctx2d.setLineDash(Array.isArray(op.dash) ? op.dash : []);
+        }
+        ctx2d.stroke();
+      }
+    } else if (op.op === "path") {
+      if (op.d && nonTransparent(op.stroke) && typeof globalThis.Path2D === "function") {
+        const path2d = new globalThis.Path2D(op.d);
+        ctx2d.strokeStyle = op.stroke;
+        ctx2d.lineWidth = op.lineWidth || 1;
+        ctx2d.lineCap = "round";
+        ctx2d.lineJoin = "round";
+        if (typeof ctx2d.setLineDash === "function") {
+          ctx2d.setLineDash(Array.isArray(op.dash) ? op.dash : []);
+        }
+        ctx2d.stroke(path2d);
+      }
+    } else if (op.op === "text") {
+      ctx2d.font = op.font || "13px sans-serif";
+      ctx2d.textAlign = op.align || "left";
+      ctx2d.textBaseline = op.baseline || "middle";
+      const measure = (text) => ctx2d.measureText?.(text)?.width ?? text.length * 7;
+      const shown = op.maxWidth > 0 ? fitText(op.text, op.maxWidth, measure) : String(op.text ?? "");
+      if (shown) {
+        if (nonTransparent(op.halo) && op.haloWidth > 0 && typeof ctx2d.strokeText === "function") {
+          ctx2d.strokeStyle = op.halo;
+          ctx2d.lineWidth = op.haloWidth;
+          ctx2d.lineJoin = "round";
+          ctx2d.miterLimit = 2;
+          ctx2d.strokeText(shown, op.x, op.y);
+        }
+        ctx2d.fillStyle = op.color || "#000000";
+        ctx2d.fillText(shown, op.x, op.y);
+      }
+    }
+    ctx2d.restore();
+  }
+  return true;
+}
+function canvasToPngBlob(canvas) {
+  if (!canvas || typeof canvas.toBlob !== "function") {
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    try {
+      canvas.toBlob((blob) => resolve(blob || null), "image/png");
+    } catch {
+      resolve(null);
+    }
+  });
+}
+function withClipboardTimeout(promise, timeoutMs = 250) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(false);
+    }, timeoutMs);
+    timer?.unref?.();
+    Promise.resolve(promise).then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(Boolean(value));
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(false);
+      }
+    );
+  });
+}
+function createExport(ctx) {
+  if (!ctx?.dom?.root) {
+    return {
+      name: "export",
+      openOutline() {
+      },
+      openImage() {
+      },
+      copyBreadcrumbs() {
+        return Promise.resolve(false);
+      }
+    };
+  }
+  const { el: el2, button: button2, lifecycle, dom, state } = ctx;
+  const barBtn = button2("compass-export-btn", "Export image", "Export image");
+  ctx.addBarButton(barBtn);
+  const backdrop = el2("div", "compass-export-backdrop");
+  backdrop.hidden = true;
+  lifecycle.node(backdrop, dom.root);
+  const localVisits = [];
+  let activeMode = null;
+  let returnFocusEl = null;
+  let previewUrl = null;
+  let renderToken = 0;
+  function revokePreviewUrl() {
+    if (!previewUrl) return;
+    const url = previewUrl;
+    previewUrl = null;
+    try {
+      globalThis.URL?.revokeObjectURL?.(url);
+    } catch {
+    }
+  }
+  function closeDialog({ restoreFocus = true } = {}) {
+    if (!activeMode && backdrop.hidden) return;
+    renderToken += 1;
+    revokePreviewUrl();
+    activeMode = null;
+    backdrop.hidden = true;
+    backdrop.replaceChildren();
+    const prev = returnFocusEl;
+    returnFocusEl = null;
+    if (!restoreFocus) return;
+    if (prev && prev.isConnected && dom.root.contains(prev) && typeof prev.focus === "function") {
+      prev.focus({ preventScroll: true });
+    } else if (state.isOpen && typeof dom.stage?.focus === "function") {
+      dom.stage.focus({ preventScroll: true });
+    }
+  }
+  function prepareDialog(mode) {
+    ctx.hideFloating?.();
+    if (!activeMode) {
+      returnFocusEl = globalThis.document?.activeElement ?? null;
+    }
+    renderToken += 1;
+    revokePreviewUrl();
+    activeMode = mode;
+    backdrop.replaceChildren();
+    backdrop.hidden = false;
+  }
+  function renderWarnings(listEl, items) {
+    listEl.replaceChildren();
+    const valid = (items ?? []).filter((item) => typeof item === "string" && item.trim());
+    listEl.hidden = valid.length === 0;
+    for (const note of valid) {
+      listEl.append(el2("li", "compass-export-warning", note));
+    }
+  }
+  function hiddenNodesFor(nodes) {
+    const lenses = ctx.features?.get?.("lenses");
+    if (typeof lenses?.hiddenFor === "function") {
+      const hidden = lenses.hiddenFor(nodes);
+      if (hidden instanceof Set) return hidden;
+      if (Array.isArray(hidden)) return new Set(hidden);
+    }
+    return new Set(hiddenUids(nodes, state.lens));
+  }
+  function buildCurrentOutline(labelsMode) {
+    const warnings = [];
+    const hood = state.hood;
+    const view = ctx.features?.get?.("views")?.current?.()?.view ?? "compass";
+    if (view === "mindmap") {
+      const tree = ctx.features?.get?.("mindmap")?.outline?.();
+      if (tree && tree.root) {
+        const hidden2 = hiddenNodesFor(collectTreeNodes(tree, hood?.nodes));
+        const md = treeOutline2(tree, { labels: labelsMode, hidden: hidden2, warnings });
+        if (md) return { markdown: md, warnings };
+      }
+    } else if (view === "facets") {
+      const classified = ctx.features?.get?.("facets")?.classified?.();
+      if (classified && hood?.center) {
+        const hidden2 = hiddenNodesFor(hood.nodes ?? []);
+        const nodesByUid = new Map((hood.nodes ?? []).map((node) => [node.uid, node]));
+        const md = facetsOutline(classified, nodesByUid, hood.center, {
+          labels: labelsMode,
+          hidden: hidden2,
+          warnings: []
+        });
+        if (md) {
+          warnings.length = 0;
+          const finalMd = facetsOutline(classified, nodesByUid, hood.center, {
+            labels: labelsMode,
+            hidden: hidden2,
+            warnings
+          });
+          return { markdown: finalMd, warnings };
+        }
+      }
+    }
+    const hidden = hiddenNodesFor(hood?.nodes ?? []);
+    const markdown = compassOutline(hood, { labels: labelsMode, hidden, warnings });
+    return { markdown, warnings };
+  }
+  function openOutline() {
+    prepareDialog("outline");
+    let labelsMode = "visible";
+    let currentMarkdown = "";
+    const dialog = el2("div", "compass-export-dialog compass-export-dialog-outline");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-label", "Export outline as Markdown");
+    const head = el2("div", "compass-export-head");
+    head.append(el2("h2", "compass-export-title", "Export outline as Markdown"));
+    const controls = el2("div", "compass-export-controls");
+    const labelGroup = el2("div", "compass-export-group");
+    labelGroup.append(el2("span", "compass-export-group-label", "Labels"));
+    const seg = el2("div", "compass-export-seg");
+    const labelOptions = [
+      ["none", "No labels"],
+      ["visible", "Labels shown on the map"],
+      ["all", "All relationship labels"]
+    ];
+    const modeButtons = /* @__PURE__ */ new Map();
+    for (const [mode, title] of labelOptions) {
+      const btn = button2("compass-export-seg-btn", title);
+      btn.dataset.labels = mode;
+      btn.setAttribute("aria-pressed", mode === labelsMode ? "true" : "false");
+      btn.addEventListener("click", () => {
+        if (labelsMode === mode) return;
+        labelsMode = mode;
+        for (const [key, item] of modeButtons) {
+          item.setAttribute("aria-pressed", key === labelsMode ? "true" : "false");
+        }
+        refreshOutline();
+      });
+      modeButtons.set(mode, btn);
+      seg.append(btn);
+    }
+    labelGroup.append(seg);
+    controls.append(labelGroup);
+    const preview = el2("pre", "compass-export-preview");
+    preview.tabIndex = 0;
+    preview.setAttribute("aria-label", "Markdown preview");
+    const warningsEl = el2("ul", "compass-export-warnings");
+    warningsEl.hidden = true;
+    const actions = el2("div", "compass-export-actions");
+    const copyBtn = button2("compass-export-primary compass-export-copy-md", "Copy Markdown");
+    const saveBtn = button2("compass-export-save-md", "Save .md");
+    const closeBtn = button2("compass-export-close", "Close");
+    copyBtn.addEventListener("click", ctx.guard(async () => {
+      const ok = await withClipboardTimeout(copyText(currentMarkdown));
+      if (ok) {
+        ctx.setStatus?.("Outline copied");
+      } else {
+        ctx.setStatus?.("Could not copy the outline.");
+      }
+    }));
+    saveBtn.addEventListener("click", () => {
+      const blob = new Blob([currentMarkdown], { type: "text/markdown;charset=utf-8" });
+      const filename = safeFilename(state.hood?.center?.title || "outline", "md");
+      const ok = saveBlob(blob, filename);
+      ctx.setStatus?.(ok ? `Saved ${filename}` : "Could not save the file.");
+    });
+    closeBtn.addEventListener("click", () => closeDialog());
+    actions.append(copyBtn, saveBtn, closeBtn);
+    dialog.append(head, controls, preview, warningsEl, actions);
+    backdrop.append(dialog);
+    function refreshOutline() {
+      const built = buildCurrentOutline(labelsMode);
+      currentMarkdown = built.markdown;
+      preview.textContent = currentMarkdown;
+      renderWarnings(warningsEl, built.warnings);
+      const empty = !currentMarkdown;
+      copyBtn.disabled = empty;
+      saveBtn.disabled = empty;
+    }
+    refreshOutline();
+    copyBtn.focus?.({ preventScroll: true });
+  }
+  function resolvePaper() {
+    const rootStyle = getStyle(dom.root);
+    const bg = nonTransparent(rootStyle?.backgroundColor);
+    if (bg) return bg;
+    const custom = rootStyle?.getPropertyValue?.("--compass-paper")?.trim() ?? "";
+    if (custom && custom !== "Canvas" && custom !== "transparent") return custom;
+    return dom.root.dataset?.tone === "dark" ? "#182026" : "#ffffff";
+  }
+  function isVisibleInWorld(element) {
+    let cur = element;
+    while (cur && cur !== dom.world) {
+      if (cur.hidden === true) return false;
+      const cs = getStyle(cur);
+      if (cs && (cs.display === "none" || cs.visibility === "hidden")) return false;
+      cur = cur.parentElement ?? null;
+    }
+    return true;
+  }
+  function effectiveOpacity(element, ignoreEntryZero = false) {
+    let opacity = 1;
+    let cur = element;
+    while (cur && cur !== dom.world) {
+      if (ignoreEntryZero && cur === element && cur.style?.opacity === "0") {
+        if (cur.classList?.contains("compass-fade")) opacity *= 0.15;
+      } else {
+        const raw = parseFloat(getStyle(cur)?.opacity);
+        if (Number.isFinite(raw)) opacity *= raw;
+      }
+      cur = cur.parentElement ?? null;
+    }
+    return opacity;
+  }
+  function collectScene() {
+    dom.root.classList?.add?.("compass-export-measuring");
+    try {
+      const zoom = Number(state.zoom) > 0 ? state.zoom : 1;
+      const panX = Number(state.panX) || 0;
+      const panY = Number(state.panY) || 0;
+      const stageRect = dom.stage.getBoundingClientRect();
+      const stageW = stageRect.width || 800;
+      const stageH = stageRect.height || 600;
+      const stageCenterX = stageRect.left + stageW / 2;
+      const stageCenterY = stageRect.top + stageH / 2;
+      const toWorldRect = (rect) => ({
+        x: (rect.left - stageCenterX - panX) / zoom,
+        y: (rect.top - stageCenterY - panY) / zoom,
+        w: rect.width / zoom,
+        h: rect.height / zoom
+      });
+      const paper = resolvePaper();
+      const defaultInk = dom.root.dataset?.tone === "dark" ? "#f5f8fa" : "#182026";
+      const viewport = {
+        x: (-stageW / 2 - panX) / zoom,
+        y: (-stageH / 2 - panY) / zoom,
+        w: stageW / zoom,
+        h: stageH / zoom
+      };
+      const regularBoxes = [];
+      const centerBoxes = [];
+      for (const nodeEl of dom.world.querySelectorAll(".compass-node")) {
+        if (!isVisibleInWorld(nodeEl)) continue;
+        let pendingTarget = null;
+        if (nodeEl.dataset?.target) {
+          try {
+            pendingTarget = JSON.parse(nodeEl.dataset.target);
+          } catch {
+            pendingTarget = null;
+          }
+        }
+        const opacity = effectiveOpacity(nodeEl, Boolean(pendingTarget));
+        if (opacity <= 0.02) continue;
+        let wr = null;
+        if (pendingTarget && Number.isFinite(pendingTarget.x) && Number.isFinite(pendingTarget.y) && Number.isFinite(pendingTarget.w) && Number.isFinite(pendingTarget.h) && pendingTarget.w > 0 && pendingTarget.h > 0) {
+          wr = {
+            x: pendingTarget.x - pendingTarget.w / 2,
+            y: pendingTarget.y - pendingTarget.h / 2,
+            w: pendingTarget.w,
+            h: pendingTarget.h
+          };
+        } else {
+          const rect = nodeEl.getBoundingClientRect();
+          if (!(rect.width > 0) || !(rect.height > 0)) continue;
+          wr = toWorldRect(rect);
+        }
+        const isCenter = Boolean(nodeEl.classList?.contains("compass-node-center"));
+        const titleEl = nodeEl.querySelector?.(".compass-node-title") ?? null;
+        const text = (titleEl ? titleEl.textContent : nodeEl.textContent)?.trim() ?? "";
+        const cs = getStyle(nodeEl);
+        const tcs = titleEl ? getStyle(titleEl) ?? cs : cs;
+        const borderStyle = cs?.borderTopStyle || cs?.borderStyle || "solid";
+        const borderWidth = parseFloat(cs?.borderTopWidth || cs?.borderWidth) || (isCenter ? 2 : 1);
+        const hasBorder = borderStyle !== "none" && borderWidth > 0;
+        const dashed = !hasBorder ? false : borderStyle === "dashed" ? "dashed" : borderStyle === "dotted" ? "dotted" : false;
+        const box = {
+          ...wr,
+          text,
+          fill: nonTransparent(cs?.backgroundColor) ?? paper,
+          stroke: hasBorder ? nonTransparent(cs?.borderTopColor || cs?.borderColor) ?? defaultInk : null,
+          borderWidth,
+          color: nonTransparent(tcs?.color || cs?.color) ?? defaultInk,
+          dashed,
+          radius: parseFloat(cs?.borderTopLeftRadius || cs?.borderRadius) || (isCenter ? 8 : 6),
+          bold: isBoldStyle(tcs) || isCenter,
+          opacity,
+          font: fontFromStyle(tcs, isCenter ? "600 15px sans-serif" : "13px sans-serif"),
+          padX: isCenter ? 12 : Math.max(6, parseFloat(cs?.paddingLeft) || 10)
+        };
+        if (isCenter) centerBoxes.push(box);
+        else regularBoxes.push(box);
+      }
+      const paths = [];
+      for (const pathEl of dom.world.querySelectorAll("path.compass-edge-line")) {
+        if (!isVisibleInWorld(pathEl)) continue;
+        const opacity = effectiveOpacity(pathEl);
+        if (opacity <= 0.02) continue;
+        const d = pathEl.getAttribute?.("d") ?? "";
+        if (!d.trim()) continue;
+        const cs = getStyle(pathEl);
+        const stroke = nonTransparent(cs?.stroke) ?? nonTransparent(pathEl.getAttribute?.("stroke"));
+        if (!stroke) continue;
+        const width = parseFloat(cs?.strokeWidth || pathEl.getAttribute?.("stroke-width")) || 1.25;
+        const dashRaw = cs?.strokeDasharray || pathEl.getAttribute?.("stroke-dasharray") || "";
+        const dashed = dashRaw && dashRaw !== "none" ? dashRaw : false;
+        paths.push({ d, stroke, width, dashed, opacity });
+      }
+      const labels = [];
+      for (const textEl of dom.world.querySelectorAll("text.compass-edge-label")) {
+        if (!isVisibleInWorld(textEl)) continue;
+        const opacity = effectiveOpacity(textEl);
+        if (opacity <= 0.02) continue;
+        const text = textEl.textContent?.trim() ?? "";
+        if (!text) continue;
+        const attrX = parseFloat(textEl.getAttribute?.("x"));
+        const attrY = parseFloat(textEl.getAttribute?.("y"));
+        let x = attrX;
+        let y = attrY;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+          const wr = toWorldRect(textEl.getBoundingClientRect());
+          x = wr.x + wr.w / 2;
+          y = wr.y + wr.h / 2;
+        }
+        const cs = getStyle(textEl);
+        const color = nonTransparent(cs?.fill) ?? nonTransparent(cs?.color) ?? defaultInk;
+        const anchor = cs?.textAnchor || textEl.getAttribute?.("text-anchor") || "middle";
+        const align = anchor === "end" ? "right" : anchor === "start" ? "left" : "center";
+        labels.push({
+          x,
+          y,
+          text,
+          color,
+          font: fontFromStyle(cs, "11px sans-serif"),
+          align,
+          opacity
+        });
+      }
+      const regions = [];
+      for (const regEl of dom.world.querySelectorAll('[data-paint="region"]')) {
+        if (!isVisibleInWorld(regEl)) continue;
+        const opacity = effectiveOpacity(regEl);
+        if (opacity <= 0.02) continue;
+        const rect = regEl.getBoundingClientRect();
+        if (!(rect.width > 0) || !(rect.height > 0)) continue;
+        const wr = toWorldRect(rect);
+        const cs = getStyle(regEl);
+        const borderStyle = cs?.borderTopStyle || cs?.borderStyle || "solid";
+        const borderWidth = parseFloat(cs?.borderTopWidth || cs?.borderWidth) || 0;
+        const hasBorder = borderStyle !== "none" && borderWidth > 0;
+        const labelEl = regEl.querySelector?.(".compass-region-label") ?? null;
+        const lcs = labelEl ? getStyle(labelEl) ?? cs : cs;
+        regions.push({
+          ...wr,
+          fill: nonTransparent(cs?.backgroundColor),
+          stroke: hasBorder ? nonTransparent(cs?.borderTopColor || cs?.borderColor) : null,
+          width: borderWidth || 1,
+          dashed: !hasBorder ? false : borderStyle === "dashed" ? "dashed" : borderStyle === "dotted" ? "dotted" : false,
+          radius: parseFloat(cs?.borderTopLeftRadius || cs?.borderRadius) || 0,
+          label: labelEl?.textContent?.trim() ?? "",
+          color: nonTransparent(lcs?.color || cs?.color) ?? defaultInk,
+          font: fontFromStyle(lcs, "600 12px sans-serif"),
+          opacity
+        });
+      }
+      return {
+        boxes: [...regularBoxes, ...centerBoxes],
+        paths,
+        regions,
+        labels,
+        bounds: state.geometry?.bounds ?? null,
+        viewport,
+        paper
+      };
+    } finally {
+      dom.root.classList?.remove?.("compass-export-measuring");
+    }
+  }
+  function openImage() {
+    prepareDialog("image");
+    let scope = "all";
+    let scale = 2;
+    let transparent = false;
+    let currentBlob = null;
+    let lastPlanWarnings = [];
+    const dialog = el2("div", "compass-export-dialog compass-export-dialog-image");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-label", "Export image");
+    const head = el2("div", "compass-export-head");
+    head.append(el2("h2", "compass-export-title", "Export image"));
+    const metaEl = el2("span", "compass-export-meta", "");
+    head.append(metaEl);
+    const controls = el2("div", "compass-export-controls");
+    const scopeGroup = el2("div", "compass-export-group");
+    scopeGroup.append(el2("span", "compass-export-group-label", "Area"));
+    const scopeSeg = el2("div", "compass-export-seg");
+    const scopeButtons = /* @__PURE__ */ new Map();
+    for (const [val, label] of [["all", "Whole canvas"], ["viewport", "Current viewport"]]) {
+      const btn = button2("compass-export-seg-btn", label);
+      btn.dataset.scope = val;
+      btn.setAttribute("aria-pressed", val === scope ? "true" : "false");
+      btn.addEventListener("click", () => {
+        if (scope === val) return;
+        scope = val;
+        for (const [k, b] of scopeButtons) b.setAttribute("aria-pressed", k === scope ? "true" : "false");
+        void renderImagePreview();
+      });
+      scopeButtons.set(val, btn);
+      scopeSeg.append(btn);
+    }
+    scopeGroup.append(scopeSeg);
+    const scaleGroup = el2("div", "compass-export-group");
+    scaleGroup.append(el2("span", "compass-export-group-label", "Scale"));
+    const scaleSeg = el2("div", "compass-export-seg");
+    const scaleButtons = /* @__PURE__ */ new Map();
+    for (const val of [1, 2, 3]) {
+      const btn = button2("compass-export-seg-btn", `${val}×`);
+      btn.dataset.scale = String(val);
+      btn.setAttribute("aria-pressed", val === scale ? "true" : "false");
+      btn.addEventListener("click", () => {
+        if (scale === val) return;
+        scale = val;
+        for (const [k, b] of scaleButtons) b.setAttribute("aria-pressed", k === scale ? "true" : "false");
+        void renderImagePreview();
+      });
+      scaleButtons.set(val, btn);
+      scaleSeg.append(btn);
+    }
+    scaleGroup.append(scaleSeg);
+    const transparentBtn = button2("compass-export-toggle compass-export-transparent", "Transparent background");
+    transparentBtn.setAttribute("aria-pressed", "false");
+    transparentBtn.addEventListener("click", () => {
+      transparent = !transparent;
+      transparentBtn.setAttribute("aria-pressed", transparent ? "true" : "false");
+      void renderImagePreview();
+    });
+    controls.append(scopeGroup, scaleGroup, transparentBtn);
+    const frameEl = el2("div", "compass-export-image-frame");
+    frameEl.dataset.transparent = "false";
+    const previewImg = el2("img", "compass-export-image-preview");
+    previewImg.alt = "Map preview";
+    previewImg.hidden = true;
+    frameEl.append(previewImg);
+    const warningsEl = el2("ul", "compass-export-warnings");
+    warningsEl.hidden = true;
+    const actions = el2("div", "compass-export-actions");
+    const copyBtn = button2("compass-export-primary compass-export-copy-png", "Copy PNG");
+    const saveBtn = button2("compass-export-save-png", "Save PNG");
+    const closeBtn = button2("compass-export-close", "Close");
+    copyBtn.disabled = true;
+    saveBtn.disabled = true;
+    copyBtn.addEventListener("click", ctx.guard(async () => {
+      if (!currentBlob) return;
+      const ok = await withClipboardTimeout(copyBlob(currentBlob));
+      if (ok) {
+        closeDialog();
+        ctx.setStatus?.("Image copied");
+      } else {
+        const msg = "Copying images is not supported here. Use Save.";
+        renderWarnings(warningsEl, [...lastPlanWarnings, msg]);
+        ctx.setStatus?.(msg);
+      }
+    }));
+    saveBtn.addEventListener("click", () => {
+      if (!currentBlob) return;
+      const filename = safeFilename(state.hood?.center?.title || "map", "png");
+      const ok = saveBlob(currentBlob, filename);
+      ctx.setStatus?.(ok ? `Saved ${filename}` : "Could not save the image.");
+    });
+    closeBtn.addEventListener("click", () => closeDialog());
+    actions.append(copyBtn, saveBtn, closeBtn);
+    dialog.append(head, controls, frameEl, warningsEl, actions);
+    backdrop.append(dialog);
+    async function renderImagePreview() {
+      const token = ++renderToken;
+      currentBlob = null;
+      copyBtn.disabled = true;
+      saveBtn.disabled = true;
+      previewImg.dataset.rendering = "true";
+      previewImg.dataset.decoded = "false";
+      frameEl.dataset.transparent = transparent ? "true" : "false";
+      const scene = collectScene();
+      const plan = paintPlan({
+        ...scene,
+        scope,
+        scale,
+        transparent
+      });
+      lastPlanWarnings = plan.warnings;
+      metaEl.textContent = `${plan.width} × ${plan.height} px`;
+      const doc = globalThis.document;
+      const canvas = typeof doc?.createElement === "function" ? doc.createElement("canvas") : null;
+      let painted = false;
+      if (canvas && typeof canvas.toBlob === "function") {
+        try {
+          painted = executePlan(canvas, plan);
+        } catch {
+          painted = false;
+        }
+      }
+      if (!painted) {
+        revokePreviewUrl();
+        previewImg.hidden = true;
+        previewImg.dataset.rendering = "false";
+        previewImg.removeAttribute("src");
+        renderWarnings(warningsEl, [...plan.warnings, "This browser could not make the image."]);
+        return;
+      }
+      const blob = await canvasToPngBlob(canvas);
+      if (token !== renderToken) return;
+      const createUrl = globalThis.URL?.createObjectURL;
+      if (!blob || typeof createUrl !== "function") {
+        revokePreviewUrl();
+        previewImg.hidden = true;
+        previewImg.dataset.rendering = "false";
+        previewImg.removeAttribute("src");
+        renderWarnings(warningsEl, [...plan.warnings, "This browser could not make the image."]);
+        return;
+      }
+      revokePreviewUrl();
+      currentBlob = blob;
+      previewUrl = createUrl.call(globalThis.URL, blob);
+      const onDecoded = () => {
+        if (token === renderToken) {
+          previewImg.dataset.decoded = "true";
+        }
+      };
+      previewImg.onload = onDecoded;
+      previewImg.onerror = onDecoded;
+      previewImg.dataset.width = String(plan.width);
+      previewImg.dataset.height = String(plan.height);
+      previewImg.src = previewUrl;
+      previewImg.hidden = false;
+      previewImg.dataset.rendering = "false";
+      copyBtn.disabled = false;
+      saveBtn.disabled = false;
+      renderWarnings(warningsEl, plan.warnings);
+    }
+    void renderImagePreview();
+    closeBtn.focus?.({ preventScroll: true });
+  }
+  async function copyBreadcrumbs() {
+    const trail = ctx.features?.get?.("trail");
+    let md = "";
+    let count2 = 0;
+    if (typeof trail?.markdown === "function") {
+      md = String(trail.markdown() ?? "").trim();
+      const entries = typeof trail?.entries === "function" ? trail.entries() : null;
+      if (Array.isArray(entries)) {
+        count2 = entries.length;
+      } else if (md) {
+        count2 = md.split("\n").filter((line) => line.trim().length > 0).length;
+      }
+    } else if (typeof trail?.entries === "function") {
+      const entries = trail.entries();
+      if (Array.isArray(entries) && entries.length > 0) {
+        count2 = entries.length;
+        md = breadcrumbs(entries);
+      }
+    } else if (localVisits.length > 0) {
+      count2 = localVisits.length;
+      md = breadcrumbs(localVisits);
+    }
+    if (!md || count2 === 0) {
+      ctx.setStatus?.("There is no trail yet.");
+      return false;
+    }
+    const ok = await withClipboardTimeout(copyText(md));
+    const word = count2 === 1 ? "visit" : "visits";
+    if (ok) {
+      ctx.setStatus?.(`Copied ${count2} ${word}`);
+    } else {
+      ctx.setStatus?.(`Could not copy ${count2} ${word}.`);
+    }
+    return ok;
+  }
+  function onNavigate(info) {
+    const uid = info?.uid;
+    if (typeof uid !== "string" || !uid) return;
+    const nextAt = Math.max(Date.now(), (localVisits[0]?.at ?? 0) + 1);
+    if (localVisits[0]?.uid === uid) {
+      localVisits[0].at = nextAt;
+      return;
+    }
+    const existingIdx = localVisits.findIndex((item) => item.uid === uid);
+    const prev = existingIdx >= 0 ? localVisits.splice(existingIdx, 1)[0] : null;
+    localVisits.unshift({
+      uid,
+      title: ctx.titleOf?.(uid) || prev?.title || uid,
+      kind: ctx.nodeKind?.(uid) || prev?.kind || "page",
+      at: nextAt
+    });
+    if (localVisits.length > 100) localVisits.length = 100;
+  }
+  function afterRender(info) {
+    const center = info?.hood?.center;
+    if (!center?.uid) return;
+    const hit = localVisits.find((item) => item.uid === center.uid);
+    if (hit) {
+      if (center.title) hit.title = center.title;
+      if (center.kind) hit.kind = center.kind;
+    }
+  }
+  function onEscape() {
+    if (!activeMode || backdrop.hidden) return false;
+    closeDialog();
+    return true;
+  }
+  function onClose() {
+    closeDialog({ restoreFocus: false });
+  }
+  function stageMenu() {
+    return [
+      { title: "Export outline as Markdown…", run: () => openOutline() },
+      { title: "Export image…", run: () => openImage() },
+      { title: "Copy breadcrumbs as Markdown", run: () => copyBreadcrumbs() }
+    ];
+  }
+  function commands() {
+    return [
+      { id: "export-outline", title: "Export outline as Markdown…", hint: "", run: () => openOutline() },
+      { id: "export-image", title: "Export image…", hint: "", run: () => openImage() },
+      { id: "export-breadcrumbs", title: "Copy breadcrumbs as Markdown", hint: "", run: () => copyBreadcrumbs() }
+    ];
+  }
+  lifecycle.event(barBtn, "click", ctx.guard(() => openImage()));
+  lifecycle.event(backdrop, "click", (event) => {
+    if (event.target === backdrop) closeDialog();
+  });
+  lifecycle.add(() => {
+    revokePreviewUrl();
+  });
+  return {
+    name: "export",
+    openOutline,
+    openImage,
+    copyBreadcrumbs,
+    onNavigate,
+    afterRender,
+    onEscape,
+    onClose,
+    stageMenu,
+    commands
+  };
+}
+
+// src/model/edit.js
+var FORBIDDEN2 = [":harc", ":entity/attrs", ":attr/proxy"];
+function same2(a, b) {
+  return String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
+}
+function hasForbidden(ops) {
+  return ops.some((op) => FORBIDDEN2.some((token) => String(op?.string ?? "").includes(token)));
+}
+function unlinkRefused(reason) {
+  return { ops: [], reason, removesBlock: false, removesLabels: 0 };
+}
+function safeUnlink(ops, removesBlock, removesLabels = 0) {
+  if (hasForbidden(ops)) return unlinkRefused("forbidden");
+  return {
+    ops,
+    reason: null,
+    removesBlock: Boolean(removesBlock),
+    removesLabels: removesBlock ? removesLabels : 0
+  };
+}
+function flipRefused(reason) {
+  return { ops: [], reason, guards: [] };
+}
+function safeFlip(ops, guards) {
+  if (hasForbidden(ops)) return flipRefused("forbidden");
+  return { ops, reason: null, guards };
+}
+function refsIn2(string) {
+  const shape = tailShape(string);
+  return shape.kind === "refs" ? shape.values : [];
+}
+function childCountOf(block) {
+  if (Number.isFinite(block?.childCount) && block.childCount >= 0) return Math.floor(block.childCount);
+  if (Array.isArray(block?.children)) return block.children.filter((child) => child?.uid).length;
+  return 0;
+}
+function isRelationLabel(child) {
+  return Boolean(parseAttribute(child?.string)) && childCountOf(child) === 0;
+}
+function isPageEndpoint(endpoint) {
+  if (!endpoint || typeof endpoint !== "object") return false;
+  if (endpoint.kind != null && endpoint.kind !== "page") return false;
+  if (typeof endpoint.uid !== "string" || !endpoint.uid) return false;
+  if (typeof endpoint.title !== "string" || !endpoint.title.trim()) return false;
+  if (endpoint.title.includes("[") || endpoint.title.includes("]")) return false;
+  return true;
+}
+function planUnlink({ source, attribute, value } = {}) {
+  if (!source?.uid || typeof source.string !== "string") return unlinkRefused("missing");
+  const parsed = parseAttribute(source.string);
+  if (!parsed || !same2(parsed.name, attribute)) return unlinkRefused("changed");
+  if (isReadOnlyAttribute(parsed.name)) return unlinkRefused("read-only");
+  const shape = tailShape(parsed.tail);
+  const children = [...source.children ?? []].filter((child) => child?.uid).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  if (shape.kind === "refs") {
+    const token = shape.values.find((item) => tokenMatches(item, value));
+    if (!token) return unlinkRefused("missing-value");
+    if (shape.values.length === 1) {
+      if (!children.every(isRelationLabel)) return unlinkRefused("has-children");
+      return safeUnlink([{ op: "delete", uid: source.uid }], true, children.length);
+    }
+    const offset = parsed.prefix.length;
+    const shifted = { ...token, start: token.start + offset, end: token.end + offset };
+    return safeUnlink([{ op: "update", uid: source.uid, string: removeToken(source.string, shifted) }], false, 0);
+  }
+  if (shape.kind !== "bare") return unlinkRefused("text-value");
+  const values = children.filter((child) => !parseAttribute(child.string));
+  const holder = values.find((child) => child.uid === value?.uid || refsIn2(child.string).some((item) => tokenMatches(item, value)));
+  if (!holder) return unlinkRefused("missing-value");
+  const holderRefs = refsIn2(holder.string);
+  if (holder.uid !== value?.uid && holderRefs.length > 1) {
+    const token = scanRefs(holder.string, { nested: false }).find((item) => tokenMatches(item, value));
+    return safeUnlink([{ op: "update", uid: holder.uid, string: removeToken(holder.string, token) }], false, 0);
+  }
+  if (childCountOf(holder) > 0) return unlinkRefused("has-children");
+  if (values.length === 1) {
+    const rest = children.filter((child) => child.uid !== holder.uid);
+    if (!rest.every(isRelationLabel)) return unlinkRefused("has-children");
+    return safeUnlink([{ op: "delete", uid: source.uid }], true, rest.length);
+  }
+  return safeUnlink([{ op: "delete", uid: holder.uid }], false, 0);
+}
+function planFlipOwner({ source, attribute, owner, value, inverse, target } = {}) {
+  if (!isPageEndpoint(owner) || !isPageEndpoint(value)) return flipRefused("not-pages");
+  const inverseName = typeof inverse === "string" ? inverse.trim() : "";
+  if (!inverseName || inverseName.includes("::") || /[[\]\n]/.test(inverseName)) {
+    return flipRefused("no-attribute");
+  }
+  if (isReadOnlyAttribute(attribute) || isReadOnlyAttribute(inverseName)) {
+    return flipRefused("read-only");
+  }
+  const writeOps = [];
+  if (target != null) {
+    if (!target?.uid || typeof target.string !== "string") return flipRefused("changed");
+    const targetParsed = parseAttribute(target.string);
+    if (!targetParsed || !same2(targetParsed.name, inverseName)) return flipRefused("changed");
+    const targetShape = tailShape(targetParsed.tail);
+    if (targetShape.kind === "text") return flipRefused("target-text");
+    if (targetShape.kind === "refs") {
+      const hasOwner = targetShape.values.some((token) => tokenMatches(token, owner));
+      if (!hasOwner) {
+        writeOps.push({
+          op: "update",
+          uid: target.uid,
+          string: `${target.string.replace(/[ \t]+$/, "")} [[${owner.title}]]`
+        });
+      }
+    } else {
+      const targetChildren = Array.isArray(target.children) ? target.children : [];
+      const hasOwner = targetChildren.some((child) => child?.uid === owner.uid || !parseAttribute(child?.string) && refsIn2(child?.string).some((token) => tokenMatches(token, owner)));
+      if (!hasOwner) {
+        writeOps.push({
+          op: "create",
+          parentUid: target.uid,
+          order: "last",
+          string: `[[${owner.title}]]`
+        });
+      }
+    }
+  } else {
+    writeOps.push({
+      op: "create",
+      parentUid: value.uid,
+      order: "last",
+      string: `${inverseName}:: [[${owner.title}]]`
+    });
+  }
+  const unlink = planUnlink({ source, attribute, value });
+  if (unlink.reason) return flipRefused(unlink.reason);
+  const guards = [{ uid: source.uid, string: source.string }];
+  if (target && target.uid !== source.uid) {
+    guards.push({ uid: target.uid, string: target.string });
+  }
+  return safeFlip([...writeOps, ...unlink.ops], guards);
+}
+function formatEndpoint(endpoint) {
+  const isBlock = endpoint?.kind === "block" || endpoint?.kind !== "page" && !(typeof endpoint?.title === "string" && endpoint.title);
+  if (isBlock) {
+    const raw = typeof endpoint?.string === "string" && endpoint.string ? endpoint.string : endpoint?.title ?? endpoint?.uid ?? "";
+    const text = plainText(raw) || String(endpoint?.uid ?? "");
+    return `"${text}"`;
+  }
+  return `[[${endpoint.title}]]`;
+}
+function describeRelation({ owner, attribute, value } = {}) {
+  return `${formatEndpoint(owner)} — ${String(attribute ?? "").trim()}:: ${formatEndpoint(value)}`;
 }
 
 // src/view/features/edit.js
-function createEdit() {
-  return { name: "edit" };
+var REASONS = Object.freeze({
+  changed: "That block changed in Roam. Compass reloaded it; try again.",
+  missing: "The source block is gone. Compass reloaded.",
+  "missing-value": "That value is no longer in its block. Compass reloaded.",
+  "has-children": "That block has nested content, so Compass left it alone and opened it for you.",
+  "read-only": "That attribute belongs to another plugin. Compass reloaded.",
+  "text-value": "That value is plain text, not a link. Compass reloaded.",
+  "not-pages": "Both ends must be pages to move a relation. Compass reloaded.",
+  "no-attribute": "No matching attribute is set for the other page. Compass reloaded.",
+  "target-text": "The attribute on the other page holds plain text. Compass reloaded.",
+  locked: "Another Roam tab is writing this block. Compass reloaded.",
+  forbidden: "Refused a write that touched derived attribute data. Compass reloaded.",
+  empty: "Nothing needed to be written. Compass reloaded."
+});
+var GENERIC_FAILURE = "The write failed. Compass reloaded.";
+function reasonMessage(reason) {
+  return REASONS[reason] ?? GENERIC_FAILURE;
+}
+function evidenceKey(entry) {
+  return `${entry.kind ?? ""}:${entry.direction ?? ""}:${entry.attribute ?? ""}:${entry.sourceUid ?? ""}:${entry.note ?? ""}`;
+}
+function countOtherEvidence(node, targetItem) {
+  if (!Array.isArray(node?.evidence)) return 0;
+  const seen = /* @__PURE__ */ new Set([evidenceKey(targetItem)]);
+  let count2 = 0;
+  for (const entry of node.evidence) {
+    if (!entry) continue;
+    const key = evidenceKey(entry);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    count2 += 1;
+  }
+  return count2;
+}
+function isLinkablePage(endpoint) {
+  return endpoint?.kind === "page" && typeof endpoint.uid === "string" && Boolean(endpoint.uid) && typeof endpoint.title === "string" && Boolean(endpoint.title.trim()) && !endpoint.title.includes("[") && !endpoint.title.includes("]");
+}
+function unlinkValueFor(endpoint) {
+  return endpoint.kind === "page" ? { uid: endpoint.uid, title: endpoint.title } : { uid: endpoint.uid };
+}
+function createEdit(ctx) {
+  let pending = null;
+  let busy = false;
+  let backdrop = null;
+  let titleEl = null;
+  let bodyEl = null;
+  let cancelBtn = null;
+  let confirmBtn = null;
+  function ensureDialog() {
+    if (backdrop || !ctx?.dom?.root || typeof ctx.el !== "function") return backdrop;
+    backdrop = ctx.el("div", "compass-edit-backdrop");
+    backdrop.hidden = true;
+    const dialog = ctx.el("div", "compass-edit-dialog");
+    dialog.setAttribute("role", "alertdialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-labelledby", "compass-edit-title");
+    dialog.setAttribute("aria-describedby", "compass-edit-body");
+    titleEl = ctx.el("h2", "compass-edit-title");
+    titleEl.id = "compass-edit-title";
+    bodyEl = ctx.el("div", "compass-edit-body");
+    bodyEl.id = "compass-edit-body";
+    const actions = ctx.el("div", "compass-edit-actions");
+    cancelBtn = ctx.button("compass-edit-cancel", "Cancel");
+    confirmBtn = ctx.button("compass-edit-confirm", "Unlink");
+    actions.append(cancelBtn, confirmBtn);
+    dialog.append(titleEl, bodyEl, actions);
+    backdrop.append(dialog);
+    ctx.lifecycle.node(backdrop, ctx.dom.root);
+    ctx.lifecycle.event(backdrop, "click", (event) => {
+      if (event.target === backdrop) closeDialog();
+    });
+    ctx.lifecycle.event(backdrop, "keydown", (event) => {
+      if (event.key !== "Tab" || backdrop.hidden) return;
+      const focusable = [cancelBtn, confirmBtn];
+      const index = focusable.indexOf(globalThis.document?.activeElement);
+      if (event.shiftKey && index <= 0) {
+        event.preventDefault();
+        confirmBtn.focus();
+      } else if (!event.shiftKey && (index < 0 || index >= focusable.length - 1)) {
+        event.preventDefault();
+        cancelBtn.focus();
+      }
+    });
+    ctx.lifecycle.event(cancelBtn, "click", () => closeDialog());
+    ctx.lifecycle.event(confirmBtn, "click", ctx.guard(() => confirmPending()));
+    return backdrop;
+  }
+  function closeDialog() {
+    pending = null;
+    if (backdrop) backdrop.hidden = true;
+  }
+  function resolveContext(node, item) {
+    if (!node || !item || item.kind !== "typed" || item.writable !== true || !item.sourceUid) return null;
+    const hood = ctx?.state?.hood;
+    if (!hood?.center?.uid) return null;
+    const center = hood.center;
+    const centerSnap = ctx.state?.snapshot?.center;
+    const centerEndpoint = {
+      uid: center.uid,
+      kind: center.kind === "block" ? "block" : "page",
+      title: center.title,
+      ...center.kind === "block" && typeof centerSnap?.string === "string" ? { string: centerSnap.string } : {}
+    };
+    const nodeEndpoint = {
+      uid: node.uid,
+      kind: node.kind === "block" ? "block" : "page",
+      title: node.title,
+      ...node.kind === "block" && typeof node.string === "string" ? { string: node.string } : {}
+    };
+    let owner;
+    let value;
+    if (item.direction === "out") {
+      owner = centerEndpoint;
+      value = nodeEndpoint;
+    } else if (item.direction === "in") {
+      owner = nodeEndpoint;
+      value = centerEndpoint;
+    } else {
+      return null;
+    }
+    const ownerRole = item.direction === "out" ? item.role : inverseRole(item.role);
+    const inverse = isLinkablePage(owner) && isLinkablePage(value) ? inverseAttribute(item.attribute, ownerRole, hood.settings) : null;
+    return {
+      sourceUid: item.sourceUid,
+      sourceString: item.sourceString ?? null,
+      attribute: item.attribute,
+      owner,
+      value,
+      inverse,
+      otherCount: countOtherEvidence(node, item)
+    };
+  }
+  function openDialog(mode, resolved) {
+    ctx.hideFloating?.();
+    if (!ensureDialog()) return;
+    pending = { mode, ...resolved };
+    bodyEl.replaceChildren();
+    if (mode === "unlink") {
+      titleEl.textContent = "Unlink this relation?";
+      confirmBtn.textContent = "Unlink";
+      const relation = describeRelation({
+        owner: resolved.owner,
+        attribute: resolved.attribute,
+        value: resolved.value
+      });
+      bodyEl.append(
+        ctx.el("p", "compass-edit-relation", relation),
+        ctx.el("p", "compass-edit-note", "This removes one block value. The page and its other links stay.")
+      );
+      const fresh = ctx.host?.sourceBlock?.(resolved.sourceUid) ?? null;
+      const preview = fresh ? planUnlink({ source: fresh, attribute: resolved.attribute, value: unlinkValueFor(resolved.value) }) : null;
+      const labelCount = preview?.removesLabels ?? 0;
+      if (labelCount > 0) {
+        const noun = labelCount === 1 ? "label" : "labels";
+        bodyEl.append(
+          ctx.el("p", "compass-edit-note compass-edit-labels", `This also removes its ${labelCount} ${noun}.`)
+        );
+      }
+      if (resolved.otherCount > 0) {
+        const noun = resolved.otherCount === 1 ? "block" : "blocks";
+        bodyEl.append(
+          ctx.el(
+            "p",
+            "compass-edit-note compass-edit-other",
+            `These two are still connected by ${resolved.otherCount} other ${noun}.`
+          )
+        );
+      }
+    } else {
+      titleEl.textContent = "Move this relation to the other page?";
+      confirmBtn.textContent = "Save relation";
+      const compare = ctx.el("div", "compass-edit-compare");
+      const nowCard = ctx.el("div", "compass-edit-step compass-edit-step-now");
+      nowCard.append(
+        ctx.el("div", "compass-edit-label", "Now"),
+        ctx.el("p", "compass-edit-relation", describeRelation({
+          owner: resolved.owner,
+          attribute: resolved.attribute,
+          value: resolved.value
+        }))
+      );
+      const afterCard = ctx.el("div", "compass-edit-step compass-edit-step-after");
+      afterCard.append(
+        ctx.el("div", "compass-edit-label", "After saving"),
+        ctx.el("p", "compass-edit-relation", describeRelation({
+          owner: resolved.value,
+          attribute: resolved.inverse,
+          value: resolved.owner
+        }))
+      );
+      compare.append(nowCard, afterCard);
+      bodyEl.append(compare);
+    }
+    backdrop.hidden = false;
+    cancelBtn.focus();
+  }
+  function handlePlanRefusal(reason, sourceUid) {
+    ctx.setStatus(reasonMessage(reason));
+    if (reason === "has-children") {
+      void ctx.openSidebar?.(sourceUid, "block");
+    }
+    ctx.load?.();
+  }
+  async function confirmPending() {
+    if (!pending || busy) return;
+    const job = pending;
+    closeDialog();
+    busy = true;
+    try {
+      const source = ctx.host.sourceBlock(job.sourceUid);
+      if (job.mode === "unlink") {
+        const plan2 = planUnlink({
+          source,
+          attribute: job.attribute,
+          value: unlinkValueFor(job.value)
+        });
+        if (plan2.reason) {
+          handlePlanRefusal(plan2.reason, job.sourceUid);
+          return;
+        }
+        const expected = typeof job.sourceString === "string" ? job.sourceString : source.string;
+        const guards2 = [{ uid: job.sourceUid, string: expected }];
+        let result2;
+        try {
+          result2 = await ctx.host.applyPlan({ lockUid: job.sourceUid, guards: guards2, ops: plan2.ops });
+        } catch (error) {
+          console.error("[compass] unlink", error);
+          result2 = { ok: false, reason: "failed" };
+        }
+        if (result2?.ok) ctx.setStatus("Unlinked.");
+        else ctx.setStatus(reasonMessage(result2?.reason));
+        ctx.load();
+        return;
+      }
+      const target = ctx.host.attributeBlock(job.value.uid, job.inverse);
+      const plan = planFlipOwner({
+        source,
+        attribute: job.attribute,
+        owner: job.owner,
+        value: job.value,
+        inverse: job.inverse,
+        target
+      });
+      if (plan.reason) {
+        handlePlanRefusal(plan.reason, job.sourceUid);
+        return;
+      }
+      const guards = plan.guards.map((entry) => entry.uid === job.sourceUid && typeof job.sourceString === "string" ? { uid: entry.uid, string: job.sourceString } : entry);
+      let result;
+      try {
+        result = await ctx.host.applyPlan({ lockUid: job.sourceUid, guards, ops: plan.ops });
+      } catch (error) {
+        console.error("[compass] flip owner", error);
+        result = { ok: false, reason: "failed" };
+      }
+      if (result?.ok) ctx.setStatus(`Moved to [[${job.value.title}]] as ${job.inverse}::`);
+      else ctx.setStatus(reasonMessage(result?.reason));
+      ctx.load();
+    } finally {
+      busy = false;
+    }
+  }
+  return {
+    name: "edit",
+    evidenceActions({ node, item } = {}) {
+      const resolved = resolveContext(node, item);
+      if (!resolved) return [];
+      const actions = [{ title: "Unlink", run: () => openDialog("unlink", resolved) }];
+      if (resolved.inverse) {
+        actions.push({ title: "Flip owner", run: () => openDialog("flip", resolved) });
+      }
+      return actions;
+    },
+    nodeMenu(_uid, node) {
+      if (!node?.writable) return [];
+      const resolved = resolveContext(node, node.writable);
+      if (!resolved) return [];
+      const items = [{ title: "Unlink…", run: () => openDialog("unlink", resolved) }];
+      if (resolved.inverse) {
+        items.push({ title: "Flip owner…", run: () => openDialog("flip", resolved) });
+      }
+      return items;
+    },
+    onEscape() {
+      if (!pending || !backdrop || backdrop.hidden) return false;
+      closeDialog();
+      return true;
+    },
+    onKey(event) {
+      if (!pending || !backdrop || backdrop.hidden) return false;
+      if (event.key === "Tab" || event.key === "Enter" || event.key === " ") return false;
+      return true;
+    },
+    onClose() {
+      closeDialog();
+    },
+    onNavigate(info) {
+      if (info?.changed) closeDialog();
+    }
+  };
 }
 
 // src/view/features/index.js
 var FEATURES = Object.freeze([
-  createTrail,
+  createTrail2,
   createPins,
   createViews,
   createMindMap,
@@ -3012,7 +10976,7 @@ function embeddedTarget(uid) {
   const page = /^(?:#)?\[\[(.+)\]\]$/.exec(text);
   return page ? page[1] : "";
 }
-var REASONS = {
+var REASONS2 = {
   changed: "That block changed in Roam. Compass reloaded it; try again.",
   "missing-value": "That value is no longer in its block. Compass reloaded.",
   "read-only": "That attribute belongs to another plugin. Compass does not rewrite it.",
@@ -3122,7 +11086,7 @@ function visibleRows(rows, open) {
   }
   return shown;
 }
-function clamp(value, low, high) {
+function clamp3(value, low, high) {
   return Math.max(low, Math.min(high, value));
 }
 function curve(sx, sy, ex, ey, vertical) {
@@ -3332,7 +11296,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   const thumbRenderTried = /* @__PURE__ */ new Set();
   let thumbRenderChain = Promise.resolve();
   let plexusOff = null;
-  let plexusApi = null;
+  let plexusApi2 = null;
   let plexusFramePending = false;
   let followGen = 0;
   let compassNavUntil = 0;
@@ -3429,7 +11393,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const { minX, minY, maxX, maxY } = geometry.bounds;
     const width = Math.max(1, maxX - minX + 48);
     const height = Math.max(1, maxY - minY + 48);
-    zoom = clamp(Math.min(1, (rect.width || width) / width, (rect.height || height) / height), 0.3, 1);
+    zoom = clamp3(Math.min(1, (rect.width || width) / width, (rect.height || height) / height), 0.3, 1);
     panX = -((minX + maxX) / 2) * zoom;
     panY = -((minY + maxY) / 2) * zoom;
     applyCamera(glide);
@@ -3444,7 +11408,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   function setCamera(camera = {}, glide = false) {
     if (Number.isFinite(camera?.panX)) panX = camera.panX;
     if (Number.isFinite(camera?.panY)) panY = camera.panY;
-    if (Number.isFinite(camera?.zoom)) zoom = clamp(camera.zoom, 0.25, 2.5);
+    if (Number.isFinite(camera?.zoom)) zoom = clamp3(camera.zoom, 0.25, 2.5);
     applyCamera(glide === true);
   }
   function setGeometry(next) {
@@ -3809,7 +11773,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     }
     if (hood.center.plexus === "drawing") renderDrawingParts(element, box);
   }
-  function placeElement(element, box) {
+  function placeElement2(element, box) {
     element.style.width = `${box.w}px`;
     element.style.height = `${box.h}px`;
     element.style.transform = `translate(${box.x - box.w / 2}px, ${box.y - box.h / 2}px)`;
@@ -4311,18 +12275,18 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   }
   function subscribePlexus() {
     const api = plexus();
-    if (plexusOff && plexusApi === api) return;
+    if (plexusOff && plexusApi2 === api) return;
     if (plexusOff) plexusOff();
     if (!api || typeof api.addEventListener !== "function") return;
     api.addEventListener("change", plexusChanged);
-    plexusApi = api;
+    plexusApi2 = api;
     plexusOff = () => {
       try {
         api.removeEventListener?.("change", plexusChanged);
       } catch {
       }
       plexusOff = null;
-      plexusApi = null;
+      plexusApi2 = null;
     };
   }
   function onPlexusReady() {
@@ -4390,7 +12354,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
         nodeEls.set(uid, element);
         const [dx, dy] = ENTER_FROM[box.zone] ?? [0, 0];
         element.style.opacity = "0";
-        placeElement(element, { ...box, x: box.x + dx, y: box.y + dy });
+        placeElement2(element, { ...box, x: box.x + dx, y: box.y + dy });
         entering.push(element);
       }
       element.className = nodeClass(node, isCenter);
@@ -4414,7 +12378,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
         element.title = `${node.title}${why}`;
         attachThumb(element, node);
       }
-      if (!entering.includes(element)) placeElement(element, box);
+      if (!entering.includes(element)) placeElement2(element, box);
       else element.dataset.target = JSON.stringify(box);
     };
     place(hood.center.uid, { ...geometry.center, zone: "center" }, true, null);
@@ -4429,7 +12393,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
           const box = JSON.parse(element.dataset.target ?? "null");
           delete element.dataset.target;
           element.style.opacity = "";
-          if (box) placeElement(element, box);
+          if (box) placeElement2(element, box);
         }
       });
     }
@@ -4492,15 +12456,15 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   function edgeFromCenter(box) {
     const c = geometry.center;
     if (box.zone === "north") {
-      return curve(clamp(box.x, -c.w / 2 + 16, c.w / 2 - 16), -c.h / 2, box.x, box.y + box.h / 2, true);
+      return curve(clamp3(box.x, -c.w / 2 + 16, c.w / 2 - 16), -c.h / 2, box.x, box.y + box.h / 2, true);
     }
     if (box.zone === "south") {
-      return curve(clamp(box.x, -c.w / 2 + 16, c.w / 2 - 16), c.h / 2, box.x, box.y - box.h / 2, true);
+      return curve(clamp3(box.x, -c.w / 2 + 16, c.w / 2 - 16), c.h / 2, box.x, box.y - box.h / 2, true);
     }
     if (box.zone === "west") {
-      return curve(-c.w / 2, clamp(box.y, -c.h / 2 + 12, c.h / 2 - 12), box.x + box.w / 2, box.y, false);
+      return curve(-c.w / 2, clamp3(box.y, -c.h / 2 + 12, c.h / 2 - 12), box.x + box.w / 2, box.y, false);
     }
-    return curve(c.w / 2, clamp(box.y, -c.h / 2 + 12, c.h / 2 - 12), box.x - box.w / 2, box.y, false);
+    return curve(c.w / 2, clamp3(box.y, -c.h / 2 + 12, c.h / 2 - 12), box.x - box.w / 2, box.y, false);
   }
   function edgeFromRow(row, box) {
     const c = geometry.center;
@@ -4624,11 +12588,11 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     pinRow.replaceChildren();
     for (const pin of pins) {
       const chip = el("span", "compass-pin-chip");
-      const jump = button("compass-pin-jump", pin.title);
-      jump.dataset.uid = pin.uid;
+      const jump2 = button("compass-pin-jump", pin.title);
+      jump2.dataset.uid = pin.uid;
       const remove = button("compass-pin-remove", "×", `Unpin ${pin.title}`);
       remove.dataset.uid = pin.uid;
-      chip.append(jump, remove);
+      chip.append(jump2, remove);
       pinRow.append(chip);
     }
     features.each("afterPins", { pinRow, pins });
@@ -4668,8 +12632,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     element.hidden = false;
     const width = element.offsetWidth || 240;
     const height = element.offsetHeight || 160;
-    element.style.left = `${clamp(clientX - rect.left, 8, Math.max(8, rect.width - width - 8))}px`;
-    element.style.top = `${clamp(clientY - rect.top + 6, 8, Math.max(8, rect.height - height - 8))}px`;
+    element.style.left = `${clamp3(clientX - rect.left, 8, Math.max(8, rect.width - width - 8))}px`;
+    element.style.top = `${clamp3(clientY - rect.top + 6, 8, Math.max(8, rect.height - height - 8))}px`;
   }
   function nodeKind(uid) {
     if (uid === hood?.center?.uid) return hood.center.kind;
@@ -4709,6 +12673,16 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   function showMenu(uid, clientX, clientY) {
     hideFloating();
     const node = nodeByUid.get(uid);
+    if (node?.kind === "group") {
+      for (const extra of features.collect("nodeMenu", uid, node)) {
+        if (extra?.title && typeof extra.run === "function") menuItem(extra.title, extra.run);
+      }
+      if (menu.childElementCount > 0) {
+        placeFloating(menu, clientX, clientY);
+        menu.querySelector("button")?.focus();
+      }
+      return;
+    }
     const isCenter = uid === hood?.center?.uid;
     if (!isCenter) menuItem("Focus here", () => focusUid(uid));
     addShowOnBoard(uid);
@@ -4859,7 +12833,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       result = { ok: false, reason: "failed" };
     }
     if (result?.ok) setStatus(`Moved to ${SIDE_NAME[side]} as ${attribute}::`);
-    else setStatus(REASONS[result?.reason] ?? "The write failed. Compass reloaded.");
+    else setStatus(REASONS2[result?.reason] ?? "The write failed. Compass reloaded.");
     load();
   }
   function handleDrop(uid, side) {
@@ -4942,7 +12916,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const rect = root.getBoundingClientRect();
     ghost.style.left = `${event.clientX - rect.left + 10}px`;
     ghost.style.top = `${event.clientY - rect.top + 10}px`;
-    const side = geometry ? sideAt(clientToWorld(event.clientX, event.clientY), geometry.center) : null;
+    const side = geometry ? sideAt(clientToWorld(event.clientX, event.clientY), geometry.center, geometry.flip === true) : null;
     for (const [name, hint] of Object.entries(hints)) hint.classList.toggle("compass-hint-hot", name === side);
   }
   function onPointerUp(event) {
@@ -4957,7 +12931,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (state2.type !== "node") return;
     endDrag();
     if (event.type === "pointercancel" || !geometry) return;
-    handleDrop(state2.uid, sideAt(clientToWorld(event.clientX, event.clientY), geometry.center));
+    handleDrop(state2.uid, sideAt(clientToWorld(event.clientX, event.clientY), geometry.center, geometry.flip === true));
   }
   function onWheel(event) {
     if (root.hidden) return;
@@ -4968,8 +12942,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const oy = event.clientY - rect.top - rect.height / 2;
     const wx = (ox - panX) / zoom;
     const wy = (oy - panY) / zoom;
-    const step = event.ctrlKey ? 1.04 : 1.12;
-    zoom = clamp(zoom * (event.deltaY < 0 ? step : 1 / step), 0.25, 2.5);
+    const step2 = event.ctrlKey ? 1.04 : 1.12;
+    zoom = clamp3(zoom * (event.deltaY < 0 ? step2 : 1 / step2), 0.25, 2.5);
     panX = ox - wx * zoom;
     panY = oy - wy * zoom;
     applyCamera(false);
@@ -5218,7 +13192,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       if (!items.length) return;
-      activeResult = clamp(activeResult + (event.key === "ArrowDown" ? 1 : -1), 0, items.length - 1);
+      activeResult = clamp3(activeResult + (event.key === "ArrowDown" ? 1 : -1), 0, items.length - 1);
       markResult();
     } else if (event.key === "Enter") {
       event.preventDefault();
@@ -5269,7 +13243,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       return;
     }
     const element = event.target.closest?.(".compass-node");
-    if (element && (event.key === "Enter" || event.key === " ")) {
+    if (element && element.dataset.kind !== "group" && (event.key === "Enter" || event.key === " ")) {
       event.preventDefault();
       if (event.shiftKey) void openSidebar(element.dataset.uid);
       else if (!element.classList.contains("compass-node-center")) focusUid(element.dataset.uid);
@@ -5351,7 +13325,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     button,
     svg,
     guard,
-    clamp,
+    clamp: clamp3,
     curve,
     later,
     cancel,
@@ -5472,8 +13446,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       void savePins((settings?.pins ?? []).filter((pin) => pin.uid !== remove.dataset.uid)).catch((error) => console.error("[compass]", error));
       return;
     }
-    const jump = event.target.closest?.(".compass-pin-jump");
-    if (jump) focusUid(jump.dataset.uid);
+    const jump2 = event.target.closest?.(".compass-pin-jump");
+    if (jump2) focusUid(jump2.dataset.uid);
   });
   lifecycle.event(searchInput, "focus", () => {
     if (!searchInput.value.trim()) showEmptyQuery();

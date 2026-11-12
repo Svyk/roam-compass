@@ -4,6 +4,35 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-11
+
+### Added
+
+- Three canvas views. Compass is the directional view from before. Mind Map makes the center the root of a tree, several generations deep, with parents above; chevrons and Alt+Enter fold branches, and a page already on the map is drawn dashed and not expanded again. Facets sorts the center's neighbors into categories. The view is remembered.
+- Facets presets: Local roles, By type and Status board are built in. A preset is JSON with a source (attribute, type, role, kind or rule), two to seven categories and one of five layouts. The preset editor duplicates, edits, imports and copies presets. Neighbors that match nothing go to Unassigned; neighbors that match twice go to Conflicting.
+- Views and lenses panel. It holds the view switch, a quick filter by keyword, kind and type, Keep layout or Reflow, and saved lenses that show, hide or color matching nodes. Lenses import and copy as JSON. The kind chips and the Filter box moved here from the bar.
+- Group folds neighbors of the same type into one group per side with a count. Expanded shows each neighbor's children under it. Flip East–West and One-sided layout change where the lateral sides sit. Trackpad navigation pans on scroll and zooms on pinch.
+- Footprints lists every stop since load, newest first, repeats included. Copy as Markdown copies the trail. Start here clears it down to the current page.
+- Pins for Today, This week and This month. A page that does not exist is created only after a confirmation. Pins reorder by drag or by Move left and Move right.
+- Keyboard: arrows move a selection across the map, Alt+arrows jump between sides, typing selects a visible node by name, Backspace goes back, Ctrl/Cmd+arrows add a related page. Alt+. opens a command palette and Alt+? lists the shortcuts.
+- Zen hides the bar and pins. Fullscreen covers the right sidebar. Wander walks from page to page at 3 to 15 seconds per move and pauses on any input.
+- Export: the map as a Markdown outline with page and block links, the trail as Markdown, and a PNG of the whole canvas or the viewport at 1×, 2× or 3× with an optional transparent background.
+- Paired fields. `Name|Partner` in a role list labels each end of a relation with its own word. `Parent|Child` and `Previous|Next` are paired by default.
+- Unlink removes one value of one relation block after a confirmation. Flip owner moves the declaration to the other page with the inverse field, writing the new block before removing the old one. A block with nested content other than relation labels is never deleted; Compass opens it instead.
+- `window.RoamCompass` is `apiVersion` 2. It adds `version`, `ontology()`, `neighborhood(uid)`, `search(text, limit)`, `canvas()`, `setView(view, preset)`, `trail()`, `commands()` and `run(id)`. The earlier members are unchanged.
+- Roam palette commands Compass: Mind Map, Compass: Facets and Compass: Wander.
+- Node type attribute setting (`Type` by default) names the attribute that gives a page its type.
+
+### Changed
+
+- The bar is shorter. Fit, Refresh, Show linked window, Cross links, With links, Send to drawing and the exports are under More.
+
+### Fixed
+
+- The list of pins and recent pages no longer opens over the map after every navigation. It opens when the search box has focus.
+- Start writing fits inside an empty page's node.
+- With Flip East–West or One-sided layout, edges leave the near side of each card.
+
 ## [0.9.1] - 2026-10-06
 
 ### Fixed
