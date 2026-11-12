@@ -1,1 +1,134 @@
 /* trail */
+
+.compass-root .compass-trail-panel {
+  position: absolute;
+  z-index: 11;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: 340px;
+  max-width: calc(100% - 16px);
+  max-height: min(420px, calc(100% - 56px));
+  overflow: hidden;
+  border: 1px solid var(--compass-line);
+  border-radius: 6px;
+  background: var(--compass-paper);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  font-size: 13px;
+}
+
+.compass-root .compass-trail-panel[hidden] {
+  display: none;
+}
+
+.compass-root .compass-trail-header {
+  display: flex;
+  flex: none;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--compass-faint);
+}
+
+.compass-root .compass-trail-heading {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.compass-root .compass-trail-count {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.compass-root .compass-trail-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.compass-root .compass-trail-empty {
+  padding: 10px 8px;
+  font-size: 12px;
+  text-align: center;
+  opacity: 0.65;
+}
+
+.compass-root .compass-trail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  text-align: left;
+}
+
+.compass-root .compass-trail-row:focus-visible {
+  outline-offset: -1px;
+}
+
+.compass-root .compass-trail-row-current {
+  border-color: color-mix(in srgb, var(--compass-accent) 45%, transparent);
+  background: color-mix(in srgb, var(--compass-accent) 10%, var(--compass-paper));
+  font-weight: 600;
+}
+
+.compass-root .compass-trail-row-current:hover {
+  background: color-mix(in srgb, var(--compass-accent) 16%, var(--compass-paper));
+}
+
+.compass-root .compass-trail-row-current::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--compass-accent);
+}
+
+.compass-root .compass-trail-row[data-kind="block"] .compass-trail-title {
+  font-style: italic;
+}
+
+.compass-root .compass-trail-row-missing .compass-trail-title {
+  text-decoration: line-through;
+}
+
+.compass-root .compass-trail-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.compass-root .compass-trail-time {
+  flex: none;
+  font-size: 11px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.62;
+}
+
+.compass-root .compass-trail-footer {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--compass-faint);
+}
+
+.compass-root .compass-trail-footer button {
+  padding: 3px 8px;
+  font-size: 12px;
+}
