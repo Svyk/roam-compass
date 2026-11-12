@@ -1007,6 +1007,43 @@ export function createHost({ lifecycle }) {
     return run;
   }
 
+  function attributeBlock(pageUid, attribute) {
+    const target = typeof attribute === "string" ? attribute.trim().toLowerCase() : "";
+    if (typeof pageUid !== "string" || !pageUid || !target) return null;
+    try {
+      const api = roamApi()?.data;
+      if (typeof api?.pull !== "function") return null;
+      const pulled = pull(api, ATTR_PULL, pageUid);
+      const children = [...asList(pulled?.[":block/children"])]
+        .sort((a, b) => (a?.[":block/order"] ?? 0) - (b?.[":block/order"] ?? 0));
+      for (const child of children) {
+        const uid = child?.[":block/uid"];
+        const string = child?.[":block/string"];
+        if (typeof uid !== "string" || !uid || typeof string !== "string") continue;
+        const parsed = parseAttribute(string);
+        if (parsed && parsed.name.toLowerCase() === target) {
+          return { uid, string };
+        }
+      }
+      return null;
+    } catch (error) {
+      console.error("[compass] attribute block", error);
+      return null;
+    }
+  }
+
+  function sourceBlock(uid) {
+    if (typeof uid !== "string" || !uid) return null;
+    try {
+      const api = roamApi()?.data;
+      if (typeof api?.pull !== "function") return null;
+      return sourceOf(pull(api, SOURCE, uid));
+    } catch (error) {
+      console.error("[compass] source block", error);
+      return null;
+    }
+  }
+
   lifecycle.add(() => closeSidecar());
   lifecycle.add(() => unwatch());
   lifecycle.add(() => { alive = false; });
@@ -1037,6 +1074,8 @@ export function createHost({ lifecycle }) {
     dailyPage,
     pageAttributes,
     applyPlan,
+    attributeBlock,
+    sourceBlock,
     blockContextMenu() {
       return roamApi()?.ui?.blockContextMenu ?? null;
     },

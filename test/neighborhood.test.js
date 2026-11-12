@@ -554,3 +554,94 @@ test("opener: a rejected open is logged only, with no host fallback", async () =
     assert.equal(r.errors[0][0], "[compass] open");
   } finally { r.restore(); }
 });
+
+test("modelSettings builds ontology pairs, keeps plain role lists unchanged, and stays idempotent", () => {
+  const defaults = modelSettings({});
+  assert.deepEqual(defaults.lists.parent, [
+    "Parent", "Up", "Part of", "Is a", "Type", "Category", "Project", "BT_attrProject",
+  ]);
+  assert.deepEqual(defaults.lists.child, ["Child", "Has part", "Contains"]);
+  assert.equal(defaults.pairs.get("parent"), "Child");
+  assert.equal(defaults.pairs.get("child"), "Parent");
+  assert.equal(defaults.pairs.get("previous"), "Next");
+  assert.equal(defaults.pairs.get("next"), "Previous");
+
+  const paired = modelSettings({ parent: "Guide|Explains, Parent", child: "Child, Has part" });
+  assert.deepEqual(paired.lists.parent, ["Guide", "Parent"]);
+  assert.deepEqual(paired.lists.child, ["Child", "Has part", "Explains"]);
+  assert.equal(paired.pairs.get("guide"), "Explains");
+  assert.equal(paired.pairs.get("explains"), "Guide");
+  assert.deepEqual(roleOf("explains", paired), { role: "child", explicit: true });
+
+  const again = modelSettings(paired);
+  assert.deepEqual(again.lists, paired.lists);
+  assert.deepEqual([...again.pairs], [...paired.pairs]);
+});
+
+test("paired fields flip incoming captions and edge labels while preserving raw evidence attributes", () => {
+  const settings = { parent: "Guide|Explains, Parent" };
+
+  const fromAuthor = buildNeighborhood(snap({
+    center: { uid: "t2", kind: "page", title: "Task Two" },
+    out: [{
+      uid: "h-out",
+      attribute: "Guide",
+      source: source("s-guide", "Guide:: [[Programs]]", [], "t2"),
+      values: [page("prog", "Programs")],
+      labels: [],
+    }],
+  }), settings);
+  const programs = fromAuthor.nodes.find((node) => node.uid === "prog");
+  assert.equal(programs.zone, "north");
+  assert.equal(programs.label, "Guide");
+  assert.equal(programs.evidence[0].attribute, "Guide");
+  assert.equal(programs.evidence[0].caption, "Guide");
+
+  const fromTarget = buildNeighborhood(snap({
+    center: { uid: "prog", kind: "page", title: "Programs" },
+    in: [{
+      uid: "h-in",
+      attribute: "Guide",
+      entity: page("t2", "Task Two"),
+      source: source("s-guide", "Guide:: [[Programs]]", [], "t2"),
+      valueSourceUids: ["s-guide"],
+      labels: [{ attribute: "Scope", text: "Core" }],
+    }],
+  }), settings);
+  const taskTwo = fromTarget.nodes.find((node) => node.uid === "t2");
+  assert.equal(taskTwo.zone, "south");
+  assert.equal(taskTwo.label, "Explains · Scope: Core");
+  assert.equal(taskTwo.evidence[0].attribute, "Guide");
+  assert.equal(taskTwo.evidence[0].caption, "Explains");
+  assert.equal(taskTwo.writable.attribute, "Guide");
+  assert.equal(taskTwo.writable.caption, "Explains");
+
+  const builtins = buildNeighborhood(snap({
+    in: [
+      {
+        uid: "h-par",
+        attribute: "Parent",
+        entity: page("kid", "Subproject"),
+        source: source("s-par", "Parent:: [[Center]]", [], "kid"),
+        valueSourceUids: [],
+        labels: [],
+      },
+      {
+        uid: "h-prev",
+        attribute: "Previous",
+        entity: page("step2", "Step Two"),
+        source: source("s-prev", "Previous:: [[Center]]", [], "step2"),
+        valueSourceUids: [],
+        labels: [],
+      },
+    ],
+  }));
+  const sub = builtins.nodes.find((node) => node.uid === "kid");
+  const step = builtins.nodes.find((node) => node.uid === "step2");
+  assert.equal(sub.zone, "south");
+  assert.equal(sub.label, "Child");
+  assert.equal(sub.evidence[0].attribute, "Parent");
+  assert.equal(step.zone, "east");
+  assert.equal(step.label, "Next");
+  assert.equal(step.evidence[0].attribute, "Previous");
+});

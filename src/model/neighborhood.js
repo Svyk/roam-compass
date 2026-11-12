@@ -1,3 +1,4 @@
+import { buildOntology, captionFor } from "./ontology.js";
 import { drawingTitle, parseAttribute, plainText, regionOwner, scanRefs, splitNames, tailShape } from "./text.js";
 
 // One center, six relationship roles, four directions. Siblings sit in their own band.
@@ -62,16 +63,26 @@ function sortMode(value) {
 }
 
 export function modelSettings(raw = {}) {
-  const lists = {};
-  for (const role of ROLES) lists[role] = splitNames(raw[role] ?? MODEL_DEFAULTS[role]);
+  let lists;
+  let pairs;
+  if (raw?.lists && raw?.pairs instanceof Map && ROLES.every((role) => raw[role] == null)) {
+    lists = {};
+    for (const role of ROLES) lists[role] = [...(raw.lists[role] ?? [])];
+    pairs = new Map(raw.pairs);
+  } else {
+    const rawLists = {};
+    for (const role of ROLES) rawLists[role] = raw?.[role] ?? MODEL_DEFAULTS[role];
+    ({ lists, pairs } = buildOntology(rawLists));
+  }
   return {
     lists,
-    hidden: splitNames(raw.hidden ?? MODEL_DEFAULTS.hidden),
-    links: flag(raw.links, true),
-    siblings: flag(raw.siblings, true),
-    badges: flag(raw.badges, true),
-    maxPerZone: count(raw.maxPerZone, 12),
-    sort: sortMode(raw.sort),
+    pairs,
+    hidden: splitNames(raw?.hidden ?? MODEL_DEFAULTS.hidden),
+    links: flag(raw?.links, true),
+    siblings: flag(raw?.siblings, true),
+    badges: flag(raw?.badges, true),
+    maxPerZone: count(raw?.maxPerZone, 12),
+    sort: sortMode(raw?.sort),
   };
 }
 
@@ -430,6 +441,7 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
         role: mapping.role,
         explicit: mapping.explicit,
         attribute: harc.attribute,
+        caption: captionFor(harc.attribute, "out", settings.pairs),
         labels: labelsText(harc.labels),
         sourceUid: harc.source?.uid ?? null,
         sourceString: harc.source?.string ?? null,
@@ -450,6 +462,7 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
       role: inverseRole(mapping.role),
       explicit: mapping.explicit,
       attribute: harc.attribute,
+      caption: captionFor(harc.attribute, "in", settings.pairs),
       labels: labelsText(harc.labels),
       sourceUid: harc.source?.uid ?? null,
       sourceString: harc.source?.string ?? null,
@@ -512,7 +525,7 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
       strength: picked.strength,
       style: picked.strongest[0].kind,
       evidence: items,
-      label: [...new Set(typed.map((item) => [item.attribute, ...item.labels].join(" · ")))].join(" | "),
+      label: [...new Set(typed.map((item) => [item.caption ?? item.attribute, ...item.labels].join(" · ")))].join(" | "),
       writable: typed.length === 1 && typed[0].writable ? typed[0] : null,
       via: null,
     });
