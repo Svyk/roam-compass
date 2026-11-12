@@ -59,6 +59,8 @@ const ALIAS_QUERY = `[:find ?uid ?s :in $ [?uid ...] :where [?p :block/uid ?uid]
 const CHILD_COUNT_QUERY = "[:find ?uid (count ?c) :in $ [?uid ...] :where [?p :block/uid ?uid] [?p :block/children ?c]]";
 const DRAWING_ON_PAGE_QUERY = "[:find ?uid ?s :in $ ?title :where [?p :node/title ?title] [?p :block/children ?b] [?b :block/uid ?uid] [?b :block/string ?s]]";
 const ATTR_PULL = "[:block/uid {:block/children [:block/uid :block/string :block/order]}]";
+const ATTR_BLOCK_PULL = "[:block/uid {:block/children [:block/uid :block/string :block/order {:block/children [:block/uid :block/string :block/order]}]}]";
+const SOURCE_BLOCK_PULL = "[:block/uid :block/string :block/order {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order {:block/children [:block/uid]}]}]";
 const RECENT_PAGES_QUERY = "[:find ?uid ?title ?edit ?create :where [?e :node/title ?title] [?e :block/uid ?uid] [?e :edit/time ?edit] [?e :create/time ?create]]";
 const RECENT_DRAWINGS_QUERY = `[:find ?uid ?edit :where [?b :block/uid ?uid] [?b :block/string ?s] [(clojure.string/includes? ?s "excalidraw")] [?b :edit/time ?edit]]`;
 const ENTITY_PULL = "[:block/uid :node/title :block/string]";
@@ -1007,6 +1009,83 @@ export function createHost({ lifecycle }) {
     return run;
   }
 
+  function attributeBlock(pageUid, attribute) {
+    const target = typeof attribute === "string" ? attribute.trim().toLowerCase() : "";
+    if (typeof pageUid !== "string" || !pageUid || !target) return null;
+    try {
+      const api = roamApi()?.data;
+      if (typeof api?.pull !== "function") return null;
+      const pulled = pull(api, ATTR_BLOCK_PULL, pageUid);
+      const children = [...asList(pulled?.[":block/children"])]
+        .sort((a, b) => (a?.[":block/order"] ?? 0) - (b?.[":block/order"] ?? 0));
+      for (const child of children) {
+        const uid = child?.[":block/uid"];
+        const string = child?.[":block/string"];
+        if (typeof uid !== "string" || !uid || typeof string !== "string") continue;
+        const parsed = parseAttribute(string);
+        if (parsed && parsed.name.toLowerCase() === target) {
+          const nested = asList(child[":block/children"])
+            .map((item) => {
+              const itemUid = item?.[":block/uid"];
+              const itemString = item?.[":block/string"];
+              if (typeof itemUid !== "string" || !itemUid || typeof itemString !== "string") return null;
+              return {
+                uid: itemUid,
+                string: itemString,
+                order: Number.isFinite(item[":block/order"]) ? item[":block/order"] : 0,
+              };
+            })
+            .filter(Boolean)
+            .sort(byOrder);
+          return { uid, string, children: nested };
+        }
+      }
+      return null;
+    } catch (error) {
+      console.error("[compass] attribute block", error);
+      return null;
+    }
+  }
+
+  function sourceBlock(uid) {
+    if (typeof uid !== "string" || !uid) return null;
+    try {
+      const api = roamApi()?.data;
+      if (typeof api?.pull !== "function") return null;
+      const node = pull(api, SOURCE_BLOCK_PULL, uid);
+      const blockUid = node?.[":block/uid"];
+      if (typeof blockUid !== "string" || !blockUid || typeof node[":block/string"] !== "string") return null;
+      const parentUid = asList(node[":block/_children"])[0]?.[":block/uid"];
+      const children = asList(node[":block/children"])
+        .map((child) => {
+          const childUid = child?.[":block/uid"];
+          const childString = child?.[":block/string"];
+          if (typeof childUid !== "string" || !childUid || typeof childString !== "string") return null;
+          const childCount = asList(child[":block/children"])
+            .filter((grand) => typeof grand?.[":block/uid"] === "string" && grand[":block/uid"])
+            .length;
+          return {
+            uid: childUid,
+            string: childString,
+            order: Number.isFinite(child[":block/order"]) ? child[":block/order"] : 0,
+            childCount,
+          };
+        })
+        .filter(Boolean)
+        .sort(byOrder);
+      return {
+        uid: blockUid,
+        string: node[":block/string"],
+        order: Number.isFinite(node[":block/order"]) ? node[":block/order"] : null,
+        parentUid: typeof parentUid === "string" ? parentUid : null,
+        children,
+      };
+    } catch (error) {
+      console.error("[compass] source block", error);
+      return null;
+    }
+  }
+
   lifecycle.add(() => closeSidecar());
   lifecycle.add(() => unwatch());
   lifecycle.add(() => { alive = false; });
@@ -1037,6 +1116,8 @@ export function createHost({ lifecycle }) {
     dailyPage,
     pageAttributes,
     applyPlan,
+    attributeBlock,
+    sourceBlock,
     blockContextMenu() {
       return roamApi()?.ui?.blockContextMenu ?? null;
     },

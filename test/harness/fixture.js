@@ -1151,6 +1151,55 @@ export function createFakeHost(graph = createGraph(), { lifecycle } = {}) {
     });
   }
 
+  function attributeBlock(...args) {
+    record("attributeBlock", args);
+    const [pageUid, attribute] = args;
+    const target = typeof attribute === "string" ? attribute.trim().toLowerCase() : "";
+    if (typeof pageUid !== "string" || !pageUid || !target) return null;
+    const index = buildIndex(graph);
+    const page = index.pagesByUid.get(pageUid);
+    if (!page) return null;
+    for (const child of [...(page.children ?? [])].sort(byOrder)) {
+      const parsed = parseAttribute(child.string);
+      if (parsed && parsed.name.toLowerCase() === target) {
+        const children = [...(child.children ?? [])]
+          .sort(byOrder)
+          .map((item) => ({
+            uid: item.uid,
+            string: item.string ?? "",
+            order: Number.isFinite(item.order) ? item.order : 0,
+          }));
+        return { uid: child.uid, string: child.string ?? "", children };
+      }
+    }
+    return null;
+  }
+
+  function sourceBlock(...args) {
+    record("sourceBlock", args);
+    const [uid] = args;
+    if (typeof uid !== "string" || !uid) return null;
+    const index = buildIndex(graph);
+    const hit = index.blocksByUid.get(uid);
+    if (!hit) return null;
+    const { block, parent } = hit;
+    const children = [...(block.children ?? [])]
+      .sort(byOrder)
+      .map((child) => ({
+        uid: child.uid,
+        string: child.string ?? "",
+        order: Number.isFinite(child.order) ? child.order : 0,
+        childCount: (child.children ?? []).filter((grand) => grand?.uid).length,
+      }));
+    return {
+      uid: block.uid,
+      string: block.string ?? "",
+      order: Number.isFinite(block.order) ? block.order : null,
+      parentUid: parent?.uid ?? null,
+      children,
+    };
+  }
+
   if (lifecycle?.add) {
     lifecycle.add(() => closeSidecarInternal());
     lifecycle.add(() => { watchState = null; });
@@ -1188,5 +1237,7 @@ export function createFakeHost(graph = createGraph(), { lifecycle } = {}) {
     dailyPage,
     pageAttributes,
     applyPlan,
+    attributeBlock,
+    sourceBlock,
   };
 }

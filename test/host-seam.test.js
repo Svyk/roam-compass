@@ -291,3 +291,118 @@ test("host.applyPlan covers happy path, missing, changed, forbidden, empty, and 
     delete globalThis.roamAlphaAPI;
   }
 });
+
+test("host.attributeBlock finds the first matching direct child case-insensitively with its children and catches errors", () => {
+  const seen = [];
+  installRoam({
+    data: {
+      pull(pattern, ref) {
+        seen.push([pattern, ref]);
+        if (ref.includes('"p-prog"')) {
+          return {
+            ":block/uid": "p-prog",
+            ":block/children": [
+              { ":block/uid": "b-second", ":block/string": "Child:: [[Project Beta]]", ":block/order": 2 },
+              { ":block/uid": "b-note", ":block/string": "Plain note", ":block/order": 0 },
+              {
+                ":block/uid": "b-first",
+                ":block/string": "[[child]]::",
+                ":block/order": 1,
+                ":block/children": [
+                  { ":block/uid": "gc-2", ":block/string": "[[Project Alpha]]", ":block/order": 1 },
+                  { ":block/uid": "gc-1", ":block/string": "[[Project Gamma]]", ":block/order": 0 },
+                ],
+              },
+            ],
+          };
+        }
+        if (ref.includes('"boom"')) throw new Error("pull failed");
+        return null;
+      },
+    },
+  });
+  const errors = [];
+  const originalError = console.error;
+  console.error = (...args) => errors.push(args);
+  const host = createHost({ lifecycle: createLifecycle() });
+  try {
+    assert.deepEqual(host.attributeBlock("p-prog", "Child"), {
+      uid: "b-first",
+      string: "[[child]]::",
+      children: [
+        { uid: "gc-1", string: "[[Project Gamma]]", order: 0 },
+        { uid: "gc-2", string: "[[Project Alpha]]", order: 1 },
+      ],
+    });
+    assert.equal(
+      seen[0][0],
+      "[:block/uid {:block/children [:block/uid :block/string :block/order {:block/children [:block/uid :block/string :block/order]}]}]",
+    );
+    assert.equal(host.attributeBlock("p-prog", "Parent"), null);
+    assert.equal(host.attributeBlock("missing", "Child"), null);
+    assert.equal(host.attributeBlock("", "Child"), null);
+    assert.equal(host.attributeBlock("p-prog", "   "), null);
+    assert.equal(host.attributeBlock("boom", "Child"), null);
+    assert.ok(errors.some((line) => String(line[0]).startsWith("[compass]")));
+  } finally {
+    console.error = originalError;
+    delete globalThis.roamAlphaAPI;
+  }
+});
+
+test("host.sourceBlock pulls one level deeper for childCount without changing SOURCE and catches errors", () => {
+  const seen = [];
+  installRoam({
+    data: {
+      pull(pattern, ref) {
+        seen.push([pattern, ref]);
+        if (ref.includes('"b-rel"')) {
+          return {
+            ":block/uid": "b-rel",
+            ":block/string": "Child::",
+            ":block/order": 3,
+            ":block/_children": [{ ":block/uid": "p-alpha" }],
+            ":block/children": [
+              {
+                ":block/uid": "c-2",
+                ":block/string": "[[Task Two]]",
+                ":block/order": 1,
+                ":block/children": [{ ":block/uid": "n-1" }, { ":block/uid": "n-2" }],
+              },
+              { ":block/uid": "c-1", ":block/string": "[[Task One]]", ":block/order": 0 },
+            ],
+          };
+        }
+        if (ref.includes('"boom"')) throw new Error("source pull failed");
+        return null;
+      },
+    },
+  });
+  const errors = [];
+  const originalError = console.error;
+  console.error = (...args) => errors.push(args);
+  const host = createHost({ lifecycle: createLifecycle() });
+  try {
+    assert.deepEqual(host.sourceBlock("b-rel"), {
+      uid: "b-rel",
+      string: "Child::",
+      order: 3,
+      parentUid: "p-alpha",
+      children: [
+        { uid: "c-1", string: "[[Task One]]", order: 0, childCount: 0 },
+        { uid: "c-2", string: "[[Task Two]]", order: 1, childCount: 2 },
+      ],
+    });
+    assert.equal(
+      seen[0][0],
+      "[:block/uid :block/string :block/order {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order {:block/children [:block/uid]}]}]",
+    );
+    assert.equal(host.sourceBlock("missing"), null);
+    assert.equal(host.sourceBlock(""), null);
+    assert.equal(host.sourceBlock("boom"), null);
+    assert.ok(errors.some((line) => String(line[0]).startsWith("[compass]")));
+  } finally {
+    console.error = originalError;
+    delete globalThis.roamAlphaAPI;
+  }
+});
