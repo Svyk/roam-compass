@@ -1825,17 +1825,18 @@ function createHost({ lifecycle }) {
     if (!found || typeof found.uid !== "string" || typeof found.title !== "string") return null;
     return { uid: found.uid, title: found.title };
   }
-  async function createPage(title) {
+  async function createPage(title, uid) {
     if (typeof title !== "string" || !title.trim()) return null;
     try {
       const existing = findPageByTitle(title);
       if (existing?.uid) return existing.uid;
       const root = roamApi();
       const create = root?.data?.page?.create;
-      const uid = root?.util?.generateUID?.();
-      if (typeof create !== "function" || typeof uid !== "string" || !uid) return null;
-      await create({ page: { title, uid } });
-      return uid;
+      const explicitUid = typeof uid === "string" ? uid.trim() : "";
+      const targetUid = explicitUid || root?.util?.generateUID?.();
+      if (typeof create !== "function" || typeof targetUid !== "string" || !targetUid) return null;
+      await create({ page: { title, uid: targetUid } });
+      return targetUid;
     } catch (error) {
       console.error("[compass] create page", error);
       return null;
@@ -2243,6 +2244,85 @@ function rankDrawings(centreRefs, rows) {
   }
   ranked.sort((a, b) => b.score - a.score || (b.row.editTime ?? 0) - (a.row.editTime ?? 0));
   return ranked.slice(0, CAP).map((item) => item.row);
+}
+
+// src/model/facts.js
+function stringField(value) {
+  return typeof value === "string" ? value : "";
+}
+function valueString(raw) {
+  if (typeof raw === "string") return raw.trim();
+  if (!raw || typeof raw !== "object") return "";
+  if (typeof raw.title === "string") return raw.title.trim();
+  if (typeof raw.text === "string") return raw.text.trim();
+  return "";
+}
+function normalizeAttributes(attributes) {
+  const out = {};
+  if (!attributes || typeof attributes !== "object") return out;
+  for (const [rawKey, entry] of Object.entries(attributes)) {
+    const key = rawKey.trim().toLowerCase();
+    if (!key) continue;
+    const rawValues = Array.isArray(entry?.values) ? entry.values : Array.isArray(entry) ? entry : [];
+    const values = [];
+    for (const item of rawValues) {
+      const text = valueString(item);
+      if (text) values.push(text);
+    }
+    if (!values.length) continue;
+    if (out[key]) out[key].push(...values);
+    else out[key] = values;
+  }
+  return out;
+}
+function typeOf(attributes, typeAttribute) {
+  const target = typeof typeAttribute === "string" ? typeAttribute.trim().toLowerCase() : "";
+  if (!target || !attributes || typeof attributes !== "object") return "";
+  for (const [rawKey, entry] of Object.entries(attributes)) {
+    const matchesKey = rawKey.trim().toLowerCase() === target;
+    const matchesName = typeof entry?.name === "string" && entry.name.trim().toLowerCase() === target;
+    if (!matchesKey && !matchesName) continue;
+    const rawValues = Array.isArray(entry?.values) ? entry.values : Array.isArray(entry) ? entry : [];
+    for (const item of rawValues) {
+      const text = valueString(item);
+      if (text) return text;
+    }
+  }
+  return "";
+}
+function groupOf(node, { empty = false } = {}) {
+  if (node?.kind === "group") return "group";
+  if (node?.style === "board" || node?.style === "card") return node.style;
+  const plexus2 = plexusKind(node) ?? (node?.plexus === "region" || node?.plexus === "drawing" ? node.plexus : null);
+  if (plexus2 === "region" || plexus2 === "drawing") return plexus2;
+  if (node?.kind === "page" && empty === true) return "empty";
+  return stringField(node?.kind);
+}
+function factOf(node, attributes = {}, { typeAttribute = "Type", empty = false } = {}) {
+  return {
+    uid: stringField(node?.uid),
+    title: stringField(node?.title),
+    alias: stringField(node?.alias),
+    kind: stringField(node?.kind),
+    group: groupOf(node, { empty: Boolean(empty) }),
+    type: typeOf(attributes, typeAttribute),
+    role: stringField(node?.role),
+    zone: stringField(node?.zone),
+    style: stringField(node?.style),
+    label: stringField(node?.label),
+    attributes: normalizeAttributes(attributes)
+  };
+}
+function factsFor(nodes, attributesByUid = {}, { typeAttribute = "Type", emptyUids = /* @__PURE__ */ new Set() } = {}) {
+  const map = /* @__PURE__ */ new Map();
+  if (!nodes || typeof nodes[Symbol.iterator] !== "function") return map;
+  const emptySet = emptyUids instanceof Set ? emptyUids : new Set(Array.isArray(emptyUids) ? emptyUids : []);
+  for (const node of nodes) {
+    if (typeof node?.uid !== "string" || !node.uid) continue;
+    const attrs = attributesByUid instanceof Map ? attributesByUid.get(node.uid) : attributesByUid?.[node.uid];
+    map.set(node.uid, factOf(node, attrs ?? {}, { typeAttribute, empty: emptySet.has(node.uid) }));
+  }
+  return map;
 }
 
 // src/model/search.js
@@ -2754,6 +2834,7 @@ function createViews(ctx) {
     try {
       await ctx?.saveSetting?.(SETTING_IDS.view, nextView);
       if (hasPreset) await ctx?.saveSetting?.(SETTING_IDS.facetsPreset, targetPreset);
+      ctx?.rebuild?.();
       ctx?.render?.();
       ctx?.fit?.(true);
     } catch (error) {
@@ -3080,12 +3161,7 @@ function describe(item, titleOf2) {
 }
 var TYPING_SELECTOR = 'input, textarea, select, [contenteditable="true"]';
 function isTypingTarget(target) {
-  if (!target || typeof target !== "object") return false;
-  if (typeof target.matches === "function") return target.matches(TYPING_SELECTOR);
-  const tag = String(target.tagName ?? target.tag ?? "").toLowerCase();
-  if (tag === "input" || tag === "textarea" || tag === "select") return true;
-  if (target.isContentEditable === true || target.contentEditable === "true") return true;
-  return typeof target.getAttribute === "function" && target.getAttribute("contenteditable") === "true";
+  return typeof target?.matches === "function" && target.matches(TYPING_SELECTOR);
 }
 function mountOverlay({ extensionAPI, lifecycle, host }) {
   const doc = globalThis.document;
@@ -3269,6 +3345,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   let lens = { pages: true, blocks: true, drawings: true, regions: true, keyword: "" };
   let customView = false;
   let emptyCounts = {};
+  const pageAttrCache = /* @__PURE__ */ new Map();
   let linksMode = false;
   let zoneTarget = null;
   let forceSidecar = false;
@@ -3390,22 +3467,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   }
   function addBarButton(element) {
     if (!element) return element;
-    if (typeof bar.insertBefore === "function") {
-      bar.insertBefore(element, status);
-      return element;
-    }
-    if (typeof status.before === "function") {
-      status.before(element);
-      return element;
-    }
-    const kids = [...bar.children ?? []].filter((child) => child !== element);
-    const index = kids.indexOf(status);
-    if (index < 0) bar.append(element);
-    else {
-      kids.splice(index, 0, element);
-      bar.replaceChildren(...kids);
-    }
-    return element;
+    return bar.insertBefore(element, status);
   }
   function commands() {
     return [
@@ -3417,7 +3479,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
         hint: "Cmd/Ctrl+F",
         run: () => {
           searchInput.focus();
-          searchInput.select?.();
+          searchInput.select();
         }
       },
       { id: "fit", title: "Fit to screen", hint: "", run: () => fit(true) },
@@ -3427,6 +3489,38 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       { id: "close", title: "Close Compass", hint: "Esc", run: () => close() },
       ...features.collect("commands")
     ];
+  }
+  function facts(nodes) {
+    const list = Array.isArray(nodes) ? nodes : [];
+    const missing = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const node of list) {
+      const uid = node?.uid;
+      if (node?.kind !== "page" || typeof uid !== "string" || !uid) continue;
+      if (pageAttrCache.has(uid) || seen.has(uid)) continue;
+      seen.add(uid);
+      missing.push(uid);
+    }
+    if (missing.length && typeof host.pageAttributes === "function") {
+      for (let index = 0; index < missing.length; index += 200) {
+        const batch = missing.slice(index, index + 200);
+        try {
+          const fetched = host.pageAttributes(batch);
+          for (const uid of batch) pageAttrCache.set(uid, fetched?.[uid] ?? {});
+        } catch (error) {
+          console.error("[compass] page attributes", error);
+          break;
+        }
+      }
+    }
+    const emptyUids = /* @__PURE__ */ new Set();
+    for (const node of list) {
+      if (node && typeof node.uid === "string" && isEmptyPage(node.kind, emptyCounts[node.uid])) {
+        emptyUids.add(node.uid);
+      }
+    }
+    const typeAttribute = settings?.typeAttribute || "Type";
+    return factsFor(list, pageAttrCache, { typeAttribute, emptyUids });
   }
   function expandedFor(uid) {
     if (!expandedZones.has(uid)) expandedZones.set(uid, /* @__PURE__ */ new Set());
@@ -3453,17 +3547,24 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       boards,
       cards
     });
+    const refreshEmptyCounts = (nodes) => {
+      try {
+        const pageUids = nodes.filter((node) => node.kind === "page").map((node) => node.uid);
+        emptyCounts = typeof host.childCounts === "function" ? host.childCounts(pageUids) ?? {} : {};
+      } catch (error) {
+        console.error("[compass] child counts", error);
+        emptyCounts = {};
+      }
+    };
+    refreshEmptyCounts(hood.nodes);
+    const initialPages = hood.nodes.filter((node) => node.kind === "page").map((node) => node.uid).join("\0");
     hood = features.pipe("transformHood", hood);
     nodeByUid = new Map(hood.nodes.map((node) => [node.uid, node]));
-    try {
-      const pageUids = hood.nodes.filter((node) => node.kind === "page").map((node) => node.uid);
-      emptyCounts = typeof host.childCounts === "function" ? host.childCounts(pageUids) ?? {} : {};
-    } catch (error) {
-      console.error("[compass] child counts", error);
-      emptyCounts = {};
-    }
+    const finalPages = hood.nodes.filter((node) => node.kind === "page").map((node) => node.uid).join("\0");
+    if (finalPages !== initialPages) refreshEmptyCounts(hood.nodes);
   }
   function load({ navigate = false } = {}) {
+    pageAttrCache.clear();
     if (!current || root.hidden || lifecycle.disposed) return;
     const next = readSettings();
     if (!next) return;
@@ -3535,8 +3636,12 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     host.watch(uid, scheduleReload);
     load({ navigate: changed });
     updateButtons();
-    if (searchInput.value.trim()) runSearch();
-    else showEmptyQuery();
+    if (document.activeElement === searchInput) {
+      if (searchInput.value.trim()) runSearch();
+      else showEmptyQuery();
+    } else {
+      hideResults();
+    }
   }
   function goBack() {
     if (!back.length) return;
@@ -3567,10 +3672,12 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     linksMode = false;
     linksButton.setAttribute("aria-pressed", "false");
     emptyCounts = {};
+    pageAttrCache.clear();
     features.each("onClose");
   }
   function recenter(uid) {
     if (!uid || root.hidden || lifecycle.disposed) return;
+    pageAttrCache.clear();
     hideFloating();
     const previous = current;
     const changed = current !== uid;
@@ -3982,7 +4089,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     hideFloating();
     zoneTarget = zone;
     zonePopEl.hidden = false;
-    placeFloating(zonePopEl, clientX, clientY);
+    const rect = stage.getBoundingClientRect();
+    const x = Number.isFinite(clientX) ? clientX : rect.left + rect.width / 2;
+    const y = Number.isFinite(clientY) ? clientY : rect.top + rect.height / 2;
+    placeFloating(zonePopEl, x, y);
     zoneInput.focus();
   }
   function paintZoneResults(text) {
@@ -4522,7 +4632,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       pinRow.append(chip);
     }
     features.each("afterPins", { pinRow, pins });
-    pinRow.hidden = (pinRow.childElementCount ?? pinRow.children.length) === 0;
+    pinRow.hidden = pinRow.childElementCount === 0;
   }
   async function savePins(pins) {
     await writeSetting(extensionAPI, SETTING_IDS.pins, pins);
@@ -4808,7 +4918,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (target.closest?.(".compass-zone-add, .compass-start, .compass-zone-pop")) return;
     if (!stage.contains(target) || target.closest?.(".compass-chip, .compass-caret, .compass-row")) return;
     const element = target.closest?.(".compass-node");
-    if (element && !element.classList.contains("compass-node-center")) {
+    const directionalView = !root.dataset.view || root.dataset.view === "compass";
+    if (directionalView && element && !element.classList.contains("compass-node-center")) {
       pointer = { type: "node", uid: element.dataset.uid, x: event.clientX, y: event.clientY, dragging: false };
       return;
     }
@@ -5080,8 +5191,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (!uid) return;
     hideResults();
     searchInput.value = "";
-    focusUid(uid);
     stage.focus({ preventScroll: true });
+    focusUid(uid);
   }
   async function newDrawing(title) {
     const api = plexus();
@@ -5139,7 +5250,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
       event.preventDefault();
       searchInput.focus();
-      searchInput.select?.();
+      searchInput.select();
       return;
     }
     if (typing) return;
@@ -5262,6 +5373,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     menuItem,
     showMenu,
     showDetails,
+    openZonePop,
     openSidebar,
     openMain,
     togglePin,
@@ -5272,7 +5384,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     setLens,
     saveSetting,
     addBarButton,
-    commands
+    commands,
+    facts
   });
   for (const create of FEATURES) features.add(create(ctx));
   lifecycle.node(root, document.body);
@@ -5361,6 +5474,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     }
     const jump = event.target.closest?.(".compass-pin-jump");
     if (jump) focusUid(jump.dataset.uid);
+  });
+  lifecycle.event(searchInput, "focus", () => {
+    if (!searchInput.value.trim()) showEmptyQuery();
   });
   lifecycle.event(searchInput, "input", () => {
     searchTimer = cancel(searchTimer);

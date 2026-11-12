@@ -4,6 +4,7 @@ import { boardPlan, cardPlan, connectionEdges, openArgs, showBoardPlan } from ".
 import { layout, sideAt } from "../model/layout.js";
 import { rankDrawings } from "../model/related.js";
 import { crossEdges, hiddenUids, isEmptyPage, planZoneCreate, urlGroups } from "../model/batch7.js";
+import { factsFor } from "../model/facts.js";
 import { emptyQueryRows, rankTitles } from "../model/search.js";
 import { readCompassSettings, SETTING_IDS, writeSetting } from "../settings.js";
 import { createFeatures } from "./features.js";
@@ -226,12 +227,7 @@ function describe(item, titleOf) {
 const TYPING_SELECTOR = 'input, textarea, select, [contenteditable="true"]';
 
 function isTypingTarget(target) {
-  if (!target || typeof target !== "object") return false;
-  if (typeof target.matches === "function") return target.matches(TYPING_SELECTOR);
-  const tag = String(target.tagName ?? target.tag ?? "").toLowerCase();
-  if (tag === "input" || tag === "textarea" || tag === "select") return true;
-  if (target.isContentEditable === true || target.contentEditable === "true") return true;
-  return typeof target.getAttribute === "function" && target.getAttribute("contenteditable") === "true";
+  return typeof target?.matches === "function" && target.matches(TYPING_SELECTOR);
 }
 
 export function mountOverlay({ extensionAPI, lifecycle, host }) {
@@ -402,6 +398,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   let lens = { pages: true, blocks: true, drawings: true, regions: true, keyword: "" };
   let customView = false;
   let emptyCounts = {};
+  const pageAttrCache = new Map();
   let linksMode = false;
   let zoneTarget = null;
   // One open can force the sidecar flag the next load already syncs. Not a new loop.
@@ -540,22 +537,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
 
   function addBarButton(element) {
     if (!element) return element;
-    if (typeof bar.insertBefore === "function") {
-      bar.insertBefore(element, status);
-      return element;
-    }
-    if (typeof status.before === "function") {
-      status.before(element);
-      return element;
-    }
-    const kids = [...(bar.children ?? [])].filter((child) => child !== element);
-    const index = kids.indexOf(status);
-    if (index < 0) bar.append(element);
-    else {
-      kids.splice(index, 0, element);
-      bar.replaceChildren(...kids);
-    }
-    return element;
+    return bar.insertBefore(element, status);
   }
 
   function commands() {
@@ -568,7 +550,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
         hint: "Cmd/Ctrl+F",
         run: () => {
           searchInput.focus();
-          searchInput.select?.();
+          searchInput.select();
         },
       },
       { id: "fit", title: "Fit to screen", hint: "", run: () => fit(true) },
@@ -578,6 +560,39 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       { id: "close", title: "Close Compass", hint: "Esc", run: () => close() },
       ...features.collect("commands"),
     ];
+  }
+
+  function facts(nodes) {
+    const list = Array.isArray(nodes) ? nodes : [];
+    const missing = [];
+    const seen = new Set();
+    for (const node of list) {
+      const uid = node?.uid;
+      if (node?.kind !== "page" || typeof uid !== "string" || !uid) continue;
+      if (pageAttrCache.has(uid) || seen.has(uid)) continue;
+      seen.add(uid);
+      missing.push(uid);
+    }
+    if (missing.length && typeof host.pageAttributes === "function") {
+      for (let index = 0; index < missing.length; index += 200) {
+        const batch = missing.slice(index, index + 200);
+        try {
+          const fetched = host.pageAttributes(batch);
+          for (const uid of batch) pageAttrCache.set(uid, fetched?.[uid] ?? {});
+        } catch (error) {
+          console.error("[compass] page attributes", error);
+          break;
+        }
+      }
+    }
+    const emptyUids = new Set();
+    for (const node of list) {
+      if (node && typeof node.uid === "string" && isEmptyPage(node.kind, emptyCounts[node.uid])) {
+        emptyUids.add(node.uid);
+      }
+    }
+    const typeAttribute = settings?.typeAttribute || "Type";
+    return factsFor(list, pageAttrCache, { typeAttribute, emptyUids });
   }
 
   // ---- loading ----
@@ -609,18 +624,25 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       boards,
       cards,
     });
+    const refreshEmptyCounts = (nodes) => {
+      try {
+        const pageUids = nodes.filter((node) => node.kind === "page").map((node) => node.uid);
+        emptyCounts = typeof host.childCounts === "function" ? (host.childCounts(pageUids) ?? {}) : {};
+      } catch (error) {
+        console.error("[compass] child counts", error);
+        emptyCounts = {};
+      }
+    };
+    refreshEmptyCounts(hood.nodes);
+    const initialPages = hood.nodes.filter((node) => node.kind === "page").map((node) => node.uid).join("\0");
     hood = features.pipe("transformHood", hood);
     nodeByUid = new Map(hood.nodes.map((node) => [node.uid, node]));
-    try {
-      const pageUids = hood.nodes.filter((node) => node.kind === "page").map((node) => node.uid);
-      emptyCounts = typeof host.childCounts === "function" ? (host.childCounts(pageUids) ?? {}) : {};
-    } catch (error) {
-      console.error("[compass] child counts", error);
-      emptyCounts = {};
-    }
+    const finalPages = hood.nodes.filter((node) => node.kind === "page").map((node) => node.uid).join("\0");
+    if (finalPages !== initialPages) refreshEmptyCounts(hood.nodes);
   }
 
   function load({ navigate = false } = {}) {
+    pageAttrCache.clear();
     if (!current || root.hidden || lifecycle.disposed) return;
     const next = readSettings();
     if (!next) return;
@@ -699,8 +721,12 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     host.watch(uid, scheduleReload);
     load({ navigate: changed });
     updateButtons();
-    if (searchInput.value.trim()) runSearch();
-    else showEmptyQuery();
+    if (document.activeElement === searchInput) {
+      if (searchInput.value.trim()) runSearch();
+      else showEmptyQuery();
+    } else {
+      hideResults();
+    }
   }
 
   function goBack() {
@@ -734,11 +760,13 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     linksMode = false;
     linksButton.setAttribute("aria-pressed", "false");
     emptyCounts = {};
+    pageAttrCache.clear();
     features.each("onClose");
   }
 
   function recenter(uid) {
     if (!uid || root.hidden || lifecycle.disposed) return;
+    pageAttrCache.clear();
     hideFloating();
     const previous = current;
     const changed = current !== uid;
@@ -1181,7 +1209,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     hideFloating();
     zoneTarget = zone;
     zonePopEl.hidden = false;
-    placeFloating(zonePopEl, clientX, clientY);
+    const rect = stage.getBoundingClientRect();
+    const x = Number.isFinite(clientX) ? clientX : rect.left + rect.width / 2;
+    const y = Number.isFinite(clientY) ? clientY : rect.top + rect.height / 2;
+    placeFloating(zonePopEl, x, y);
     zoneInput.focus();
   }
 
@@ -1735,7 +1766,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       pinRow.append(chip);
     }
     features.each("afterPins", { pinRow, pins });
-    pinRow.hidden = (pinRow.childElementCount ?? pinRow.children.length) === 0;
+    pinRow.hidden = pinRow.childElementCount === 0;
   }
 
   async function savePins(pins) {
@@ -2048,7 +2079,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (target.closest?.(".compass-zone-add, .compass-start, .compass-zone-pop")) return;
     if (!stage.contains(target) || target.closest?.(".compass-chip, .compass-caret, .compass-row")) return;
     const element = target.closest?.(".compass-node");
-    if (element && !element.classList.contains("compass-node-center")) {
+    const directionalView = !root.dataset.view || root.dataset.view === "compass";
+    if (directionalView && element && !element.classList.contains("compass-node-center")) {
       pointer = { type: "node", uid: element.dataset.uid, x: event.clientX, y: event.clientY, dragging: false };
       return;
     }
@@ -2338,8 +2370,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (!uid) return;
     hideResults();
     searchInput.value = "";
-    focusUid(uid);
     stage.focus({ preventScroll: true });
+    focusUid(uid);
   }
 
   async function newDrawing(title) {
@@ -2405,7 +2437,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
       event.preventDefault();
       searchInput.focus();
-      searchInput.select?.();
+      searchInput.select();
       return;
     }
     if (typing) return;
@@ -2510,6 +2542,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     menuItem,
     showMenu,
     showDetails,
+    openZonePop,
     openSidebar,
     openMain,
     togglePin,
@@ -2521,6 +2554,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     saveSetting,
     addBarButton,
     commands,
+    facts,
   });
   for (const create of FEATURES) features.add(create(ctx));
 
@@ -2607,6 +2641,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     }
     const jump = event.target.closest?.(".compass-pin-jump");
     if (jump) focusUid(jump.dataset.uid);
+  });
+  lifecycle.event(searchInput, "focus", () => {
+    if (!searchInput.value.trim()) showEmptyQuery();
   });
   lifecycle.event(searchInput, "input", () => {
     searchTimer = cancel(searchTimer);

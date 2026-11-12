@@ -30,6 +30,7 @@ export function createViews(ctx) {
     try {
       await ctx?.saveSetting?.(SETTING_IDS.view, nextView);
       if (hasPreset) await ctx?.saveSetting?.(SETTING_IDS.facetsPreset, targetPreset);
+      ctx?.rebuild?.();
       ctx?.render?.();
       ctx?.fit?.(true);
     } catch (error) {

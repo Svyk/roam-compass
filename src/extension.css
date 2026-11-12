@@ -739,6 +739,13 @@
   transform: translateY(-50%);
 }
 
+.compass-root[data-view="mindmap"] .compass-zone-add,
+.compass-root[data-view="facets"] .compass-zone-add,
+.compass-root[data-view="mindmap"] .compass-hint,
+.compass-root[data-view="facets"] .compass-hint {
+  display: none;
+}
+
 .compass-root .compass-zone-count {
   position: absolute;
   z-index: 4;

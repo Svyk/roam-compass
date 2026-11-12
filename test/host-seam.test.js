@@ -75,6 +75,10 @@ test("host.pageByTitle and host.createPage reuse existing pages and create missi
     assert.equal(created.length, 0);
     assert.equal(await host.createPage("Fresh Page"), "uid-generated");
     assert.deepEqual(created, [{ page: { title: "Fresh Page", uid: "uid-generated" } }]);
+    delete globalThis.roamAlphaAPI.util;
+    assert.equal(await host.createPage("September 5th, 2026", "09-05-2026"), "09-05-2026");
+    assert.deepEqual(created[1], { page: { title: "September 5th, 2026", uid: "09-05-2026" } });
+    assert.equal(await host.createPage("No UID Generator", ""), null);
     assert.equal(await host.createPage("   "), null);
   } finally {
     delete globalThis.roamAlphaAPI;

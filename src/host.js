@@ -880,17 +880,18 @@ export function createHost({ lifecycle }) {
     return { uid: found.uid, title: found.title };
   }
 
-  async function createPage(title) {
+  async function createPage(title, uid) {
     if (typeof title !== "string" || !title.trim()) return null;
     try {
       const existing = findPageByTitle(title);
       if (existing?.uid) return existing.uid;
       const root = roamApi();
       const create = root?.data?.page?.create;
-      const uid = root?.util?.generateUID?.();
-      if (typeof create !== "function" || typeof uid !== "string" || !uid) return null;
-      await create({ page: { title, uid } });
-      return uid;
+      const explicitUid = typeof uid === "string" ? uid.trim() : "";
+      const targetUid = explicitUid || root?.util?.generateUID?.();
+      if (typeof create !== "function" || typeof targetUid !== "string" || !targetUid) return null;
+      await create({ page: { title, uid: targetUid } });
+      return targetUid;
     } catch (error) {
       console.error("[compass] create page", error);
       return null;

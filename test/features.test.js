@@ -209,7 +209,11 @@ function makeFakeDom() {
       get childElementCount() { return node.children.length; },
       getBoundingClientRect: () => ({ x: 0, y: 0, left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 }),
       matches: (selector) => matches(node, selector),
-      focus() { doc.activeElement = node; },
+      focus() {
+        if (doc.activeElement === node) return;
+        doc.activeElement = node;
+        node.dispatchEvent({ type: "focus", preventDefault() {}, stopPropagation() {} });
+      },
       select() {},
       setAttribute(name, value) {
         node.attrs[name] = String(value);
@@ -653,6 +657,182 @@ test("overlay seam exposes frozen ctx, removes bar lens widgets, and fires all 1
     else globalThis.roamAlphaAPI = prevRoam;
     if (prevLocation === undefined) delete globalThis.location;
     else globalThis.location = prevLocation;
+    delete globalThis._listeners;
+  }
+});
+
+test("ctx.facts caches page attributes across calls, clears on load, degrades on error, and custom views disable node drag only", async () => {
+  const prevDoc = globalThis.document;
+  const prevWin = globalThis.window;
+  const prevComputed = globalThis.getComputedStyle;
+  const prevRoam = globalThis.roamAlphaAPI;
+  const doc = makeFakeDom();
+  globalThis.document = doc;
+  globalThis.window = globalThis;
+  globalThis.getComputedStyle = () => ({ backgroundColor: "rgb(255, 255, 255)", color: "rgb(0, 0, 0)" });
+  listen(globalThis);
+
+  const settingsMap = new Map([["compass-type-attribute", "Category"]]);
+  const extensionAPI = {
+    settings: {
+      canSet: true,
+      get: (key) => settingsMap.get(key) ?? null,
+      set: async (key, value) => { settingsMap.set(key, value); },
+    },
+  };
+
+  globalThis.roamAlphaAPI = {
+    graph: { name: "facts-seam" },
+    ui: {
+      mainWindow: {
+        getOpenPageOrBlockUid: async () => "center-page",
+        openPage: async () => {},
+        openBlock: async () => {},
+      },
+      rightSidebar: {
+        addWindow: async () => {},
+        removeWindow: async () => {},
+        getWindows: () => [],
+      },
+    },
+    data: {
+      pull(pattern, ref) {
+        if (ref.includes('"center-page"')) {
+          if (pattern.includes(":harc/_e")) {
+            return {
+              ":block/uid": "center-page",
+              ":node/title": "Center Page",
+              ":harc/_e": [
+                {
+                  ":block/uid": "h1",
+                  ":harc/a": [{ ":node/title": "Child" }],
+                  ":harc/v": [
+                    { ":block/uid": "page-filled", ":node/title": "Filled Page" },
+                    { ":block/uid": "page-empty", ":node/title": "Empty Page" },
+                  ],
+                  ":harc/a-source": [{
+                    ":block/uid": "src-1",
+                    ":block/string": "Child:: [[Filled Page]] [[Empty Page]]",
+                    ":block/order": 0,
+                    ":block/_children": [{ ":block/uid": "center-page" }],
+                  }],
+                },
+              ],
+            };
+          }
+          return { ":block/children": [] };
+        }
+        return null;
+      },
+      q: () => [["page-filled", 3]],
+      addPullWatch() {},
+      removePullWatch() {},
+    },
+  };
+
+  const lifecycle = createLifecycle();
+  const host = createHost({ lifecycle });
+  const attrCalls = [];
+  let shouldThrow = false;
+  host.pageAttributes = (uids) => {
+    attrCalls.push([...uids]);
+    if (shouldThrow) throw new Error("attributes down");
+    return {
+      "page-filled": {
+        category: { name: "Category", values: [{ uid: "cat-1", title: "Project" }] },
+      },
+      "page-empty": {},
+    };
+  };
+
+  const overlay = mountOverlay({ extensionAPI, lifecycle, host });
+  const originalError = console.error;
+  const errors = [];
+  console.error = (...args) => errors.push(args);
+
+  try {
+    const { ctx, features } = overlay;
+    let transformFacts = null;
+    features.add({
+      name: "facts-observer",
+      transformHood(hood) {
+        transformFacts = ctx.facts(hood.nodes);
+        return hood;
+      },
+    });
+
+    ctx.focusUid("center-page");
+    assert.ok(transformFacts instanceof Map);
+    assert.equal(transformFacts.get("page-filled")?.type, "Project");
+    assert.equal(transformFacts.get("page-filled")?.group, "page");
+    assert.equal(transformFacts.get("page-empty")?.group, "empty");
+    assert.equal(attrCalls.length, 1);
+
+    // Calling ctx.facts again with already-cached pages + a block fetches nothing new.
+    const repeat = ctx.facts([
+      ...ctx.state.hood.nodes,
+      { uid: "blk-1", kind: "block", title: "Note" },
+    ]);
+    assert.equal(attrCalls.length, 1);
+    assert.equal(repeat.get("blk-1")?.group, "block");
+
+    // load() clears the page attribute cache and re-fetches.
+    ctx.load();
+    assert.equal(attrCalls.length, 2);
+
+    // Failing host.pageAttributes logs and treats uncached pages as having no attributes.
+    shouldThrow = true;
+    const degraded = ctx.facts([{ uid: "uncached-page", kind: "page", title: "Uncached" }]);
+    assert.equal(degraded.get("uncached-page")?.type, "");
+    assert.deepEqual(degraded.get("uncached-page")?.attributes, {});
+    assert.ok(errors.some((entry) => entry[0] === "[compass] page attributes"));
+    shouldThrow = false;
+
+    // ctx.openZonePop opens the zone popover and focuses the zone input.
+    const zonePop = doc.querySelector(".compass-zone-pop");
+    const zoneInput = doc.querySelector(".compass-zone-input");
+    assert.equal(zonePop.hidden, true);
+    ctx.openZonePop("north", 120, 80);
+    assert.equal(zonePop.hidden, false);
+    assert.equal(doc.activeElement, zoneInput);
+    ctx.hideFloating();
+    assert.equal(zonePop.hidden, true);
+
+    // Outside "compass" view, node pointerdown does not start node drag, while stage background still pans.
+    const filledEl = ctx.state.nodeEls.get("page-filled");
+    assert.ok(filledEl);
+    ctx.dom.root.dataset.view = "mindmap";
+    ctx.dom.root.dispatchEvent({ type: "pointerdown", target: filledEl, button: 0, clientX: 100, clientY: 100 });
+    globalThis.dispatchEvent({ type: "pointermove", clientX: 140, clientY: 140 });
+    assert.equal(ctx.dom.root.classList.contains("compass-dragging"), false);
+    globalThis.dispatchEvent({ type: "pointerup", clientX: 140, clientY: 140 });
+
+    const startPanX = ctx.state.panX;
+    const startPanY = ctx.state.panY;
+    ctx.dom.root.dispatchEvent({ type: "pointerdown", target: ctx.dom.stage, button: 0, clientX: 100, clientY: 100 });
+    globalThis.dispatchEvent({ type: "pointermove", clientX: 130, clientY: 120 });
+    assert.equal(ctx.state.panX, startPanX + 30);
+    assert.equal(ctx.state.panY, startPanY + 20);
+    globalThis.dispatchEvent({ type: "pointerup", clientX: 130, clientY: 120 });
+
+    // Back in "compass" view, node pointerdown starts a node drag.
+    ctx.dom.root.dataset.view = "compass";
+    ctx.dom.root.dispatchEvent({ type: "pointerdown", target: filledEl, button: 0, clientX: 100, clientY: 100 });
+    globalThis.dispatchEvent({ type: "pointermove", clientX: 140, clientY: 140 });
+    assert.equal(ctx.dom.root.classList.contains("compass-dragging"), true);
+    globalThis.dispatchEvent({ type: "pointercancel", clientX: 140, clientY: 140 });
+    assert.equal(ctx.dom.root.classList.contains("compass-dragging"), false);
+  } finally {
+    console.error = originalError;
+    await lifecycle.dispose();
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    if (prevWin === undefined) delete globalThis.window;
+    else globalThis.window = prevWin;
+    if (prevComputed === undefined) delete globalThis.getComputedStyle;
+    else globalThis.getComputedStyle = prevComputed;
+    if (prevRoam === undefined) delete globalThis.roamAlphaAPI;
+    else globalThis.roamAlphaAPI = prevRoam;
     delete globalThis._listeners;
   }
 });

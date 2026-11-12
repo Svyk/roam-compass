@@ -350,6 +350,9 @@ function matchesOne(node, selector) {
     if (!classNames(node).has(name)) return false;
     rest = next === -1 ? "" : body.slice(next);
   }
+  if (rest === '[contenteditable="true"]') {
+    return node.attrs?.contenteditable === "true" || node.contentEditable === "true";
+  }
   if (rest.startsWith("[data-uid]")) {
     return node.dataset?.uid != null && String(node.dataset.uid) !== "";
   }
@@ -414,10 +417,14 @@ function installDocument() {
       parentNode: null,
       offsetWidth: 240,
       offsetHeight: 160,
+      get childElementCount() {
+        return node.children.length;
+      },
     };
     node.getBoundingClientRect = () => ({
       x: 0, y: 0, left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600,
     });
+    node.matches = (selector) => matches(node, selector);
     node.style.setProperty = (name, value) => {
       node.style[name] = value;
     };
@@ -461,6 +468,15 @@ function installDocument() {
       const moved = kids.filter(Boolean);
       node.children = [...moved, ...node.children.filter((kid) => !moved.includes(kid))];
     };
+    node.insertBefore = (newChild, refChild) => {
+      if (newChild?.parentElement) newChild.remove();
+      newChild.parentElement = node;
+      newChild.parentNode = node;
+      const index = node.children.indexOf(refChild);
+      if (index < 0) node.children.push(newChild);
+      else node.children.splice(index, 0, newChild);
+      return newChild;
+    };
     node.replaceChildren = (...kids) => {
       for (const kid of [...node.children]) kid.remove();
       if (kids.length) node.append(...kids);
@@ -500,7 +516,12 @@ function installDocument() {
       }
       return false;
     };
-    node.focus = () => {};
+    node.focus = () => {
+      if (doc.activeElement === node) return;
+      doc.activeElement = node;
+      node.dispatchEvent({ type: "focus", preventDefault() {}, stopPropagation() {} });
+    };
+    node.select = () => {};
     node.click = () => node.dispatchEvent({ type: "click", preventDefault() {}, stopPropagation() {} });
     Object.defineProperty(node, "isConnected", {
       get() {
@@ -523,6 +544,7 @@ function installDocument() {
   documentElement.append(body);
   doc.documentElement = documentElement;
   doc.body = body;
+  doc.activeElement = null;
   doc.createElement = (tag) => make(tag);
   doc.createElementNS = (_namespace, tag) => make(tag);
   doc.getElementById = () => null;
@@ -585,6 +607,9 @@ test("open hides Find a page and Show on board uses the shipped plan", async () 
     assert.equal(compass.isOpen(), false);
     compass.focus("page-1");
     const results = doc.querySelector(".compass-results");
+    const searchInput = doc.querySelector(".compass-search");
+    assert.equal(results.hidden, true);
+    searchInput.focus();
     assert.equal(results.hidden, false);
     assert.ok(results.children.length > 0);
     compass.open("page-1");
@@ -595,6 +620,9 @@ test("open hides Find a page and Show on board uses the shipped plan", async () 
     const centerNow = () => [...doc.querySelectorAll(".compass-node")].find((node) => node.classList.contains("compass-node-center"));
     assert.equal(centerNow().dataset.uid, "block-9");
     assert.equal(results.hidden, false);
+    doc.querySelector(".compass-stage").focus();
+    compass.focus("page-1");
+    assert.equal(results.hidden, true);
     await api.settings.set("compass-sidecar", false);
     windows.length = 0;
     compass.open("page-a");

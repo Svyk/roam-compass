@@ -52,6 +52,9 @@ test("createViews tracks view and preset, persists settings, renders, fits, and 
       if (id === SETTING_IDS.facetsPreset) stored = { ...stored, facetsPreset: value };
       views.onSettings(stored);
     },
+    rebuild() {
+      calls.push(["rebuild"]);
+    },
     render() {
       calls.push(["render"]);
     },
@@ -79,6 +82,7 @@ test("createViews tracks view and preset, persists settings, renders, fits, and 
   assert.deepEqual(calls, [
     ["saveSetting", "compass-view", "facets"],
     ["saveSetting", "compass-facets-preset", "projects"],
+    ["rebuild"],
     ["render"],
     ["fit", true],
   ]);
@@ -101,6 +105,7 @@ test("createViews tracks view and preset, persists settings, renders, fits, and 
   assert.deepEqual(views.current(), { view: "mindmap", preset: "projects" });
   assert.deepEqual(calls, [
     ["saveSetting", "compass-view", "mindmap"],
+    ["rebuild"],
     ["render"],
     ["fit", true],
   ]);
