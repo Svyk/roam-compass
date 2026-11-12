@@ -886,8 +886,211 @@
 }
 
 /* boards */
+.compass-root .compass-menu:has(.compass-board-filter),
+.compass-root .compass-menu:has(.compass-board-pick) {
+  max-width: 440px;
+  max-height: min(420px, 70vh);
+  overflow: auto;
+}
+
+.compass-root .compass-board-filter {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  height: 28px;
+  margin: 0 0 6px;
+  border: 1px solid var(--compass-line);
+  border-radius: 4px;
+  padding: 3px 8px;
+  color: var(--compass-ink);
+  background: var(--compass-paper);
+  font: inherit;
+}
+
+.compass-root .compass-menu-item.compass-board-pick,
+.compass-root .compass-board-none {
+  height: auto;
+  white-space: normal;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.compass-root .compass-board-active {
+  border-color: var(--compass-accent);
+  background: var(--compass-hover);
+}
+
+.compass-root .compass-menu-item[aria-disabled="true"] {
+  opacity: 0.85;
+}
+
+.compass-root .compass-board-none:disabled {
+  opacity: 0.85;
+}
+
+.compass-root .compass-board-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 64px 24px 24px;
+  background: color-mix(in srgb, var(--compass-ink) 28%, transparent);
+}
+
+.compass-root .compass-board-backdrop[hidden] {
+  display: none;
+}
+
+.compass-root .compass-board-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-sizing: border-box;
+  width: min(480px, 100%);
+  max-height: min(560px, calc(100% - 24px));
+  overflow: auto;
+  padding: 16px 18px;
+  border: 1px solid var(--compass-line);
+  border-radius: 8px;
+  background: var(--compass-paper);
+  color: var(--compass-ink);
+  box-shadow: 0 12px 36px color-mix(in srgb, var(--compass-ink) 28%, transparent);
+}
+
+.compass-root .compass-board-summary {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.compass-root .compass-board-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.compass-root .compass-board-check input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex: none;
+  accent-color: var(--compass-accent);
+}
+
+.compass-root .compass-board-hint {
+  margin: -4px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--compass-ink);
+  opacity: 0.85;
+}
+
+.compass-root .compass-board-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.compass-root .compass-board-actions button {
+  height: auto;
+  white-space: nowrap;
+}
+
+.compass-root .compass-board-send {
+  border-color: var(--compass-accent);
+  background: color-mix(in srgb, var(--compass-accent) 16%, var(--compass-paper));
+  font-weight: 600;
+}
+
+.compass-root .compass-bar:has(.compass-board-open) .compass-status,
+.compass-root:has(.compass-board-backdrop:not([hidden])) .compass-status {
+  max-width: 420px;
+}
 
 /* drawings */
+.compass-root .compass-draw-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 24px;
+  background: color-mix(in srgb, var(--compass-ink) 28%, transparent);
+}
+
+.compass-root .compass-draw-backdrop[hidden] {
+  display: none;
+}
+
+.compass-root .compass-draw-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-sizing: border-box;
+  width: min(440px, 100%);
+  max-height: 100%;
+  padding: 18px;
+  border: 1px solid var(--compass-line);
+  border-radius: 8px;
+  background: var(--compass-paper);
+  color: var(--compass-ink);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28);
+}
+
+.compass-root .compass-draw-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.compass-root .compass-draw-summary,
+.compass-root .compass-draw-cut,
+.compass-root .compass-draw-hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.compass-root .compass-draw-cut,
+.compass-root .compass-draw-hint {
+  opacity: 0.75;
+}
+
+.compass-root .compass-draw-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.compass-root .compass-draw-links {
+  flex: none;
+  margin: 2px 0 0;
+}
+
+.compass-root .compass-draw-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.compass-root .compass-draw-go,
+.compass-root .compass-draw-cancel {
+  padding: 4px 12px;
+}
+
+.compass-root .compass-draw-go {
+  border-color: var(--compass-accent);
+  font-weight: 600;
+}
 
 /* edit */
 

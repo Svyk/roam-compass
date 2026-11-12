@@ -151,8 +151,28 @@ Right-click empty canvas, or open **More**.
 
 ## With Plexus
 
-- With Plexus loaded, drawings and regions show thumbnails and open through Plexus.
-- With Plexus Diagram loaded, boards that contain this page sit on the west with a thumbnail. Click one to show its cards. Right-click a card and choose Open on board to open that board and pulse the card. The Boards setting turns this off.
+Compass works with Roam Plexus (regions and tools for Roam's Excalidraw drawings) and Plexus Diagram (whiteboards). Each part below appears only when that extension is loaded.
+
+### Plexus Diagram boards
+
+- Boards that hold this page sit on the west with a thumbnail, labelled On board. Boards that live on this page are labelled Board on this page. Click a board to show its cards. Right-click a card and choose Open on board to open that board and pulse the card.
+- A board's menu lists its saved views. Choose one to open the board framed on that view.
+- **Add to board…** on any page or block node, or the center, puts that page on a board you pick. A board that already holds it is marked.
+- **Send map to board…** (More, or right-click the canvas, in the Compass view) puts the center and its neighbors on a board in the same arrangement. With Plexus Diagram's board API (Plexus Diagram after 3.41.0) the cards go in a new section titled after the center, with arrows labelled by relation, as one undo step for the cards and one for the arrows. With an older Plexus Diagram, Compass places loose cards, one undo step each, up to 20.
+- Boards refresh in Compass while it is open when a board changes or Plexus Diagram loads.
+- Opening a board in the main window closes Compass so the board is visible.
+- The Boards setting turns all of this off.
+
+### Roam Plexus drawings
+
+- Drawings and regions show thumbnails and open through Roam Plexus.
+- Drawing blocks on the center page appear on the south, labelled Drawing on this page.
+- **Draw this map…** (More, or right-click the canvas) makes a new drawing on the center page from what is on the canvas, in any view: a box per node, arrows labelled by relation, Mind Map links, and one frame per Facets category. With Write page links on, boxes carry `[[links]]` you can Cmd-click, and the drawing then shows up as related on those pages. Compass closes and the drawing opens.
+
+### From the other side
+
+- In Plexus Diagram, a card's menu has Open in Compass and, with Plexus Diagram after 3.41.0, Expand with Compass, which places the card's Compass neighbors around it with labelled arrows.
+- In Roam Plexus, Show in Compass in the command list and the block menus opens the drawing, the focused block or the page in Compass, and Alt+Cmd-click on a link in a drawing opens that link in Compass (Roam Plexus after 0.33.1).
 
 ## Settings
 

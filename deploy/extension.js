@@ -1,4 +1,4 @@
-/* Compass v1.0.0 | MIT | generated; edit src/ */
+/* Compass v1.1.0 | MIT | generated; edit src/ */
 
 // src/lifecycle.js
 function isPromiseLike(value) {
@@ -1210,6 +1210,8 @@ var ENTITY_PULL = "[:block/uid :node/title :block/string]";
 var GUARD_PULL = "[:block/uid :block/string]";
 var PAGE_ATTRIBUTES_PULL = "[:block/uid {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string]}]}]";
 var PAGE_ATTRIBUTES_CAP = 200;
+var BLOCK_STRINGS_PULL = "[:block/uid :block/string]";
+var BLOCK_STRINGS_CAP = 50;
 var FORBIDDEN_WRITE_TOKENS = [":harc/", ":entity/attrs", ":attr/proxy"];
 var MENTION_CAP = 500;
 var NAMESPACE_CAP = 200;
@@ -2025,6 +2027,33 @@ function createHost({ lifecycle }) {
     }
     return out;
   }
+  function blockStrings(uids) {
+    if (!Array.isArray(uids)) return {};
+    const api = roamApi()?.data;
+    if (typeof api?.pull !== "function") return {};
+    const clean = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const uid of uids) {
+      if (typeof uid !== "string" || !uid || seen.has(uid)) continue;
+      seen.add(uid);
+      clean.push(uid);
+      if (clean.length >= BLOCK_STRINGS_CAP) break;
+    }
+    const out = {};
+    for (const uid of clean) {
+      let pulled = null;
+      try {
+        pulled = api.pull(BLOCK_STRINGS_PULL, entityString(uid));
+      } catch (error) {
+        console.error("[compass] block strings", error);
+        continue;
+      }
+      const string = pulled?.[":block/string"];
+      if (typeof string !== "string") continue;
+      out[uid] = string;
+    }
+    return out;
+  }
   function applyPlan({ lockUid, guards = [], ops = [] } = {}) {
     const key = typeof lockUid === "string" && lockUid ? lockUid : "plan";
     const task = () => withLock(`compass:${graphName()}:${key}`, async () => {
@@ -2162,6 +2191,7 @@ function createHost({ lifecycle }) {
     createPage,
     dailyPage,
     pageAttributes,
+    blockStrings,
     applyPlan,
     attributeBlock,
     sourceBlock,
@@ -2416,11 +2446,30 @@ function nodeOf(row, extra) {
 }
 function boardPlan(api, centerUid) {
   if (!api || typeof api.boardsWith !== "function") return [];
+  let onBoard = [];
   try {
-    return listOf(api.boardsWith(centerUid)).map((row) => nodeOf(row, { role: "west", label: "On board" }));
+    onBoard = listOf(api.boardsWith(centerUid)).map((row) => nodeOf(row, { role: "west", label: "On board" }));
   } catch {
     return [];
   }
+  if (typeof api.boardsOn !== "function") return onBoard;
+  let onPage = [];
+  try {
+    onPage = listOf(api.boardsOn(centerUid)).map((row) => nodeOf(row, { role: "west", label: "Board on this page" }));
+  } catch {
+    return onBoard;
+  }
+  const seen = /* @__PURE__ */ new Set();
+  for (const node of onBoard) {
+    if (typeof node.uid === "string" && node.uid) seen.add(node.uid);
+  }
+  const extra = [];
+  for (const node of onPage) {
+    if (typeof node.uid !== "string" || !node.uid || seen.has(node.uid)) continue;
+    seen.add(node.uid);
+    extra.push(node);
+  }
+  return [...onBoard, ...extra];
 }
 function showBoardPlan(boards) {
   if (!Array.isArray(boards) || boards.length === 0) return { mode: "none" };
@@ -2477,6 +2526,114 @@ function childText(child) {
   if (typeof child.string === "string") return child.string;
   if (typeof child[":block/string"] === "string") return child[":block/string"];
   return "";
+}
+var BOARD_FILTER_MIN = 13;
+function apiHas(api, name) {
+  if (!api || typeof api[name] !== "function") return false;
+  const caps = api.capabilities;
+  return Array.isArray(caps) && caps.includes(name);
+}
+function needsBoardFilter(count2) {
+  return count2 >= BOARD_FILTER_MIN;
+}
+function readRows(fn, ...args) {
+  if (typeof fn !== "function") return [];
+  try {
+    const value = fn(...args);
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+function boardTitle(row) {
+  return typeof row?.title === "string" && row.title.trim() ? row.title.trim() : "Untitled board";
+}
+function byBoardTitle(a, b) {
+  const at = a.title.toLowerCase();
+  const bt = b.title.toLowerCase();
+  if (at !== bt) return at < bt ? -1 : 1;
+  return a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0;
+}
+function pickerBoards(api, options = {}) {
+  if (!api || typeof api !== "object") return [];
+  const centerUid = typeof options.centerUid === "string" ? options.centerUid : "";
+  const nodeUid = typeof options.nodeUid === "string" ? options.nodeUid : "";
+  const markHeld = options.markHeld !== false;
+  const held = /* @__PURE__ */ new Set();
+  if (markHeld && nodeUid && typeof api.boardsWith === "function") {
+    for (const row of readRows(api.boardsWith, nodeUid)) {
+      if (typeof row?.uid === "string" && row.uid) held.add(row.uid);
+    }
+  }
+  if (apiHas(api, "listBoards")) {
+    const seen2 = /* @__PURE__ */ new Set();
+    const mapped = [];
+    for (const row of readRows(api.listBoards)) {
+      if (typeof row?.uid !== "string" || !row.uid || seen2.has(row.uid)) continue;
+      seen2.add(row.uid);
+      const title = boardTitle(row);
+      const pageTitle = typeof row.pageTitle === "string" ? row.pageTitle.trim() : "";
+      mapped.push({
+        uid: row.uid,
+        title,
+        pageTitle,
+        label: pageTitle ? `${title} — ${pageTitle}` : title,
+        already: held.has(row.uid)
+      });
+    }
+    mapped.sort(byBoardTitle);
+    return mapped;
+  }
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  const push = (row) => {
+    if (typeof row?.uid !== "string" || !row.uid || seen.has(row.uid)) return;
+    seen.add(row.uid);
+    const title = boardTitle(row);
+    out.push({
+      uid: row.uid,
+      title,
+      pageTitle: "",
+      label: title,
+      already: held.has(row.uid)
+    });
+  };
+  if (centerUid) {
+    for (const row of readRows(api.boardsWith, centerUid)) push(row);
+    for (const row of readRows(api.boardsOn, centerUid)) push(row);
+  }
+  if (nodeUid && nodeUid !== centerUid) {
+    for (const row of readRows(api.boardsWith, nodeUid)) push(row);
+  }
+  out.sort(byBoardTitle);
+  return out;
+}
+function filterBoards(boards, query) {
+  const list = Array.isArray(boards) ? boards : [];
+  const needle = String(query ?? "").trim().toLowerCase();
+  if (!needle) return [...list];
+  return list.filter((board) => {
+    const label = `${board?.label ?? ""} ${board?.title ?? ""}`.toLowerCase();
+    return label.includes(needle);
+  });
+}
+function savedViews(api, boardUid) {
+  if (!api || typeof api.viewsOf !== "function" || !boardUid) return [];
+  let rows = [];
+  try {
+    const value = api.viewsOf(boardUid);
+    rows = Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const view of rows) {
+    if (out.length >= 8) break;
+    if (!view || typeof view.uid !== "string" || !view.uid) continue;
+    const caption = typeof view.caption === "string" ? view.caption.trim() : "";
+    out.push({ uid: view.uid, title: caption ? `View: ${caption}` : "View" });
+  }
+  return out;
 }
 function connectionEdges(children) {
   const out = [];
@@ -4629,9 +4786,9 @@ function cloneState(state) {
   };
 }
 function positiveInt(value, fallback, min = 1) {
-  const num = Number(value);
-  if (!Number.isFinite(num)) return fallback;
-  return Math.max(min, Math.trunc(num));
+  const num2 = Number(value);
+  if (!Number.isFinite(num2)) return fallback;
+  return Math.max(min, Math.trunc(num2));
 }
 function readLimit(limits, key, fallback) {
   const custom = limits.get(key);
@@ -5222,9 +5379,9 @@ function buildChevron(ctx, status, side, count2, label) {
   icon.append(path);
   const hasCount = typeof count2 === "number" && Number.isFinite(count2) && count2 > 0;
   if (hasCount) {
-    const num = ctx.el("span", "compass-mm-count", String(count2));
-    if (side === "left") btn.append(num, icon);
-    else btn.append(icon, num);
+    const num2 = ctx.el("span", "compass-mm-count", String(count2));
+    if (side === "left") btn.append(num2, icon);
+    else btn.append(icon, num2);
   } else {
     btn.append(icon);
   }
@@ -5825,28 +5982,28 @@ function validateRuleCondition(cond, catIndex, errors) {
   return { field: normalizedField, op, value };
 }
 function validateCategory(rawCat, index, source, seenIds, errors) {
-  const num = index + 1;
+  const num2 = index + 1;
   if (!isPlainObject(rawCat)) {
-    errors.push(`Category ${num} must be an object.`);
+    errors.push(`Category ${num2} must be an object.`);
     return null;
   }
   const label = typeof rawCat.label === "string" ? rawCat.label.trim() : "";
   if (!label) {
-    errors.push(`Category ${num} needs a label.`);
+    errors.push(`Category ${num2} needs a label.`);
   }
   let id = "";
   if (rawCat.id !== void 0 && rawCat.id !== null && String(rawCat.id).trim() !== "") {
     id = typeof rawCat.id === "string" ? rawCat.id.trim() : "";
     if (!ID_PATTERN.test(id)) {
-      errors.push(`Category ${num} id must use lowercase letters, numbers, and hyphens.`);
+      errors.push(`Category ${num2} id must use lowercase letters, numbers, and hyphens.`);
     }
   } else if (label) {
-    id = slugify(label, `category-${num}`);
+    id = slugify(label, `category-${num2}`);
   }
   if (id && RESERVED_CATEGORY_IDS.has(id)) {
-    errors.push(`Category ${num} cannot use the reserved id "${id}".`);
+    errors.push(`Category ${num2} cannot use the reserved id "${id}".`);
   } else if (id && seenIds.has(id)) {
-    errors.push(`Category ${num} has a duplicate id "${id}".`);
+    errors.push(`Category ${num2} has a duplicate id "${id}".`);
   } else if (id) {
     seenIds.add(id);
   }
@@ -5854,7 +6011,7 @@ function validateCategory(rawCat, index, source, seenIds, errors) {
   if (rawCat.color !== void 0 && rawCat.color !== null && String(rawCat.color).trim() !== "") {
     const trimmedColor = typeof rawCat.color === "string" ? rawCat.color.trim() : "";
     if (!SAFE_COLOR_PATTERN.test(trimmedColor)) {
-      errors.push(`Category ${num} has an invalid color.`);
+      errors.push(`Category ${num2} has an invalid color.`);
     } else {
       color = trimmedColor;
     }
@@ -5862,28 +6019,28 @@ function validateCategory(rawCat, index, source, seenIds, errors) {
   if (source === "rule") {
     const match = rawCat.match;
     if (!isPlainObject(match)) {
-      errors.push(`Category ${num} needs a match rule.`);
+      errors.push(`Category ${num2} needs a match rule.`);
       return null;
     }
     const rawAll = match.all !== void 0 ? match.all : [];
     const rawAny = match.any !== void 0 ? match.any : [];
     if (!Array.isArray(rawAll) || !Array.isArray(rawAny)) {
-      errors.push(`Category ${num} match all/any must be arrays.`);
+      errors.push(`Category ${num2} match all/any must be arrays.`);
       return null;
     }
     if (!rawAll.length && !rawAny.length) {
-      errors.push(`Category ${num} needs at least one match condition.`);
+      errors.push(`Category ${num2} needs at least one match condition.`);
       return null;
     }
-    const all = rawAll.map((item) => validateRuleCondition(item, num, errors)).filter(Boolean);
-    const any = rawAny.map((item) => validateRuleCondition(item, num, errors)).filter(Boolean);
+    const all = rawAll.map((item) => validateRuleCondition(item, num2, errors)).filter(Boolean);
+    const any = rawAny.map((item) => validateRuleCondition(item, num2, errors)).filter(Boolean);
     const normalizedMatch = {};
     if (all.length) normalizedMatch.all = all;
     if (any.length) normalizedMatch.any = any;
     return { id, label, color, match: normalizedMatch };
   }
   if (!Array.isArray(rawCat.values)) {
-    errors.push(`Category ${num} has no values.`);
+    errors.push(`Category ${num2} has no values.`);
     return null;
   }
   const values = [];
@@ -5896,19 +6053,19 @@ function validateCategory(rawCat, index, source, seenIds, errors) {
     values.push(trimmed);
   }
   if (!values.length) {
-    errors.push(`Category ${num} has no values.`);
+    errors.push(`Category ${num2} has no values.`);
     return null;
   }
   if (source === "role") {
     for (const val of values) {
       if (!VALID_ROLES.has(val)) {
-        errors.push(`Category ${num} has an unknown role "${val}".`);
+        errors.push(`Category ${num2} has an unknown role "${val}".`);
       }
     }
   } else if (source === "kind") {
     for (const val of values) {
       if (!VALID_KINDS.has(val)) {
-        errors.push(`Category ${num} has an unknown kind "${val}".`);
+        errors.push(`Category ${num2} has an unknown kind "${val}".`);
       }
     }
   }
@@ -11092,7 +11249,7 @@ function fmt(value) {
 function resolveDash(dashed, scale) {
   if (!dashed || dashed === "none" || dashed === "solid") return [];
   if (Array.isArray(dashed)) {
-    return dashed.map((item) => Number(item) * scale).filter((num) => Number.isFinite(num) && num > 0).map((num) => Math.max(0.5, Math.round(num * 100) / 100));
+    return dashed.map((item) => Number(item) * scale).filter((num2) => Number.isFinite(num2) && num2 > 0).map((num2) => Math.max(0.5, Math.round(num2 * 100) / 100));
   }
   if (typeof dashed === "string") {
     const trimmed = dashed.trim().toLowerCase();
@@ -11101,7 +11258,7 @@ function resolveDash(dashed, scale) {
     if (trimmed === "dashed") return [fmtNum(5 * scale), fmtNum(4 * scale)];
     const matches2 = trimmed.match(/[-+]?(?:\d+\.?\d*|\.\d+)/g);
     if (matches2) {
-      return matches2.map((raw) => Number(raw) * scale).filter((num) => Number.isFinite(num) && num > 0).map((num) => Math.max(0.5, fmtNum(num)));
+      return matches2.map((raw) => Number(raw) * scale).filter((num2) => Number.isFinite(num2) && num2 > 0).map((num2) => Math.max(0.5, fmtNum(num2)));
     }
     return [];
   }
@@ -11591,8 +11748,8 @@ function isBoldStyle(style) {
   const weight = style?.fontWeight;
   if (!weight) return false;
   if (weight === "bold" || weight === "bolder") return true;
-  const num = Number(weight);
-  return Number.isFinite(num) && num >= 600;
+  const num2 = Number(weight);
+  return Number.isFinite(num2) && num2 >= 600;
 }
 function fontFromStyle(style, fallback) {
   if (!style) return fallback;
@@ -12795,14 +12952,1470 @@ function createEdit(ctx) {
   };
 }
 
+// src/model/board-send.js
+var SLOT_W = 300;
+var SLOT_H = 180;
+var PAD = 24;
+var TITLE_BAND = 60;
+var SEND_LIMIT = 45;
+var BASIC_LIMIT = 20;
+var ROW_BAND = 16;
+var COL_BAND = 36;
+var STRENGTH2 = Object.freeze({ typed: 3, structural: 2, link: 1, mention: 1, sibling: 0 });
+function finite(value, fallback) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+function cardText(node) {
+  if (!node || typeof node !== "object") return "";
+  if (node.kind === "block") {
+    const uid = typeof node.uid === "string" ? node.uid.trim() : "";
+    if (!uid || uid.includes("(") || uid.includes(")")) return "";
+    return `((${uid}))`;
+  }
+  const title = typeof node.title === "string" ? node.title.trim() : "";
+  if (!title || title.includes("[") || title.includes("]")) return "";
+  return `[[${title}]]`;
+}
+function compassSectionTitle(title) {
+  const name = typeof title === "string" && title.trim() ? title.trim() : "Map";
+  return `${name} — Compass`;
+}
+function placeBelow(cards) {
+  const rects = [];
+  for (const card of Array.isArray(cards) ? cards : []) {
+    const rect = card?.rect;
+    if (!rect || typeof rect !== "object") continue;
+    const x = Number(rect.x);
+    const y = Number(rect.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const h = Number(rect.h);
+    rects.push({ x, y, h: Number.isFinite(h) ? h : 0 });
+  }
+  if (!rects.length) return { x: 40, y: 40 };
+  let left = rects[0].x;
+  let bottom = rects[0].y + rects[0].h;
+  for (const rect of rects) {
+    if (rect.x < left) left = rect.x;
+    const end = rect.y + rect.h;
+    if (end > bottom) bottom = end;
+  }
+  return { x: left, y: bottom + 40 };
+}
+function addFailure(error) {
+  const text = String(error?.message ?? error ?? "");
+  if (/not a board/i.test(text)) return "That board could not be found.";
+  return "Plexus Diagram could not add the card.";
+}
+function sendSummary({ count: count2, boardLabel, sectionTitle, arrows, basic, omitted } = {}) {
+  const cards = count2 === 1 ? "card" : "cards";
+  let text = `Adds ${count2} ${cards} to ${boardLabel}`;
+  if (sectionTitle) text += ` in a new section "${sectionTitle}"`;
+  const arrowCount = Number(arrows) || 0;
+  if (arrowCount > 0) {
+    const word = arrowCount === 1 ? "arrow" : "arrows";
+    text += `, with ${arrowCount} ${word} labelled by relation`;
+  }
+  text += ".";
+  const leftOut = Number(omitted) || 0;
+  if (leftOut > 0) {
+    const word = leftOut === 1 ? "card was" : "cards were";
+    text += ` ${leftOut} ${word} left out.`;
+  }
+  if (basic) text += " Each card is its own undo step.";
+  return text;
+}
+function skipStyle(node) {
+  return node?.style === "board" || node?.style === "card" || node?.style === "group" || node?.kind === "group";
+}
+function isSiblingNode(node) {
+  if (!node) return false;
+  if (node.zone === "siblings" || node.style === "sibling" || node.role === "sibling") return true;
+  const items = Array.isArray(node.evidence) ? node.evidence : [];
+  return items.length > 0 && items.every((item) => item?.kind === "sibling" || item?.role === "sibling");
+}
+function primaryEvidence(node) {
+  const items = Array.isArray(node?.evidence) ? node.evidence : [];
+  if (!items.length) return [];
+  let top = 0;
+  for (const item of items) {
+    const score2 = STRENGTH2[item?.kind] ?? 0;
+    if (score2 > top) top = score2;
+  }
+  return items.filter((item) => (STRENGTH2[item?.kind] ?? 0) === top);
+}
+function directionOf(node) {
+  if (isSiblingNode(node)) return null;
+  const primary = primaryEvidence(node);
+  if (primary.some((item) => item?.kind === "typed" && item.direction === "out")) return "out";
+  if (primary.some((item) => item?.kind === "typed" && item.direction === "in")) return "in";
+  if (primary.some((item) => item?.kind === "link")) return "out";
+  if (primary.some((item) => item?.kind === "mention")) return "in";
+  if (primary.some((item) => item?.role === "child" || item?.role === "next")) return "out";
+  if (primary.some((item) => item?.role === "parent" || item?.role === "previous")) return "in";
+  if (primary.some((item) => item?.direction === "out")) return "out";
+  if (primary.some((item) => item?.direction === "in")) return "in";
+  if (node?.zone === "north") return "in";
+  if (node?.zone === "south" || node?.zone === "west" || node?.zone === "east") return "out";
+  return "out";
+}
+function edgeLabel(node) {
+  const primary = primaryEvidence(node);
+  if (!primary.some((item) => item?.kind === "typed")) return "";
+  return typeof node?.label === "string" ? node.label : "";
+}
+function edgeFor(centerUid, node) {
+  const direction = directionOf(node);
+  if (!direction || !node?.uid) return null;
+  const label = edgeLabel(node);
+  if (direction === "out") {
+    return { fromUid: centerUid, toUid: node.uid, label, direction: "one" };
+  }
+  return { fromUid: node.uid, toUid: centerUid, label, direction: "one" };
+}
+function boxFor(geometry, uid, isCenter) {
+  if (isCenter) {
+    const center = geometry?.center;
+    return { x: finite(center?.x, 0), y: finite(center?.y, 0) };
+  }
+  const items = Array.isArray(geometry?.items) ? geometry.items : [];
+  const found = items.find((item) => item?.uid === uid);
+  return { x: finite(found?.x, 0), y: finite(found?.y, 0) };
+}
+function zoneOf(node) {
+  if (node?.zone === "north" || node?.zone === "south" || node?.zone === "west" || node?.zone === "east" || node?.zone === "siblings") {
+    return node.zone;
+  }
+  return "south";
+}
+function groupBands(entries, key, band) {
+  const sorted = [...entries].sort((a, b) => a.box[key] - b.box[key] || a.box.x - b.box.x || a.node.uid.localeCompare(b.node.uid));
+  const groups = [];
+  for (const entry of sorted) {
+    let group = null;
+    for (const candidate of groups) {
+      if (Math.abs(candidate.at - entry.box[key]) <= band) {
+        group = candidate;
+        break;
+      }
+    }
+    if (!group) {
+      group = { at: entry.box[key], items: [] };
+      groups.push(group);
+    }
+    group.items.push(entry);
+  }
+  return groups;
+}
+function groupRows(entries) {
+  const rows = groupBands(entries, "y", ROW_BAND);
+  for (const row of rows) {
+    row.y = row.at;
+    row.items.sort((a, b) => a.box.x - b.box.x || a.node.uid.localeCompare(b.node.uid));
+  }
+  return rows;
+}
+function groupCols(entries) {
+  const cols = groupBands(entries, "x", COL_BAND);
+  for (const col of cols) {
+    col.x = col.at;
+    col.items.sort((a, b) => a.box.y - b.box.y || a.node.uid.localeCompare(b.node.uid));
+  }
+  return cols;
+}
+function takenKey(col, row) {
+  return `${col},${row}`;
+}
+function placeBand(entries, prefer, dir, axis, taken, slots) {
+  if (!entries.length) return;
+  const start = -Math.floor((entries.length - 1) / 2);
+  const offsets = entries.map((_, index) => start + index);
+  for (let step2 = 0; step2 < 48; step2 += 1) {
+    const main = prefer + dir * step2;
+    const fits = offsets.every((offset) => {
+      const col = axis === "row" ? offset : main;
+      const row = axis === "row" ? main : offset;
+      return !taken.has(takenKey(col, row));
+    });
+    if (!fits) continue;
+    entries.forEach((entry, index) => {
+      const offset = offsets[index];
+      const col = axis === "row" ? offset : main;
+      const row = axis === "row" ? main : offset;
+      taken.add(takenKey(col, row));
+      slots.set(entry.node.uid, { col, row });
+    });
+    return;
+  }
+  entries.forEach((entry, index) => {
+    let col = axis === "row" ? offsets[index] : prefer + dir * 48;
+    let row = axis === "row" ? prefer + dir * 48 : offsets[index];
+    while (taken.has(takenKey(col, row))) {
+      col += 1;
+      if (col > (axis === "row" ? offsets[index] : prefer) + 70) {
+        col = axis === "row" ? offsets[index] : prefer;
+        row += 1;
+      }
+    }
+    taken.add(takenKey(col, row));
+    slots.set(entry.node.uid, { col, row });
+  });
+}
+function sendPlan(input = {}) {
+  const center = input.center && typeof input.center === "object" ? input.center : {};
+  const centerUid = typeof center.uid === "string" ? center.uid : "";
+  const sectionTitle = compassSectionTitle(center.title);
+  const empty = { width: 0, height: 0, cards: [], edges: [], omitted: 0, sectionTitle };
+  if (!centerUid || !cardText(center)) return empty;
+  const limit = Number.isFinite(input.limit) ? Math.max(1, Math.trunc(input.limit)) : SEND_LIMIT;
+  const geometry = input.geometry && typeof input.geometry === "object" ? input.geometry : {};
+  const rawNodes = Array.isArray(input.nodes) ? input.nodes : [];
+  const ranked = [];
+  for (const node of rawNodes) {
+    if (!node || typeof node.uid !== "string" || !node.uid || node.uid === centerUid) continue;
+    if (skipStyle(node) || !cardText(node)) continue;
+    const box = boxFor(geometry, node.uid, false);
+    ranked.push({ node, box, dist: box.x * box.x + box.y * box.y });
+  }
+  ranked.sort((a, b) => a.dist - b.dist || a.node.uid.localeCompare(b.node.uid));
+  const room = Math.max(0, limit - 1);
+  const kept = ranked.slice(0, room);
+  const omitted = ranked.length - kept.length;
+  const buckets = { north: [], south: [], west: [], east: [], siblings: [] };
+  for (const entry of kept) buckets[zoneOf(entry.node)].push(entry);
+  const slots = /* @__PURE__ */ new Map();
+  const taken = /* @__PURE__ */ new Set();
+  slots.set(centerUid, { col: 0, row: 0 });
+  taken.add(takenKey(0, 0));
+  const north = groupRows(buckets.north).sort((a, b) => b.y - a.y);
+  north.forEach((row, index) => placeBand(row.items, -(index + 1), -1, "row", taken, slots));
+  const south = groupRows(buckets.south).sort((a, b) => a.y - b.y);
+  south.forEach((row, index) => placeBand(row.items, index + 1, 1, "row", taken, slots));
+  const west = groupCols(buckets.west).sort((a, b) => b.x - a.x);
+  west.forEach((col, index) => placeBand(col.items, -(index + 1), -1, "col", taken, slots));
+  const east = groupCols(buckets.east).sort((a, b) => a.x - b.x);
+  east.forEach((col, index) => placeBand(col.items, index + 1, 1, "col", taken, slots));
+  let maxCol = 0;
+  for (const slot of slots.values()) if (slot.col > maxCol) maxCol = slot.col;
+  const siblings = groupCols(buckets.siblings).sort((a, b) => a.x - b.x);
+  siblings.forEach((col, index) => placeBand(col.items, maxCol + 1 + index, 1, "col", taken, slots));
+  let minCol = 0;
+  let maxSlotCol = 0;
+  let minRow = 0;
+  let maxRow = 0;
+  for (const slot of slots.values()) {
+    if (slot.col < minCol) minCol = slot.col;
+    if (slot.col > maxSlotCol) maxSlotCol = slot.col;
+    if (slot.row < minRow) minRow = slot.row;
+    if (slot.row > maxRow) maxRow = slot.row;
+  }
+  const width = PAD * 2 + (maxSlotCol - minCol + 1) * SLOT_W;
+  const height = PAD * 2 + TITLE_BAND + (maxRow - minRow + 1) * SLOT_H;
+  const byUid = /* @__PURE__ */ new Map([[centerUid, center]]);
+  for (const entry of kept) byUid.set(entry.node.uid, entry.node);
+  const placed = [];
+  for (const [uid, slot] of slots) {
+    placed.push({
+      uid,
+      slot,
+      x: PAD + (slot.col - minCol) * SLOT_W,
+      y: PAD + TITLE_BAND + (slot.row - minRow) * SLOT_H
+    });
+  }
+  placed.sort((a, b) => {
+    if (a.uid === centerUid) return -1;
+    if (b.uid === centerUid) return 1;
+    return a.slot.row - b.slot.row || a.slot.col - b.slot.col || (a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0);
+  });
+  const cards = placed.map((item) => ({
+    uid: item.uid,
+    text: cardText(byUid.get(item.uid)),
+    x: item.x,
+    y: item.y
+  }));
+  const edges = [];
+  for (const card of cards) {
+    if (card.uid === centerUid) continue;
+    const edge = edgeFor(centerUid, byUid.get(card.uid));
+    if (edge) edges.push(edge);
+  }
+  return { width, height, cards, edges, omitted, sectionTitle };
+}
+function cardsAt(cards, origin) {
+  const x0 = finite(origin?.x, 0);
+  const y0 = finite(origin?.y, 0);
+  return (Array.isArray(cards) ? cards : []).map((card) => ({
+    text: card.text,
+    x: x0 + finite(card?.x, 0),
+    y: y0 + finite(card?.y, 0)
+  }));
+}
+function edgesForAdded(plan, added) {
+  const map = /* @__PURE__ */ new Map();
+  const rows = Array.isArray(added) ? added : [];
+  const cards = Array.isArray(plan?.cards) ? plan.cards : [];
+  cards.forEach((card, index) => {
+    const uid = rows[index]?.uid;
+    if (typeof uid === "string" && uid) map.set(card.uid, uid);
+  });
+  const edges = [];
+  for (const edge of plan?.edges ?? []) {
+    const from = map.get(edge.fromUid);
+    const to = map.get(edge.toUid);
+    if (!from || !to) continue;
+    edges.push({
+      from,
+      to,
+      label: typeof edge.label === "string" ? edge.label : "",
+      direction: "one"
+    });
+  }
+  return edges;
+}
+function connectPayload(edges) {
+  if (!Array.isArray(edges) || edges.length === 0) return null;
+  if (edges.length === 1) return edges[0];
+  return edges.slice(0, SEND_LIMIT);
+}
+function centerCardUid(plan, added, centerUid) {
+  const cards = Array.isArray(plan?.cards) ? plan.cards : [];
+  const rows = Array.isArray(added) ? added : [];
+  const index = cards.findIndex((card) => card?.uid === centerUid);
+  if (index >= 0 && rows[index]?.uid) return rows[index].uid;
+  return rows[0]?.uid ?? null;
+}
+
 // src/view/features/boards.js
-function createBoards() {
-  return { name: "boards" };
+var DIAGRAM_EVENTS = ["change", "mount", "unmount"];
+var RELOAD_MS = 300;
+var EMPTY_BOARDS = "No boards found. Open a board once, or update Plexus Diagram.";
+var BRACKET_STATUS = "That title contains brackets, so it cannot be a card.";
+var SWITCH_STATUS = "Switch to the Compass view to send the map.";
+var SEND_TITLE = "Send map to board…";
+var ADD_TITLE = "Add to board…";
+function diagramApi() {
+  const api = globalThis.window?.PlexusDiagram;
+  return api && typeof api.boardsWith === "function" ? api : null;
+}
+function inCompass(ctx) {
+  const view = ctx.features?.get?.("views")?.current?.()?.view;
+  return !view || view === "compass";
+}
+function fullWrite(api) {
+  return apiHas(api, "addSection") && apiHas(api, "addCards") && apiHas(api, "connect");
+}
+function createBoards(ctx) {
+  if (!ctx?.dom?.root) return { name: "boards" };
+  const { el: el2, button: button2, lifecycle, dom } = ctx;
+  let diagram = null;
+  let reloadTimer = null;
+  let openButton = null;
+  let returnFocus = null;
+  const backdrop = el2("div", "compass-board-backdrop");
+  backdrop.hidden = true;
+  lifecycle.node(backdrop, dom.root);
+  function onDiagramEvent() {
+    queueReload();
+  }
+  function unsubscribe() {
+    const api = diagram;
+    diagram = null;
+    if (!api || typeof api.removeEventListener !== "function") return;
+    for (const type of DIAGRAM_EVENTS) {
+      try {
+        api.removeEventListener(type, onDiagramEvent);
+      } catch {
+      }
+    }
+  }
+  function subscribe() {
+    const api = diagramApi();
+    if (api === diagram) return;
+    unsubscribe();
+    if (!api) return;
+    diagram = api;
+    if (typeof api.addEventListener !== "function") return;
+    for (const type of DIAGRAM_EVENTS) {
+      try {
+        api.addEventListener(type, onDiagramEvent);
+      } catch {
+      }
+    }
+  }
+  function queueReload() {
+    if (!ctx.state?.isOpen || typeof ctx.later !== "function") return;
+    if (typeof ctx.cancel === "function") reloadTimer = ctx.cancel(reloadTimer);
+    reloadTimer = ctx.later(() => {
+      reloadTimer = null;
+      if (ctx.state?.isOpen) ctx.load?.();
+    }, RELOAD_MS);
+  }
+  function onReady() {
+    subscribe();
+    queueReload();
+  }
+  function onUnload() {
+    unsubscribe();
+    queueReload();
+  }
+  const win = globalThis.window ?? globalThis;
+  if (win && typeof win.addEventListener === "function") {
+    lifecycle.event(win, "plexus-diagram:ready", onReady);
+    lifecycle.event(win, "plexus-diagram:unload", onUnload);
+  }
+  subscribe();
+  function clearOpenButton() {
+    openButton?.remove?.();
+    openButton = null;
+  }
+  function showOpenButton(boardUid, cardUid) {
+    clearOpenButton();
+    const opener = button2("compass-board-open", "Open board", "Open board");
+    opener.addEventListener("click", () => {
+      clearOpenButton();
+      const opts = cardUid ? { card: cardUid } : {};
+      ctx.openBoard?.(boardUid, opts);
+    });
+    if (dom.bar && dom.status && typeof dom.bar.insertBefore === "function") {
+      dom.bar.insertBefore(opener, dom.status);
+    } else {
+      dom.root.append(opener);
+    }
+    openButton = opener;
+  }
+  function closeDialog(restore = true) {
+    backdrop.hidden = true;
+    backdrop.replaceChildren();
+    const back = returnFocus;
+    returnFocus = null;
+    if (restore && back?.isConnected) back.focus?.({ preventScroll: true });
+  }
+  function menuPoint() {
+    const rect = typeof dom.root.getBoundingClientRect === "function" ? dom.root.getBoundingClientRect() : { left: 0, top: 0 };
+    const left = Number.parseFloat(dom.menu?.style?.left);
+    const top = Number.parseFloat(dom.menu?.style?.top);
+    return {
+      x: rect.left + (Number.isFinite(left) ? left : 24),
+      y: rect.top + (Number.isFinite(top) ? top : 48) - 6
+    };
+  }
+  function subjectFor(uid, node) {
+    if (node?.style === "board" || node?.style === "card" || node?.style === "group" || node?.kind === "group") {
+      return null;
+    }
+    const center = ctx.state?.hood?.center;
+    const source = node ?? (center && uid === center.uid ? center : null);
+    if (!source || source.kind !== "page" && source.kind !== "block") return null;
+    const shaped = source.kind === "block" ? source : { ...source, kind: "page" };
+    return {
+      uid: source.uid,
+      kind: source.kind,
+      title: typeof source.title === "string" ? source.title : "",
+      text: cardText(shaped)
+    };
+  }
+  function chooseBoard(board, request) {
+    if (board.already && request.mode === "add") return;
+    if (request.mode === "add") void addOne(board, request.subject);
+    else openConfirm(board);
+  }
+  function boardLabel(board, request) {
+    if (board.already && request.mode === "add") return `${board.label} (already on it)`;
+    return board.label;
+  }
+  function appendBoards(menu, boards, request) {
+    const items = [];
+    for (const board of boards) {
+      const item = ctx.menuItem(boardLabel(board, request), () => chooseBoard(board, request));
+      item.classList.add("compass-board-pick");
+      if (board.already && request.mode === "add") item.setAttribute("aria-disabled", "true");
+      items.push(item);
+    }
+    return items;
+  }
+  function openFiltered(menu, boards, request) {
+    const input = el2("input", "compass-board-filter");
+    input.type = "search";
+    input.placeholder = "Filter boards";
+    input.setAttribute("aria-label", "Filter boards");
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    menu.append(input);
+    let active = 0;
+    let shown = boards;
+    function paint(resetActive) {
+      if (resetActive) active = 0;
+      shown = filterBoards(boards, input.value);
+      for (const child of [...menu.children]) {
+        if (child !== input) child.remove();
+      }
+      if (!shown.length) {
+        const empty = button2("compass-menu-item compass-board-none", "No boards match.");
+        empty.disabled = true;
+        empty.setAttribute("role", "menuitem");
+        menu.append(empty);
+        active = 0;
+        return;
+      }
+      const items = appendBoards(menu, shown, request);
+      if (active >= items.length) active = items.length - 1;
+      if (active < 0) active = 0;
+      items.forEach((item, index) => item.classList.toggle("compass-board-active", index === active));
+      items[active]?.scrollIntoView?.({ block: "nearest" });
+    }
+    input.addEventListener("input", () => paint(true));
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Enter" && event.key !== "Escape") {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "Escape") {
+        ctx.hideFloating?.();
+        return;
+      }
+      if (event.key === "Enter") {
+        const board = shown[active];
+        if (!board) return;
+        ctx.hideFloating?.();
+        chooseBoard(board, request);
+        return;
+      }
+      if (!shown.length) return;
+      active += event.key === "ArrowDown" ? 1 : -1;
+      if (active < 0) active = shown.length - 1;
+      if (active >= shown.length) active = 0;
+      paint(false);
+    });
+    paint(true);
+    input.focus?.({ preventScroll: true });
+  }
+  function openPicker(request) {
+    const point = menuPoint();
+    const centerUid = ctx.state?.hood?.center?.uid ?? "";
+    const boards = pickerBoards(diagramApi(), {
+      centerUid,
+      nodeUid: request.subject?.uid ?? "",
+      markHeld: request.mode === "add"
+    });
+    ctx.hideFloating?.();
+    const menu = dom.menu;
+    if (!boards.length) {
+      const empty = button2("compass-menu-item compass-board-none", EMPTY_BOARDS);
+      empty.disabled = true;
+      empty.setAttribute("role", "menuitem");
+      menu.append(empty);
+    } else if (needsBoardFilter(boards.length)) {
+      openFiltered(menu, boards, request);
+    } else {
+      appendBoards(menu, boards, request);
+      menu.querySelector("button")?.focus?.({ preventScroll: true });
+    }
+    ctx.placeFloating?.(menu, point.x, point.y);
+  }
+  async function addOne(board, subject) {
+    if (!subject?.text) {
+      ctx.setStatus?.(BRACKET_STATUS, true);
+      return;
+    }
+    const api = diagramApi();
+    if (typeof api?.addCard !== "function") {
+      ctx.setStatus?.("Plexus Diagram could not add the card.");
+      return;
+    }
+    let cards = [];
+    if (typeof api.cardsOf === "function") {
+      try {
+        const value = api.cardsOf(board.uid);
+        cards = Array.isArray(value) ? value : [];
+      } catch {
+        cards = [];
+      }
+    }
+    const at = placeBelow(cards);
+    try {
+      await api.addCard(board.uid, { ref: subject.text, at });
+      if (ctx.state?.isOpen) ctx.setStatus?.(`Added to ${board.title}.`, true);
+    } catch (error) {
+      if (ctx.state?.isOpen) ctx.setStatus?.(addFailure(error));
+    }
+  }
+  function drawnNodes() {
+    const hood = ctx.state?.hood;
+    const center = hood?.center;
+    if (!center?.uid) return null;
+    const byUid = /* @__PURE__ */ new Map();
+    for (const node of hood.nodes ?? []) {
+      if (node?.uid) byUid.set(node.uid, node);
+    }
+    const nodes = [];
+    const elements = typeof dom.root.querySelectorAll === "function" ? dom.root.querySelectorAll(".compass-node") : [];
+    for (const element of elements) {
+      if (element.classList?.contains("compass-node-center")) continue;
+      if (element.classList?.contains("compass-fade")) continue;
+      const node = byUid.get(element.dataset?.uid);
+      if (!node) continue;
+      if (node.style === "board" || node.style === "card" || node.style === "group" || node.kind === "group") continue;
+      nodes.push(node);
+    }
+    return { center, nodes };
+  }
+  function summaryFor(plan, board, full, drawArrows) {
+    const basic = !full;
+    let text = sendSummary({
+      count: plan.cards.length,
+      boardLabel: board.title,
+      sectionTitle: full ? plan.sectionTitle : "",
+      arrows: full && drawArrows ? plan.edges.length : 0,
+      basic,
+      omitted: plan.omitted
+    });
+    if (basic && plan.cards.length > BASIC_LIMIT) {
+      text += " Compass can send at most 20 cards this way.";
+    }
+    return text;
+  }
+  function trapDialog(event, dialog) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeDialog();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = [...dialog.querySelectorAll("button, input, [href], [tabindex]")].filter((node) => {
+      if (node.disabled || node.hidden) return false;
+      return node.tabIndex !== -1;
+    });
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = globalThis.document?.activeElement;
+    if (event.shiftKey && (active === first || !dialog.contains(active))) {
+      event.preventDefault();
+      last.focus?.();
+    } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
+      event.preventDefault();
+      first.focus?.();
+    }
+  }
+  async function writeFull(api, board, plan, drawArrows) {
+    const section = await api.addSection(board.uid, {
+      title: plan.sectionTitle,
+      w: plan.width,
+      h: plan.height
+    });
+    const origin = section?.rect && typeof section.rect === "object" ? section.rect : { x: 0, y: 0 };
+    const placed = cardsAt(plan.cards, origin);
+    const result = await api.addCards(board.uid, placed, { section: section?.uid });
+    const added = Array.isArray(result?.added) ? result.added : [];
+    if (drawArrows) {
+      const payload = connectPayload(edgesForAdded(plan, added));
+      if (payload) await api.connect(board.uid, payload);
+    }
+    return added;
+  }
+  async function writeBasic(api, board, plan) {
+    let existing = [];
+    if (typeof api.cardsOf === "function") {
+      try {
+        const value = api.cardsOf(board.uid);
+        existing = Array.isArray(value) ? value : [];
+      } catch {
+        existing = [];
+      }
+    }
+    const placed = cardsAt(plan.cards, placeBelow(existing));
+    const added = [];
+    for (const card of placed) {
+      const result = await api.addCard(board.uid, { ref: card.text, at: { x: card.x, y: card.y } });
+      added.push({ uid: result?.uid ?? "", text: card.text });
+    }
+    return added;
+  }
+  async function runSend(board, plan, full, drawArrows) {
+    closeDialog(false);
+    const api = diagramApi();
+    try {
+      const added = full ? await writeFull(api, board, plan, drawArrows) : await writeBasic(api, board, plan);
+      if (!ctx.state?.isOpen) return;
+      const count2 = plan.cards.length;
+      const word = count2 === 1 ? "card" : "cards";
+      ctx.setStatus?.(`Sent ${count2} ${word} to ${board.title}.`, true);
+      const centerUid = plan.cards[0]?.uid ?? "";
+      showOpenButton(board.uid, centerCardUid(plan, added, centerUid));
+    } catch (error) {
+      if (!ctx.state?.isOpen) return;
+      const text = addFailure(error);
+      ctx.setStatus?.(text === "Plexus Diagram could not add the card." ? "Plexus Diagram could not add the cards." : text);
+    }
+  }
+  function openConfirm(board) {
+    const pack = drawnNodes();
+    if (!pack) return;
+    const api = diagramApi();
+    const full = fullWrite(api);
+    const plan = sendPlan({
+      center: pack.center,
+      nodes: pack.nodes,
+      geometry: ctx.state?.geometry,
+      limit: SEND_LIMIT
+    });
+    let drawArrows = full;
+    returnFocus = globalThis.document?.activeElement ?? null;
+    const dialog = el2("div", "compass-board-dialog");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-label", "Send map to board");
+    const summary = el2("p", "compass-board-summary");
+    dialog.append(summary);
+    const refused3 = !full && plan.cards.length > BASIC_LIMIT;
+    const sendBtn = button2("compass-board-send", "Send");
+    const cancelBtn = button2("compass-board-cancel", "Cancel");
+    sendBtn.disabled = refused3 || plan.cards.length === 0;
+    function paintSummary() {
+      summary.textContent = summaryFor(plan, board, full, drawArrows);
+    }
+    if (full) {
+      const row = el2("label", "compass-board-check");
+      const checkbox = el2("input", "compass-board-arrows");
+      checkbox.type = "checkbox";
+      checkbox.checked = true;
+      row.append(checkbox, el2("span", "compass-board-check-text", "Draw arrows"));
+      dialog.append(row);
+      dialog.append(el2("p", "compass-board-hint", "Each arrow is a block on the board that links both ends."));
+      checkbox.addEventListener("change", () => {
+        drawArrows = checkbox.checked;
+        paintSummary();
+      });
+    }
+    paintSummary();
+    const actions = el2("div", "compass-board-actions");
+    actions.append(cancelBtn, sendBtn);
+    dialog.append(actions);
+    cancelBtn.addEventListener("click", () => closeDialog());
+    sendBtn.addEventListener("click", () => {
+      if (sendBtn.disabled) return;
+      sendBtn.disabled = true;
+      void runSend(board, plan, full, full && drawArrows);
+    });
+    dialog.addEventListener("keydown", (event) => trapDialog(event, dialog));
+    backdrop.replaceChildren(dialog);
+    backdrop.hidden = false;
+    (sendBtn.disabled ? cancelBtn : sendBtn).focus?.({ preventScroll: true });
+  }
+  function startSend() {
+    if (!inCompass(ctx)) {
+      ctx.setStatus?.(SWITCH_STATUS);
+      return;
+    }
+    openPicker({ mode: "send" });
+  }
+  function nodeMenu(uid, node) {
+    if (node?.style === "board") {
+      return savedViews(diagramApi(), uid).map((view) => ({
+        title: view.title,
+        run: () => ctx.openBoard?.(uid, { view: view.uid })
+      }));
+    }
+    const subject = subjectFor(uid, node);
+    if (!subject) return [];
+    return [{ title: ADD_TITLE, run: () => openPicker({ mode: "add", subject }) }];
+  }
+  function stageMenu() {
+    if (!inCompass(ctx)) return [];
+    return [{ title: SEND_TITLE, run: startSend }];
+  }
+  function commands() {
+    return [{ id: "send-to-board", title: SEND_TITLE, run: startSend }];
+  }
+  function onEscape() {
+    if (backdrop.hidden) return false;
+    closeDialog();
+    return true;
+  }
+  function onClose() {
+    closeDialog(false);
+    clearOpenButton();
+    if (typeof ctx.cancel === "function") reloadTimer = ctx.cancel(reloadTimer);
+  }
+  lifecycle.event(backdrop, "click", (event) => {
+    if (event.target === backdrop) closeDialog();
+  });
+  lifecycle.add(() => {
+    if (typeof ctx.cancel === "function") reloadTimer = ctx.cancel(reloadTimer);
+    unsubscribe();
+    clearOpenButton();
+  });
+  return {
+    name: "boards",
+    nodeMenu,
+    stageMenu,
+    commands,
+    onEscape,
+    onClose
+  };
+}
+
+// src/model/draw-map.js
+var SCALE = 1.4;
+var GAP = 24;
+var BOX_CAP = 120;
+var FRAME_PAD = 16;
+var SEPARATE_PASSES = 80;
+function num(value, fallback = 0) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+function emptyPlan() {
+  return { boxes: [], arrows: [], frames: [], omitted: 0 };
+}
+function linkText(node, linksOn) {
+  if (node?.kind === "group") {
+    const label = typeof node.title === "string" && node.title ? node.title : "Group";
+    const count2 = Number.isFinite(node.count) ? node.count : 0;
+    return `${label} (${count2})`;
+  }
+  const title = typeof node?.title === "string" && node.title ? node.title : typeof node?.uid === "string" ? node.uid : "";
+  if (linksOn === false) return title;
+  if (node?.kind === "block") return `((${node.uid}))`;
+  if (!title.includes("[") && !title.includes("]")) return `[[${title}]]`;
+  return title;
+}
+function scaledBox(box, fallbackW, fallbackH) {
+  const w = num(box?.w, fallbackW) * SCALE;
+  const h = num(box?.h, fallbackH) * SCALE;
+  const cx = num(box?.x) * SCALE;
+  const cy = num(box?.y) * SCALE;
+  return { x: cx - w / 2, y: cy - h / 2, w, h };
+}
+function axisGap(a, b, axis) {
+  const size = axis === "x" ? "w" : "h";
+  const a0 = a[axis];
+  const a1 = a0 + a[size];
+  const b0 = b[axis];
+  const b1 = b0 + b[size];
+  if (a1 <= b0) return b0 - a1;
+  if (b1 <= a0) return a0 - b1;
+  return -(Math.min(a1, b1) - Math.max(a0, b0));
+}
+function separate(boxes) {
+  for (let pass = 0; pass < SEPARATE_PASSES; pass += 1) {
+    let moved = false;
+    for (let i = 0; i < boxes.length; i += 1) {
+      for (let j = i + 1; j < boxes.length; j += 1) {
+        const a = boxes[i];
+        const b = boxes[j];
+        const gx = axisGap(a, b, "x");
+        const gy = axisGap(a, b, "y");
+        if (gx >= GAP - 0.01 || gy >= GAP - 0.01) continue;
+        const defX = GAP - gx;
+        const defY = GAP - gy;
+        const axis = defX <= defY ? "x" : "y";
+        const size = axis === "x" ? "w" : "h";
+        const deficit = axis === "x" ? defX : defY;
+        const half = deficit / 2;
+        const aCenter = a[axis] + a[size] / 2;
+        const bCenter = b[axis] + b[size] / 2;
+        if (aCenter < bCenter || aCenter === bCenter && i < j) {
+          a[axis] -= half;
+          b[axis] += half;
+        } else {
+          a[axis] += half;
+          b[axis] -= half;
+        }
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+}
+function hiddenSet(hidden) {
+  if (hidden instanceof Set) return hidden;
+  if (Array.isArray(hidden)) return new Set(hidden);
+  return /* @__PURE__ */ new Set();
+}
+function nodeMap(nodes) {
+  const map = /* @__PURE__ */ new Map();
+  if (!Array.isArray(nodes)) return map;
+  for (const node of nodes) {
+    if (!node || typeof node.uid !== "string" || !node.uid || map.has(node.uid)) continue;
+    map.set(node.uid, node);
+  }
+  return map;
+}
+function centerOwns(node) {
+  if (!node || node.kind === "group") return true;
+  if (node.style === "mention") return false;
+  if (node.style === "link") return true;
+  const evidence = Array.isArray(node.evidence) ? node.evidence : [];
+  if (node.style === "typed") {
+    let out = false;
+    let inbound = false;
+    for (const item of evidence) {
+      if (item?.kind !== "typed") continue;
+      if (item.direction === "out") out = true;
+      if (item.direction === "in") inbound = true;
+    }
+    if (out) return true;
+    if (inbound) return false;
+    return !(node.role === "parent" || node.zone === "north");
+  }
+  if (node.style === "structural") {
+    for (const item of evidence) {
+      if (item?.kind !== "structural") continue;
+      if (item.note === "page" || item.note === "parent block") return false;
+      if (item.note === "namespace" && (node.role === "parent" || node.zone === "north")) return false;
+    }
+    return true;
+  }
+  if (node.role === "parent" || node.zone === "north") return false;
+  return true;
+}
+function isSibling(node) {
+  return node?.role === "sibling" || node?.zone === "siblings" || node?.style === "sibling";
+}
+function pushArrow(arrows, seen, from, to, label) {
+  if (!from || !to || from === to) return;
+  const key = `${from}\0${to}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  arrows.push({ from, to, label: typeof label === "string" ? label : "" });
+}
+function compassArrows(boxes, byUid) {
+  const arrows = [];
+  const seen = /* @__PURE__ */ new Set();
+  const center = boxes.find((box) => box.center);
+  if (!center) return arrows;
+  for (const box of boxes) {
+    if (box.center) continue;
+    const node = box.node;
+    const label = typeof node?.label === "string" ? node.label : "";
+    if (isSibling(node)) {
+      const via = typeof node?.via === "string" ? byUid.get(node.via) : "";
+      pushArrow(arrows, seen, via, box.key, label);
+      continue;
+    }
+    if (centerOwns(node)) pushArrow(arrows, seen, center.key, box.key, label);
+    else pushArrow(arrows, seen, box.key, center.key, label);
+  }
+  return arrows;
+}
+function resolveTreeKey(occKey, uid, centerUid, centerKey, byKey, byUid) {
+  if (uid === centerUid || occKey === centerUid) return centerKey;
+  if (occKey && byKey.has(occKey)) return occKey;
+  return byUid.get(uid) || "";
+}
+function mindmapArrows(tree, boxes, centerUid, centerKey) {
+  const arrows = [];
+  const seen = /* @__PURE__ */ new Set();
+  const byKey = new Set(boxes.map((box) => box.key));
+  const byUid = new Map(boxes.map((box) => [box.uid, box.key]));
+  const walk2 = (occ) => {
+    if (!occ) return;
+    const from = resolveTreeKey(occ.key, occ.uid, centerUid, centerKey, byKey, byUid);
+    const children = Array.isArray(occ.children) ? occ.children : [];
+    for (const child of children) {
+      const to = resolveTreeKey(child?.key, child?.uid, centerUid, centerKey, byKey, byUid);
+      pushArrow(arrows, seen, from, to, "");
+      walk2(child);
+    }
+  };
+  if (tree?.root) walk2(tree.root);
+  const parents = Array.isArray(tree?.parents) ? tree.parents : [];
+  for (const parent of parents) {
+    const from = byUid.get(parent?.uid) || "";
+    pushArrow(arrows, seen, from, centerKey, "");
+  }
+  return arrows;
+}
+function facetArrows(boxes) {
+  const arrows = [];
+  const seen = /* @__PURE__ */ new Set();
+  const center = boxes.find((box) => box.center);
+  if (!center) return arrows;
+  for (const box of boxes) {
+    if (box.center) continue;
+    pushArrow(arrows, seen, center.key, box.key, "");
+  }
+  return arrows;
+}
+function facetFrames(regions, boxes) {
+  if (!Array.isArray(regions)) return [];
+  const frames = [];
+  for (const region of regions) {
+    if (!region || typeof region !== "object") continue;
+    const id = typeof region.id === "string" && region.id ? region.id : "";
+    const name = typeof region.name === "string" && region.name || typeof region.label === "string" && region.label || id || "Region";
+    let members = [];
+    if (Array.isArray(region.members)) {
+      const have = new Set(boxes.map((box) => box.key));
+      members = region.members.filter((key) => typeof key === "string" && have.has(key));
+    } else if (id) {
+      members = boxes.filter((box) => !box.center && box.zone === id).map((box) => box.key);
+    }
+    const rw = num(region.w) * SCALE;
+    const rh = num(region.h) * SCALE;
+    let x = num(region.x) * SCALE - rw / 2;
+    let y = num(region.y) * SCALE - rh / 2;
+    let w = rw;
+    let h = rh;
+    for (const key of members) {
+      const box = boxes.find((item) => item.key === key);
+      if (!box) continue;
+      const minX = Math.min(x, box.x - FRAME_PAD);
+      const minY = Math.min(y, box.y - FRAME_PAD);
+      const maxX = Math.max(x + w, box.x + box.w + FRAME_PAD);
+      const maxY = Math.max(y + h, box.y + box.h + FRAME_PAD);
+      x = minX;
+      y = minY;
+      w = maxX - minX;
+      h = maxY - minY;
+    }
+    frames.push({ name, x, y, w, h, members });
+  }
+  return frames;
+}
+function publish(box) {
+  return {
+    key: box.key,
+    uid: box.uid,
+    text: box.text,
+    x: box.x,
+    y: box.y,
+    w: box.w,
+    h: box.h,
+    center: box.center === true,
+    zone: box.zone || ""
+  };
+}
+function drawPlan({
+  view,
+  center,
+  geometry,
+  nodes,
+  links,
+  tree,
+  hidden
+} = {}) {
+  const mode = view === "mindmap" || view === "facets" ? view : "compass";
+  const linksOn = links !== false;
+  if (!center || typeof center.uid !== "string" || !center.uid) return emptyPlan();
+  const centerUid = center.uid;
+  const byNode = nodeMap(nodes);
+  const hiddenUids2 = hiddenSet(hidden);
+  const chosen = /* @__PURE__ */ new Map();
+  const items = Array.isArray(geometry?.items) ? geometry.items : [];
+  for (const item of items) {
+    if (!item || item.kind === "more" || item.kind === "chip") continue;
+    const uid = item.uid;
+    if (typeof uid !== "string" || !uid || uid === centerUid) continue;
+    if (hiddenUids2.has(uid) || !byNode.has(uid)) continue;
+    const prev = chosen.get(uid);
+    if (!prev || prev.item.status === "repeat" && item.status !== "repeat") {
+      chosen.set(uid, { item, node: byNode.get(uid) });
+    }
+  }
+  const centerGeom = geometry?.center && typeof geometry.center === "object" ? geometry.center : { x: 0, y: 0, w: 240, h: 56 };
+  const centerPlaced = scaledBox(centerGeom, 240, 56);
+  const centerBox = {
+    key: `center:${centerUid}`,
+    uid: centerUid,
+    text: linkText(center, linksOn),
+    ...centerPlaced,
+    center: true,
+    zone: "center",
+    node: center
+  };
+  const rest = [];
+  for (const { item, node } of chosen.values()) {
+    const placed = scaledBox(item, 180, 34);
+    rest.push({
+      key: typeof item.key === "string" && item.key ? item.key : item.uid,
+      uid: node.uid,
+      text: linkText(node, linksOn),
+      ...placed,
+      center: false,
+      zone: typeof item.zone === "string" && item.zone ? item.zone : node.zone || "",
+      node
+    });
+  }
+  rest.sort((a, b) => a.y - b.y || a.x - b.x || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  const kept = rest.slice(0, BOX_CAP - 1);
+  const omitted = rest.length - kept.length;
+  const boxes = [centerBox, ...kept];
+  separate(boxes);
+  const byUid = new Map(boxes.map((box) => [box.uid, box.key]));
+  let arrows = [];
+  if (mode === "mindmap") arrows = mindmapArrows(tree, boxes, centerUid, centerBox.key);
+  else if (mode === "facets") arrows = facetArrows(boxes);
+  else arrows = compassArrows(boxes, byUid);
+  const keptKeys = new Set(boxes.map((box) => box.key));
+  arrows = arrows.filter((arrow) => keptKeys.has(arrow.from) && keptKeys.has(arrow.to));
+  const frames = mode === "facets" ? facetFrames(geometry?.regions, boxes) : [];
+  return {
+    boxes: boxes.map(publish),
+    arrows,
+    frames,
+    omitted
+  };
 }
 
 // src/view/features/drawings.js
-function createDrawings() {
-  return { name: "drawings" };
+var COMMAND_ID = "draw-map";
+var COMMAND_TITLE = "Draw this map…";
+var DRAWING_CAP = 12;
+var FOCUSABLE_SELECTOR2 = 'button:not(:disabled), textarea:not(:disabled), input:not(:disabled), [tabindex="0"]';
+function plexusApi2() {
+  const host = globalThis.window ?? globalThis;
+  const api = host?.RoamPlexus;
+  return api && typeof api === "object" ? api : null;
+}
+function canDraw() {
+  const api = plexusApi2();
+  return Boolean(
+    api && typeof api.create === "function" && typeof api.whenOpen === "function" && typeof api.build === "function"
+  );
+}
+function countWord(count2, singular, plural) {
+  return `${count2} ${count2 === 1 ? singular : plural}`;
+}
+function regionsFromDom(root) {
+  if (!root?.querySelectorAll) return [];
+  const regions = [];
+  for (const element of root.querySelectorAll('[data-paint="region"]')) {
+    const id = element.dataset?.region || "";
+    const name = element.querySelector?.(".compass-region-name")?.textContent?.trim() || element.querySelector?.(".compass-region-label")?.textContent?.trim() || id || "Region";
+    const w = Number.parseFloat(element.style?.width) || element.offsetWidth || 0;
+    const h = Number.parseFloat(element.style?.height) || element.offsetHeight || 0;
+    const match = /translate\(\s*(-?[\d.]+)px,\s*(-?[\d.]+)px\s*\)/.exec(element.style?.transform || "");
+    let x = w / 2;
+    let y = h / 2;
+    if (match) {
+      x = Number.parseFloat(match[1]) + w / 2;
+      y = Number.parseFloat(match[2]) + h / 2;
+    }
+    regions.push({ id, name, label: name, x, y, w, h });
+  }
+  return regions;
+}
+function createDrawings(ctx) {
+  if (!ctx?.dom?.root || typeof ctx.el !== "function") {
+    return { name: "drawings" };
+  }
+  let cache = null;
+  let backdrop = null;
+  let dialogEl = null;
+  let summaryEl = null;
+  let cutEl = null;
+  let linksInput = null;
+  let goBtn = null;
+  let cancelBtn = null;
+  let dialogOpen = false;
+  let busy = false;
+  let returnFocus = null;
+  function drawingPage() {
+    const center = ctx.state?.hood?.center;
+    if (!center || typeof center.uid !== "string" || !center.uid) return null;
+    if (center.kind === "block") {
+      const page = ctx.state?.snapshot?.center?.page;
+      if (!page || typeof page.uid !== "string" || !page.uid) return null;
+      const title2 = typeof page.title === "string" && page.title ? page.title : page.uid;
+      return { uid: page.uid, title: title2 };
+    }
+    const title = typeof center.title === "string" && center.title ? center.title : center.uid;
+    return { uid: center.uid, title };
+  }
+  function currentPlan(linksOn) {
+    const view = ctx.features?.get?.("views")?.current?.()?.view || "compass";
+    const hood = ctx.state?.hood;
+    const base = ctx.state?.geometry && typeof ctx.state.geometry === "object" ? ctx.state.geometry : { center: { x: 0, y: 0, w: 240, h: 56 }, items: [] };
+    const geomNodes = base.nodes;
+    const nodes = Array.isArray(geomNodes) && geomNodes.length ? geomNodes : Array.isArray(hood?.nodes) ? hood.nodes : [];
+    let hidden = null;
+    try {
+      const lenses = ctx.features?.get?.("lenses");
+      if (typeof lenses?.hiddenFor === "function") hidden = lenses.hiddenFor(nodes);
+    } catch (error) {
+      console.error("[compass] draw map", error);
+    }
+    const regions = view === "facets" ? regionsFromDom(ctx.dom.root) : null;
+    const geometry = regions ? { ...base, regions } : base;
+    const tree = view === "mindmap" ? ctx.features?.get?.("mindmap")?.tree?.() ?? null : null;
+    return drawPlan({
+      view,
+      center: hood?.center,
+      geometry,
+      nodes,
+      links: linksOn,
+      tree,
+      hidden
+    });
+  }
+  function closeDialog() {
+    dialogOpen = false;
+    if (backdrop) backdrop.hidden = true;
+    const back = returnFocus;
+    returnFocus = null;
+    if (back && back.isConnected && backdrop && !backdrop.contains(back)) {
+      back.focus?.({ preventScroll: true });
+    }
+  }
+  function ensureDialog() {
+    if (backdrop) return;
+    backdrop = ctx.el("div", "compass-draw-backdrop");
+    backdrop.hidden = true;
+    dialogEl = ctx.el("div", "compass-draw-dialog");
+    dialogEl.setAttribute("role", "dialog");
+    dialogEl.setAttribute("aria-modal", "true");
+    dialogEl.setAttribute("aria-labelledby", "compass-draw-title");
+    const title = ctx.el("h2", "compass-draw-title", "Draw this map");
+    title.id = "compass-draw-title";
+    summaryEl = ctx.el("p", "compass-draw-summary");
+    cutEl = ctx.el("p", "compass-draw-cut");
+    cutEl.hidden = true;
+    const label = ctx.el("label", "compass-draw-check");
+    linksInput = ctx.el("input", "compass-draw-links");
+    linksInput.type = "checkbox";
+    linksInput.checked = true;
+    linksInput.setAttribute("aria-describedby", "compass-draw-hint");
+    const labelText = ctx.el("span", "compass-draw-check-text", "Write page links");
+    label.append(linksInput, labelText);
+    const hint = ctx.el(
+      "p",
+      "compass-draw-hint",
+      "Boxes become [[links]] you can Cmd-click, and the drawing shows up as related on those pages."
+    );
+    hint.id = "compass-draw-hint";
+    const actions = ctx.el("div", "compass-draw-actions");
+    cancelBtn = ctx.button("compass-draw-cancel", "Cancel");
+    goBtn = ctx.button("compass-draw-go", "Draw");
+    actions.append(cancelBtn, goBtn);
+    dialogEl.append(title, summaryEl, cutEl, label, hint, actions);
+    backdrop.append(dialogEl);
+    if (ctx.lifecycle?.node) ctx.lifecycle.node(backdrop, ctx.dom.root);
+    else ctx.dom.root.append(backdrop);
+    const register = (target, event, handler) => {
+      if (ctx.lifecycle?.event) ctx.lifecycle.event(target, event, handler);
+      else target.addEventListener(event, handler);
+    };
+    register(backdrop, "pointerdown", (event) => {
+      event.stopPropagation();
+    });
+    register(backdrop, "click", (event) => {
+      if (event.target === backdrop) closeDialog();
+    });
+    register(cancelBtn, "click", () => closeDialog());
+    register(goBtn, "click", () => {
+      void confirmDraw();
+    });
+    register(backdrop, "keydown", (event) => {
+      if (!dialogOpen) return;
+      if (event.key === "Escape") return;
+      if (event.key === "Tab") {
+        const focusable = [...dialogEl.querySelectorAll(FOCUSABLE_SELECTOR2)].filter((item) => !item.hidden && item.offsetParent !== null);
+        if (focusable.length) {
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          const active = globalThis.document?.activeElement;
+          if (event.shiftKey) {
+            if (active === first || !dialogEl.contains(active)) {
+              event.preventDefault();
+              last.focus();
+            }
+          } else if (active === last || !dialogEl.contains(active)) {
+            event.preventDefault();
+            first.focus();
+          }
+        }
+        event.stopPropagation();
+        return;
+      }
+      event.stopPropagation();
+    });
+  }
+  function openDialog() {
+    if (!canDraw()) return;
+    const page = drawingPage();
+    if (!page) {
+      ctx.setStatus?.("Roam Plexus could not create the drawing.", true);
+      return;
+    }
+    ensureDialog();
+    const plan = currentPlan(true);
+    summaryEl.textContent = `Draws ${countWord(plan.boxes.length, "box", "boxes")} and ${countWord(plan.arrows.length, "arrow", "arrows")} in a new drawing on [[${page.title}]]. Compass closes and the drawing opens.`;
+    if (plan.omitted > 0) {
+      const left = plan.omitted === 1 ? "1 was left out." : `${plan.omitted} were left out.`;
+      cutEl.textContent = `Only the first 120 boxes are drawn. ${left}`;
+      cutEl.hidden = false;
+    } else {
+      cutEl.textContent = "";
+      cutEl.hidden = true;
+    }
+    linksInput.checked = true;
+    goBtn.disabled = false;
+    cancelBtn.disabled = false;
+    returnFocus = globalThis.document?.activeElement ?? null;
+    backdrop.hidden = false;
+    dialogOpen = true;
+    goBtn.focus?.({ preventScroll: true });
+  }
+  async function confirmDraw() {
+    if (busy || !dialogOpen) return;
+    busy = true;
+    const useLinks = linksInput?.checked !== false;
+    const page = drawingPage();
+    const centerUid = ctx.state?.current || ctx.state?.hood?.center?.uid || "";
+    const plan = currentPlan(useLinks);
+    const pageTitle = page?.title || "";
+    closeDialog();
+    if (!page?.uid) {
+      ctx.setStatus?.("Roam Plexus could not create the drawing.", true);
+      busy = false;
+      return;
+    }
+    ctx.close?.();
+    const api = plexusApi2();
+    let created = null;
+    try {
+      created = await api.create({ parentUid: page.uid, order: "last" });
+    } catch (error) {
+      console.error("[compass] draw map", error);
+      created = null;
+    }
+    const drawingUid = typeof created?.uid === "string" ? created.uid : "";
+    if (!drawingUid) {
+      if (centerUid) ctx.focusUid?.(centerUid);
+      ctx.setStatus?.("Roam Plexus could not create the drawing.", true);
+      busy = false;
+      return;
+    }
+    try {
+      await api.whenOpen(drawingUid, { timeoutMs: 15e3 });
+    } catch (error) {
+      console.error("[compass] draw map", error);
+      ctx.setStatus?.(
+        `The new drawing is on [[${pageTitle}]], but it did not open. Open it and run Draw this map again.`,
+        true
+      );
+      busy = false;
+      return;
+    }
+    try {
+      const builder = api.build();
+      builder.style({ fontSize: 20 });
+      const ids = /* @__PURE__ */ new Map();
+      for (const box of plan.boxes) {
+        const opts = { x: box.x, y: box.y, width: box.w, height: box.h };
+        if (box.center) opts.strokeWidth = 2;
+        ids.set(box.key, builder.box(box.text, opts));
+      }
+      for (const frame of plan.frames) {
+        const children = frame.members.map((key) => ids.get(key)).filter(Boolean);
+        builder.frame(frame.x, frame.y, frame.w, frame.h, { name: frame.name, children });
+      }
+      for (const arrow of plan.arrows) {
+        const fromId = ids.get(arrow.from);
+        const toId = ids.get(arrow.to);
+        if (!fromId || !toId) continue;
+        if (arrow.label) builder.arrow(fromId, toId, { label: arrow.label });
+        else builder.arrow(fromId, toId);
+      }
+      await Promise.resolve(builder.commit(drawingUid));
+    } catch (error) {
+      console.error("[compass] draw map", error);
+      ctx.setStatus?.("Roam Plexus could not draw the map.", true);
+    }
+    busy = false;
+  }
+  function drawingNodes(hood) {
+    const center = hood?.center;
+    if (!center || center.kind !== "page" || typeof center.uid !== "string" || !center.uid) return null;
+    const api = plexusApi2();
+    if (typeof api?.drawingsOn !== "function") return null;
+    let entries = cache && cache.centerUid === center.uid ? cache.entries : null;
+    if (!entries) {
+      entries = [];
+      try {
+        const listed = api.drawingsOn(center.uid);
+        const uids = Array.isArray(listed) ? listed.filter((uid) => typeof uid === "string" && uid) : [];
+        let strings = {};
+        if (typeof ctx.host?.blockStrings === "function") {
+          try {
+            strings = ctx.host.blockStrings(uids) ?? {};
+          } catch (error) {
+            console.error("[compass] drawings", error);
+            strings = {};
+          }
+        }
+        for (const uid of uids) {
+          const string = typeof strings?.[uid] === "string" ? strings[uid] : "";
+          entries.push({ uid, string });
+        }
+      } catch (error) {
+        console.error("[compass] drawings", error);
+        entries = [];
+      }
+      cache = { centerUid: center.uid, entries };
+    }
+    const existing = new Set(Array.isArray(hood.nodes) ? hood.nodes.map((node) => node.uid) : []);
+    existing.add(center.uid);
+    const added = [];
+    for (const entry of entries) {
+      if (added.length >= DRAWING_CAP) break;
+      if (!entry.uid || existing.has(entry.uid)) continue;
+      existing.add(entry.uid);
+      added.push({
+        uid: entry.uid,
+        kind: "block",
+        title: drawingTitle(entry.string) || "Drawing",
+        string: entry.string,
+        style: "link",
+        role: "child",
+        zone: "south",
+        strength: 1,
+        label: "Drawing on this page",
+        evidence: [{
+          kind: "structural",
+          role: "child",
+          note: "drawing on page",
+          sourceUid: entry.uid
+        }],
+        alias: "",
+        editTime: 0,
+        createTime: 0,
+        writable: null,
+        via: null
+      });
+    }
+    return added;
+  }
+  return {
+    name: "drawings",
+    onSettings() {
+      cache = null;
+    },
+    onClose() {
+      closeDialog();
+    },
+    onEscape() {
+      if (!dialogOpen) return false;
+      closeDialog();
+      return true;
+    },
+    transformHood(hood) {
+      const added = drawingNodes(hood);
+      if (!added?.length) return hood;
+      const nodes = Array.isArray(hood.nodes) ? hood.nodes : [];
+      return { ...hood, nodes: nodes.concat(added) };
+    },
+    commands() {
+      if (!canDraw()) return [];
+      return [{ id: COMMAND_ID, title: COMMAND_TITLE, run: () => openDialog() }];
+    },
+    stageMenu() {
+      if (!canDraw()) return [];
+      return [{ title: COMMAND_TITLE, run: () => openDialog() }];
+    }
+  };
 }
 
 // src/view/features/more.js
@@ -13034,7 +14647,7 @@ function plexus() {
   const api = globalThis.window?.RoamPlexus;
   return api && api.apiVersion >= 1 ? api : null;
 }
-function diagramApi() {
+function diagramApi2() {
   const api = globalThis.window?.PlexusDiagram;
   return api && typeof api.boardsWith === "function" ? api : null;
 }
@@ -13217,6 +14830,7 @@ function describe(item, titleOf2) {
     if (item.note === "namespace") return "Namespace";
     if (item.note === "day") return "Adjacent daily note";
     if (item.note === "page") return "The page this block is on";
+    if (item.note === "drawing on page") return "A drawing on this page";
     return "The block this block sits under";
   }
   if (item.attribute) return `Shares ${item.attribute}:: under ${titleOf2(item.via) || "a parent"}`;
@@ -13387,7 +15001,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   const thumbRenderTried = /* @__PURE__ */ new Set();
   let thumbRenderChain = Promise.resolve();
   let plexusOff = null;
-  let plexusApi2 = null;
+  let plexusApi3 = null;
   let plexusFramePending = false;
   let followGen = 0;
   let compassNavUntil = 0;
@@ -13624,7 +15238,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   }
   function rebuild() {
     if (!snapshot || !settings) return;
-    const diagram = settings.boards === false ? null : diagramApi();
+    const diagram = settings.boards === false ? null : diagramApi2();
     const cap = Number(settings.model?.maxPerZone);
     const limit = Number.isFinite(cap) && cap > 0 ? cap : 12;
     let boards = [];
@@ -14327,7 +15941,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     hover.style.top = `${clientY + 12}px`;
   }
   function attachDiagramThumb(element, node) {
-    const api = diagramApi();
+    const api = diagramApi2();
     if (settings?.boards === false || !api || typeof api.thumbnail !== "function") {
       dropThumb(node.uid);
       return;
@@ -14358,7 +15972,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   function showHover(uid, clientX, clientY) {
     const node = uid === hood?.center?.uid ? snapshot?.center : nodeByUid.get(uid);
     const boardNode = node?.style === "board";
-    const api = boardNode ? diagramApi() : plexus();
+    const api = boardNode ? diagramApi2() : plexus();
     const allowed = boardNode ? settings?.boards !== false : Boolean(node && isDrawingLike(node));
     if (!node || !allowed || typeof api?.thumbnail !== "function") {
       if (hoverUid) clearHover();
@@ -14412,18 +16026,18 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   }
   function subscribePlexus() {
     const api = plexus();
-    if (plexusOff && plexusApi2 === api) return;
+    if (plexusOff && plexusApi3 === api) return;
     if (plexusOff) plexusOff();
     if (!api || typeof api.addEventListener !== "function") return;
     api.addEventListener("change", plexusChanged);
-    plexusApi2 = api;
+    plexusApi3 = api;
     plexusOff = () => {
       try {
         api.removeEventListener?.("change", plexusChanged);
       } catch {
       }
       plexusOff = null;
-      plexusApi2 = null;
+      plexusApi3 = null;
     };
   }
   function onPlexusReady() {
@@ -14835,16 +16449,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const isCenter = uid === hood?.center?.uid;
     if (!isCenter) menuItem("Focus here", () => focusUid(uid));
     addShowOnBoard(uid);
-    if (node?.style === "card" && openBoardUid && typeof diagramApi()?.open === "function") {
+    if (node?.style === "card" && openBoardUid && typeof diagramApi2()?.open === "function") {
       menuItem("Open on board", () => {
-        const api = diagramApi();
         const args = openArgs(openBoardUid, uid, false);
-        compassNavUntil = Date.now() + 800;
-        try {
-          Promise.resolve(api.open(args.boardUid, { card: args.card, sidebar: args.sidebar })).catch((error) => console.error("[compass] board", error));
-        } catch (error) {
-          console.error("[compass] board", error);
-        }
+        openBoard(args.boardUid, { card: args.card, sidebar: args.sidebar });
       });
     }
     menuItem("Open in sidebar", () => openSidebar(uid));
@@ -14867,7 +16475,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     menu.querySelector("button")?.focus();
   }
   function boardsHolding(uid) {
-    const api = diagramApi();
+    const api = diagramApi2();
     if (!api || !uid) return [];
     try {
       const found = api.boardsWith(uid);
@@ -14878,14 +16486,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     }
   }
   function openShownBoard(board) {
-    const api = diagramApi();
-    if (!board?.uid || typeof api?.open !== "function") return;
-    compassNavUntil = Date.now() + 800;
-    try {
-      Promise.resolve(api.open(board.uid, { card: board.card })).catch((error) => console.error("[compass] board", error));
-    } catch (error) {
-      console.error("[compass] board", error);
-    }
+    if (board?.uid) openBoard(board.uid, { card: board.card });
   }
   function addShowOnBoard(uid) {
     const plan = showBoardPlan(boardsHolding(uid));
@@ -15293,16 +16894,16 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const found = rankTitles(titleCache, text, 20);
     results.replaceChildren();
     activeResult = 0;
-    const canDraw = Boolean(settings?.drawings ?? readSettings()?.drawings) && Boolean(plexus());
+    const canDraw2 = Boolean(settings?.drawings ?? readSettings()?.drawings) && Boolean(plexus());
     if (!found.length) activeResult = -1;
-    if (!found.length && !canDraw) results.append(el("div", "compass-result-none", "No page by that name"));
+    if (!found.length && !canDraw2) results.append(el("div", "compass-result-none", "No page by that name"));
     for (const [index, row] of found.entries()) {
       const item = button(`compass-result${index === 0 ? " compass-result-active" : ""}`, row.title);
       item.dataset.uid = row.uid;
       item.setAttribute("role", "option");
       results.append(item);
     }
-    if (canDraw) {
+    if (canDraw2) {
       const item = button("compass-result compass-result-drawing", `New drawing: ${text}`);
       item.dataset.newDrawing = text;
       item.setAttribute("role", "option");
@@ -15464,6 +17065,18 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     back,
     forward
   });
+  function openBoard(boardUid, opts) {
+    const api = diagramApi2();
+    if (!boardUid || typeof api?.open !== "function") return;
+    compassNavUntil = Date.now() + 800;
+    const options = opts && typeof opts === "object" ? opts : {};
+    if (!options.sidebar) close();
+    try {
+      Promise.resolve(api.open(boardUid, options)).catch((error) => console.error("[compass] board", error));
+    } catch (error) {
+      console.error("[compass] board", error);
+    }
+  }
   const ctx = Object.freeze({
     extensionAPI,
     lifecycle,
@@ -15499,6 +17112,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     openZonePop,
     openSidebar,
     openMain,
+    openBoard,
     togglePin,
     savePins,
     clientToWorld,

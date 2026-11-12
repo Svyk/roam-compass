@@ -1926,15 +1926,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     addShowOnBoard(uid);
     if (node?.style === "card" && openBoardUid && typeof diagramApi()?.open === "function") {
       menuItem("Open on board", () => {
-        const api = diagramApi();
         const args = openArgs(openBoardUid, uid, false);
-        compassNavUntil = Date.now() + 800;
-        try {
-          Promise.resolve(api.open(args.boardUid, { card: args.card, sidebar: args.sidebar }))
-            .catch((error) => console.error("[compass] board", error));
-        } catch (error) {
-          console.error("[compass] board", error);
-        }
+        openBoard(args.boardUid, { card: args.card, sidebar: args.sidebar });
       });
     }
     menuItem("Open in sidebar", () => openSidebar(uid));
@@ -1970,15 +1963,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   }
 
   function openShownBoard(board) {
-    const api = diagramApi();
-    if (!board?.uid || typeof api?.open !== "function") return;
-    compassNavUntil = Date.now() + 800;
-    try {
-      Promise.resolve(api.open(board.uid, { card: board.card }))
-        .catch((error) => console.error("[compass] board", error));
-    } catch (error) {
-      console.error("[compass] board", error);
-    }
+    if (board?.uid) openBoard(board.uid, { card: board.card });
   }
 
   function addShowOnBoard(uid) {
@@ -2588,6 +2573,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (!boardUid || typeof api?.open !== "function") return;
     compassNavUntil = Date.now() + 800;
     const options = opts && typeof opts === "object" ? opts : {};
+    // The overlay covers the main window, so a board opened there would stay hidden behind it.
+    if (!options.sidebar) close();
     try {
       Promise.resolve(api.open(boardUid, options)).catch((error) => console.error("[compass] board", error));
     } catch (error) {

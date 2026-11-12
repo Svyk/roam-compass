@@ -4,6 +4,21 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-11
+
+### Added
+
+- Add to board… on a page or block node, or the center, adds that page to a Plexus Diagram board you pick. A board that already holds it is marked.
+- Send map to board… puts the center and its neighbors on a board in the Compass arrangement. With Plexus Diagram's board API, the cards go in a new section with arrows labelled by relation. Without it, Compass places up to 20 loose cards.
+- Boards that live on the center page show as nodes, labelled Board on this page. A board's menu lists its saved views and opens the board on one.
+- Board nodes refresh while Compass is open when a board changes or Plexus Diagram loads or unloads.
+- Draw this map… makes a new Roam Plexus drawing on the center page from the canvas, in all three views: boxes, labelled arrows, Mind Map links and Facets frames, with optional `[[links]]` in the boxes.
+- Drawing blocks on the center page show as nodes, labelled Drawing on this page.
+
+### Changed
+
+- Opening a board in the main window closes Compass first, so the board and the pulsed card are visible.
+
 ## [1.0.0] - 2026-11-11
 
 ### Added
