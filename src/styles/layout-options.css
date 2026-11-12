@@ -1,1 +1,168 @@
 /* layout-options */
+.compass-root .compass-node.compass-node-group {
+  padding-right: 32px;
+  border: 1.5px solid var(--compass-accent);
+  box-shadow: 2px 2px 0 var(--compass-paper), 3.5px 3.5px 0 var(--compass-line);
+  font-weight: 600;
+}
+
+.compass-root .compass-edge[data-style="group"] .compass-edge-line {
+  stroke: var(--compass-accent);
+  stroke-width: 1.5;
+}
+
+.compass-root .compass-group-count {
+  position: absolute;
+  right: 5px;
+  bottom: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: var(--compass-accent);
+  color: var(--compass-paper);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.compass-root .compass-node.compass-node-expanded {
+  flex-wrap: wrap;
+  align-items: center;
+  align-content: space-between;
+  padding: 0;
+  overflow: hidden;
+}
+
+.compass-root .compass-node.compass-node-expanded:hover {
+  background: var(--compass-paper);
+}
+
+.compass-root .compass-node.compass-node-expanded > .compass-node-thumb {
+  margin: 3px 0 3px 10px;
+}
+
+.compass-root .compass-node.compass-node-expanded > .compass-node-title {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 30px;
+  line-height: 30px;
+  padding: 0 10px;
+  font-weight: 500;
+}
+
+.compass-root .compass-node.compass-node-expanded > .compass-node-title:hover {
+  background: var(--compass-hover);
+}
+
+.compass-root .compass-node.compass-node-expanded > .compass-node-thumb + .compass-node-title {
+  padding-left: 6px;
+}
+
+.compass-root .compass-subs {
+  flex: 0 0 100%;
+  width: 100%;
+  box-sizing: border-box;
+  border-top: 1px solid var(--compass-faint);
+}
+
+.compass-root .compass-sub,
+.compass-root .compass-sub-more {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: 20px;
+  line-height: 20px;
+  padding: 0 10px;
+  overflow: hidden;
+  font-size: 11px;
+  font-style: normal;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.compass-root .compass-sub {
+  cursor: pointer;
+  opacity: 0.88;
+}
+
+.compass-root .compass-sub:hover {
+  background: var(--compass-hover);
+  color: var(--compass-accent);
+  opacity: 1;
+}
+
+.compass-root .compass-sub:focus-visible {
+  outline: 2px solid var(--compass-accent);
+  outline-offset: -2px;
+}
+
+.compass-root .compass-sub-more {
+  cursor: default;
+  font-style: italic;
+  opacity: 0.6;
+}
+
+.compass-root[data-flip="true"] .compass-hint-west {
+  left: auto;
+  right: 10px;
+}
+
+.compass-root[data-flip="true"] .compass-hint-east {
+  right: auto;
+  left: 10px;
+}
+
+.compass-root[data-flip="true"] .compass-zone-add-west {
+  left: auto;
+  right: 8px;
+}
+
+.compass-root[data-flip="true"] .compass-zone-add-east {
+  right: auto;
+  left: 8px;
+}
+
+.compass-root[data-flip="true"] .compass-zone-count-west {
+  left: auto;
+  right: 12px;
+}
+
+.compass-root[data-flip="true"] .compass-zone-count-east {
+  right: auto;
+  left: 12px;
+}
+
+.compass-root[data-flip="true"] .compass-zone-count-siblings {
+  right: auto;
+  left: 12px;
+}
+
+.compass-root[data-one-sided="true"] .compass-zone-add-east {
+  right: auto;
+  left: 8px;
+  top: calc(50% + 56px);
+}
+
+.compass-root[data-one-sided="true"] .compass-zone-count-east {
+  right: auto;
+  left: 12px;
+  top: calc(50% + 76px);
+}
+
+.compass-root[data-one-sided="true"][data-flip="true"] .compass-zone-add-east {
+  left: auto;
+  right: 8px;
+  top: calc(50% + 56px);
+}
+
+.compass-root[data-one-sided="true"][data-flip="true"] .compass-zone-count-east {
+  left: auto;
+  right: 12px;
+  top: calc(50% + 76px);
+}
