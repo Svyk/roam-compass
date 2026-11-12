@@ -406,3 +406,45 @@ test("host.sourceBlock pulls one level deeper for childCount without changing SO
     delete globalThis.roamAlphaAPI;
   }
 });
+
+test("host.blockStrings pulls one string per uid, caps at 50, and skips errors", () => {
+  const pulled = [];
+  installRoam({
+    data: {
+      pull(pattern, ref) {
+        assert.equal(pattern, "[:block/uid :block/string]");
+        const match = /:block\/uid "([^"]+)"/.exec(ref);
+        const uid = match?.[1];
+        pulled.push(uid);
+        if (uid === "b1") return { ":block/uid": "b1", ":block/string": "{{[[excalidraw]]}}" };
+        if (uid === "empty") return { ":block/uid": "empty", ":block/string": "" };
+        if (uid === "bad") return { ":block/uid": "bad", ":block/string": 4 };
+        if (uid === "boom") throw new Error("string pull failed");
+        return null;
+      },
+    },
+  });
+  const errors = [];
+  const originalError = console.error;
+  console.error = (...args) => errors.push(args);
+  const host = createHost({ lifecycle: createLifecycle() });
+  try {
+    assert.deepEqual(host.blockStrings(["b1", "b1", "", null, 7, "missing", "empty", "bad", "boom"]), {
+      b1: "{{[[excalidraw]]}}",
+      empty: "",
+    });
+    assert.deepEqual(pulled, ["b1", "missing", "empty", "bad", "boom"]);
+    assert.ok(errors.some((line) => String(line[0]).startsWith("[compass] block strings")));
+    pulled.length = 0;
+    const many = Array.from({ length: 55 }, (_, index) => `u-${index}`);
+    const capped = host.blockStrings(many);
+    assert.equal(pulled.length, 50);
+    assert.equal(Object.keys(capped).length, 0);
+    assert.deepEqual(host.blockStrings(null), {});
+    delete globalThis.roamAlphaAPI;
+    assert.deepEqual(host.blockStrings(["b1"]), {});
+  } finally {
+    console.error = originalError;
+    delete globalThis.roamAlphaAPI;
+  }
+});
