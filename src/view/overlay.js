@@ -220,6 +220,7 @@ function describe(item, titleOf) {
     if (item.note === "namespace") return "Namespace";
     if (item.note === "day") return "Adjacent daily note";
     if (item.note === "page") return "The page this block is on";
+    if (item.note === "drawing on page") return "A drawing on this page";
     return "The block this block sits under";
   }
   if (item.attribute) return `Shares ${item.attribute}:: under ${titleOf(item.via) || "a parent"}`;
