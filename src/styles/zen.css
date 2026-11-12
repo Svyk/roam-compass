@@ -1,1 +1,46 @@
 /* zen */
+.compass-root.compass-zen .compass-bar,
+.compass-root.compass-zen .compass-pins,
+.compass-root.compass-zen .compass-urls {
+  display: none !important;
+}
+
+.compass-root.compass-full {
+  right: 0 !important;
+  z-index: 1000;
+}
+
+.compass-root .compass-zone-count-siblings,
+.compass-root .compass-related {
+  bottom: 44px;
+}
+
+.compass-root .compass-corner {
+  position: absolute;
+  right: 12px;
+  bottom: 6px;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--compass-faint);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--compass-paper) 92%, transparent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+.compass-root .compass-corner-btn {
+  height: 24px;
+  padding: 0 8px;
+  border-color: transparent;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.compass-root .compass-corner-btn[aria-pressed="true"] {
+  border-color: var(--compass-accent);
+  background: var(--compass-hover);
+  font-weight: 600;
+}
