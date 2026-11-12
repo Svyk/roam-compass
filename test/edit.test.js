@@ -4,6 +4,7 @@ import test from "node:test";
 import { describeRelation, planFlipOwner, planUnlink } from "../src/model/edit.js";
 import { modelSettings } from "../src/model/neighborhood.js";
 import { createEdit } from "../src/view/features/edit.js";
+import { createFakeHost, createGraph } from "./harness/fixture.js";
 
 const alpha = { uid: "p-alpha", title: "Project Alpha" };
 const beta = { uid: "p-beta", title: "Project Beta" };
@@ -13,13 +14,14 @@ function src(string, children = [], uid = "b-src") {
   return { uid, string, order: 2, parentUid: "p-alpha", children };
 }
 
-test("planUnlink deletes a sole refs-tail block and updates a multi-ref tail block", () => {
+test("planUnlink deletes a childless sole refs-tail block and keeps multi-value updates unaffected by children", () => {
   assert.deepEqual(
     planUnlink({ source: src("Friend:: [[Project Beta]]"), attribute: "Friend", value: beta }),
     {
       ops: [{ op: "delete", uid: "b-src" }],
       reason: null,
       removesBlock: true,
+      removesLabels: 0,
     },
   );
 
@@ -29,15 +31,23 @@ test("planUnlink deletes a sole refs-tail block and updates a multi-ref tail blo
       ops: [{ op: "delete", uid: "b-src" }],
       reason: null,
       removesBlock: true,
+      removesLabels: 0,
     },
   );
 
   assert.deepEqual(
-    planUnlink({ source: src("Friend:: [[Project Beta]] [[Programs]]"), attribute: "Friend", value: beta }),
+    planUnlink({
+      source: src("Friend:: [[Project Beta]] [[Programs]]", [
+        { uid: "n1", string: "Plain note under multi-value relation", order: 0, childCount: 2 },
+      ]),
+      attribute: "Friend",
+      value: beta,
+    }),
     {
       ops: [{ op: "update", uid: "b-src", string: "Friend:: [[Programs]]" }],
       reason: null,
       removesBlock: false,
+      removesLabels: 0,
     },
   );
 
@@ -47,6 +57,7 @@ test("planUnlink deletes a sole refs-tail block and updates a multi-ref tail blo
       ops: [{ op: "update", uid: "b-src", string: "Friend:: [[Programs]]" }],
       reason: null,
       removesBlock: false,
+      removesLabels: 0,
     },
   );
 
@@ -56,14 +67,64 @@ test("planUnlink deletes a sole refs-tail block and updates a multi-ref tail blo
       ops: [{ op: "delete", uid: "b-src" }],
       reason: null,
       removesBlock: true,
+      removesLabels: 0,
     },
   );
 });
 
-test("planUnlink handles bare attributes with child value blocks and preserves nested label blocks", () => {
+test("planUnlink deletes labels-only relation blocks with count and refuses nested notes or value children with children", () => {
   assert.deepEqual(
     planUnlink({
-      source: src("Child::", [{ uid: "c1", string: "[[Project Beta]]", order: 0 }]),
+      source: src("Owner:: [[Project Beta]]", [
+        { uid: "l1", string: "Role:: Lead", order: 0, childCount: 0 },
+        { uid: "l2", string: "Scope:: Core", order: 1, childCount: 0 },
+      ]),
+      attribute: "Owner",
+      value: beta,
+    }),
+    {
+      ops: [{ op: "delete", uid: "b-src" }],
+      reason: null,
+      removesBlock: true,
+      removesLabels: 2,
+    },
+  );
+
+  assert.deepEqual(
+    planUnlink({
+      source: src("Parent:: [[Programs]]", [
+        { uid: "n1", string: "Keep these meeting notes", order: 0, childCount: 0 },
+      ]),
+      attribute: "Parent",
+      value: programs,
+    }),
+    {
+      ops: [],
+      reason: "has-children",
+      removesBlock: false,
+      removesLabels: 0,
+    },
+  );
+
+  assert.deepEqual(
+    planUnlink({
+      source: src("Owner:: [[Project Beta]]", [
+        { uid: "l1", string: "Role:: Lead", order: 0, childCount: 1 },
+      ]),
+      attribute: "Owner",
+      value: beta,
+    }),
+    {
+      ops: [],
+      reason: "has-children",
+      removesBlock: false,
+      removesLabels: 0,
+    },
+  );
+
+  assert.deepEqual(
+    planUnlink({
+      source: src("Child::", [{ uid: "c1", string: "[[Project Beta]]", order: 0, childCount: 0 }]),
       attribute: "Child",
       value: beta,
     }),
@@ -71,30 +132,83 @@ test("planUnlink handles bare attributes with child value blocks and preserves n
       ops: [{ op: "delete", uid: "b-src" }],
       reason: null,
       removesBlock: true,
+      removesLabels: 0,
     },
   );
 
   assert.deepEqual(
     planUnlink({
       source: src("Owner::", [
-        { uid: "c1", string: "[[Project Beta]]", order: 0 },
-        { uid: "l1", string: "Role:: Lead", order: 1 },
+        { uid: "c1", string: "[[Project Beta]]", order: 0, childCount: 0 },
+        { uid: "l1", string: "Role:: Lead", order: 1, childCount: 0 },
       ]),
       attribute: "Owner",
       value: beta,
     }),
     {
-      ops: [{ op: "delete", uid: "c1" }],
+      ops: [{ op: "delete", uid: "b-src" }],
       reason: null,
+      removesBlock: true,
+      removesLabels: 1,
+    },
+  );
+
+  assert.deepEqual(
+    planUnlink({
+      source: src("Owner::", [
+        { uid: "c1", string: "[[Project Beta]]", order: 0, childCount: 0 },
+        { uid: "l1", string: "Role:: Lead", order: 1, childCount: 2 },
+      ]),
+      attribute: "Owner",
+      value: beta,
+    }),
+    {
+      ops: [],
+      reason: "has-children",
       removesBlock: false,
+      removesLabels: 0,
     },
   );
 
   assert.deepEqual(
     planUnlink({
       source: src("Child::", [
-        { uid: "c1", string: "[[Project Beta]]", order: 0 },
-        { uid: "c2", string: "[[Programs]]", order: 1 },
+        { uid: "c1", string: "[[Project Beta]]", order: 0, childCount: 1 },
+      ]),
+      attribute: "Child",
+      value: beta,
+    }),
+    {
+      ops: [],
+      reason: "has-children",
+      removesBlock: false,
+      removesLabels: 0,
+    },
+  );
+
+  assert.deepEqual(
+    planUnlink({
+      source: src("Child::", [
+        { uid: "c1", string: "[[Project Beta]]", order: 0, childCount: 1 },
+        { uid: "c2", string: "[[Programs]]", order: 1, childCount: 0 },
+      ]),
+      attribute: "Child",
+      value: beta,
+    }),
+    {
+      ops: [],
+      reason: "has-children",
+      removesBlock: false,
+      removesLabels: 0,
+    },
+  );
+
+  assert.deepEqual(
+    planUnlink({
+      source: src("Child::", [
+        { uid: "c1", string: "[[Project Beta]]", order: 0, childCount: 0 },
+        { uid: "c2", string: "[[Programs]]", order: 1, childCount: 3 },
+        { uid: "l1", string: "Role:: Lead", order: 2, childCount: 0 },
       ]),
       attribute: "Child",
       value: beta,
@@ -103,13 +217,14 @@ test("planUnlink handles bare attributes with child value blocks and preserves n
       ops: [{ op: "delete", uid: "c1" }],
       reason: null,
       removesBlock: false,
+      removesLabels: 0,
     },
   );
 
   assert.deepEqual(
     planUnlink({
       source: src("Child::", [
-        { uid: "c1", string: "[[Project Beta]] [[Programs]]", order: 0 },
+        { uid: "c1", string: "[[Project Beta]] [[Programs]]", order: 0, childCount: 2 },
       ]),
       attribute: "Child",
       value: beta,
@@ -118,12 +233,13 @@ test("planUnlink handles bare attributes with child value blocks and preserves n
       ops: [{ op: "update", uid: "c1", string: "[[Programs]]" }],
       reason: null,
       removesBlock: false,
+      removesLabels: 0,
     },
   );
 
   assert.deepEqual(
     planUnlink({
-      source: src("Notes::", [{ uid: "c1", string: "plain child block", order: 0 }]),
+      source: src("Notes::", [{ uid: "c1", string: "plain child block", order: 0, childCount: 0 }]),
       attribute: "Notes",
       value: { uid: "c1" },
     }),
@@ -131,6 +247,7 @@ test("planUnlink handles bare attributes with child value blocks and preserves n
       ops: [{ op: "delete", uid: "b-src" }],
       reason: null,
       removesBlock: true,
+      removesLabels: 0,
     },
   );
 });
@@ -140,41 +257,49 @@ test("planUnlink refuses missing, changed, read-only, text-value, missing-value,
     ops: [],
     reason: "missing",
     removesBlock: false,
+    removesLabels: 0,
   });
   assert.deepEqual(planUnlink({ source: src("Just a plain bullet"), attribute: "Friend", value: beta }), {
     ops: [],
     reason: "changed",
     removesBlock: false,
+    removesLabels: 0,
   });
   assert.deepEqual(planUnlink({ source: src("Parent:: [[Project Beta]]"), attribute: "Friend", value: beta }), {
     ops: [],
     reason: "changed",
     removesBlock: false,
+    removesLabels: 0,
   });
   assert.deepEqual(planUnlink({ source: src("BT_attrProject:: [[Project Beta]]"), attribute: "BT_attrProject", value: beta }), {
     ops: [],
     reason: "read-only",
     removesBlock: false,
+    removesLabels: 0,
   });
   assert.deepEqual(planUnlink({ source: src("Aliases:: [[Project Beta]]"), attribute: "Aliases", value: beta }), {
     ops: [],
     reason: "read-only",
     removesBlock: false,
+    removesLabels: 0,
   });
   assert.deepEqual(planUnlink({ source: src("Status:: Active"), attribute: "Status", value: beta }), {
     ops: [],
     reason: "text-value",
     removesBlock: false,
+    removesLabels: 0,
   });
   assert.deepEqual(planUnlink({ source: src("Friend:: [[Programs]]"), attribute: "Friend", value: beta }), {
     ops: [],
     reason: "missing-value",
     removesBlock: false,
+    removesLabels: 0,
   });
-  assert.deepEqual(planUnlink({ source: src("Friend::", [{ uid: "c1", string: "[[Programs]]", order: 0 }]), attribute: "Friend", value: beta }), {
+  assert.deepEqual(planUnlink({ source: src("Friend::", [{ uid: "c1", string: "[[Programs]]", order: 0, childCount: 0 }]), attribute: "Friend", value: beta }), {
     ops: [],
     reason: "missing-value",
     removesBlock: false,
+    removesLabels: 0,
   });
   assert.deepEqual(
     planUnlink({ source: src("Friend:: [[Project Beta]] [[:harc/v]]"), attribute: "Friend", value: beta }),
@@ -182,11 +307,12 @@ test("planUnlink refuses missing, changed, read-only, text-value, missing-value,
       ops: [],
       reason: "forbidden",
       removesBlock: false,
+      removesLabels: 0,
     },
   );
 });
 
-test("planFlipOwner handles missing target, refs-only target, already-present target, and bare target", () => {
+test("planFlipOwner handles missing target, refs-only target, bare target deduplication, and refuses nested source content", () => {
   const noTarget = planFlipOwner({
     source: src("Parent:: [[Programs]]"),
     attribute: "Parent",
@@ -210,7 +336,7 @@ test("planFlipOwner handles missing target, refs-only target, already-present ta
     owner: alpha,
     value: programs,
     inverse: "Child",
-    target: { uid: "t-child", string: "Child:: [[Project Gamma]]" },
+    target: { uid: "t-child", string: "Child:: [[Project Gamma]]", children: [] },
   });
   assert.deepEqual(appendTarget, {
     ops: [
@@ -230,7 +356,7 @@ test("planFlipOwner handles missing target, refs-only target, already-present ta
     owner: alpha,
     value: programs,
     inverse: "Child",
-    target: { uid: "t-child", string: "Child:: [[Project Alpha]]" },
+    target: { uid: "t-child", string: "Child:: [[Project Alpha]]", children: [] },
   });
   assert.deepEqual(alreadyPresent, {
     ops: [{ op: "delete", uid: "b-src" }],
@@ -247,7 +373,14 @@ test("planFlipOwner handles missing target, refs-only target, already-present ta
     owner: alpha,
     value: programs,
     inverse: "Child",
-    target: { uid: "t-child", string: "Child::" },
+    target: {
+      uid: "t-child",
+      string: "Child::",
+      children: [
+        { uid: "tc-1", string: "[[Project Gamma]]", order: 0 },
+        { uid: "tc-note", string: "Note:: [[Project Alpha]]", order: 1 },
+      ],
+    },
   });
   assert.deepEqual(bareTarget, {
     ops: [
@@ -259,6 +392,64 @@ test("planFlipOwner handles missing target, refs-only target, already-present ta
       { uid: "b-src", string: "Parent:: [[Programs]]" },
       { uid: "t-child", string: "Child::" },
     ],
+  });
+
+  const bareAlreadyExact = planFlipOwner({
+    source: src("Parent:: [[Programs]]"),
+    attribute: "Parent",
+    owner: alpha,
+    value: programs,
+    inverse: "Child",
+    target: {
+      uid: "t-child",
+      string: "Child::",
+      children: [{ uid: "tc-1", string: "[[Project Alpha]]", order: 0 }],
+    },
+  });
+  assert.deepEqual(bareAlreadyExact, {
+    ops: [{ op: "delete", uid: "b-src" }],
+    reason: null,
+    guards: [
+      { uid: "b-src", string: "Parent:: [[Programs]]" },
+      { uid: "t-child", string: "Child::" },
+    ],
+  });
+
+  const bareAlreadyMultiRef = planFlipOwner({
+    source: src("Parent:: [[Programs]]"),
+    attribute: "Parent",
+    owner: alpha,
+    value: programs,
+    inverse: "Child",
+    target: {
+      uid: "t-child",
+      string: "Child::",
+      children: [{ uid: "tc-1", string: "[[Project Gamma]] [[Project Alpha]]", order: 0 }],
+    },
+  });
+  assert.deepEqual(bareAlreadyMultiRef, {
+    ops: [{ op: "delete", uid: "b-src" }],
+    reason: null,
+    guards: [
+      { uid: "b-src", string: "Parent:: [[Programs]]" },
+      { uid: "t-child", string: "Child::" },
+    ],
+  });
+
+  const nestedNoteRefusal = planFlipOwner({
+    source: src("Parent:: [[Programs]]", [
+      { uid: "n1", string: "Context note under Parent", order: 0, childCount: 0 },
+    ]),
+    attribute: "Parent",
+    owner: alpha,
+    value: programs,
+    inverse: "Child",
+    target: null,
+  });
+  assert.deepEqual(nestedNoteRefusal, {
+    ops: [],
+    reason: "has-children",
+    guards: [],
   });
 });
 
@@ -330,7 +521,7 @@ test("planFlipOwner refuses non-pages, missing inverse, read-only, target-text, 
       owner: alpha,
       value: programs,
       inverse: "Child",
-      target: { uid: "t-child", string: "Child:: some plain note" },
+      target: { uid: "t-child", string: "Child:: some plain note", children: [] },
     }),
     { ops: [], reason: "target-text", guards: [] },
   );
@@ -436,4 +627,36 @@ test("createEdit exposes Unlink and Flip owner only where allowed", () => {
   assert.deepEqual(edit.evidenceActions({ node: pageNode, item: { kind: "link", sourceUid: "b2" } }), []);
   assert.deepEqual(edit.nodeMenu("p-programs", { ...pageNode, writable: null }), []);
   assert.equal("commands" in edit, false);
+});
+
+test("createFakeHost sourceBlock and attributeBlock return real-host shapes with childCount and children", () => {
+  const graph = createGraph();
+  const noteChildUid = graph.addBlock("p-alpha", "Nested note under Task One value", { parentUid: "b-alpha-c1" });
+  assert.ok(noteChildUid);
+  const host = createFakeHost(graph);
+
+  assert.deepEqual(host.sourceBlock("b-alpha-child"), {
+    uid: "b-alpha-child",
+    string: "Child::",
+    order: 1,
+    parentUid: "p-alpha",
+    children: [
+      { uid: "b-alpha-c1", string: "[[Task One]]", order: 0, childCount: 1 },
+      { uid: "b-alpha-c2", string: "[[Task Two]]", order: 1, childCount: 0 },
+      { uid: "b-alpha-c3", string: "[[Task Three]]", order: 2, childCount: 0 },
+    ],
+  });
+  assert.equal(host.sourceBlock("missing"), null);
+
+  assert.deepEqual(host.attributeBlock("p-alpha", "child"), {
+    uid: "b-alpha-child",
+    string: "Child::",
+    children: [
+      { uid: "b-alpha-c1", string: "[[Task One]]", order: 0 },
+      { uid: "b-alpha-c2", string: "[[Task Two]]", order: 1 },
+      { uid: "b-alpha-c3", string: "[[Task Three]]", order: 2 },
+    ],
+  });
+  assert.equal(host.attributeBlock("p-alpha", "Nonexistent"), null);
+  assert.equal(host.attributeBlock("missing", "Child"), null);
 });

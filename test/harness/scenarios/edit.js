@@ -101,6 +101,34 @@ export const SCENARIOS = {
     h.noOverlap(".compass-details-item button");
   },
 
+  async "unlink-nested"(h) {
+    h.harness.graph.addBlock("p-alpha", "Keep this nested note", { parentUid: "b-alpha-friend" });
+    await h.open("p-alpha");
+    openDetailsFor(h, "p-beta");
+    await h.wait(40);
+    clickDetailsAction(h, "Unlink");
+    await h.wait(40);
+
+    h.assert(Boolean(h.q('.compass-edit-backdrop:not([hidden]) [role="alertdialog"]')), "Unlink dialog opens");
+    h.click(".compass-edit-confirm");
+    await h.wait(300);
+
+    h.equal(h.calls("applyPlan").length, 0, "no applyPlan call was made");
+    h.equal(
+      h.status(),
+      "That block has nested content, so Compass left it alone and opened it for you.",
+      "status shows nested-content refusal message",
+    );
+    const sidebarCalls = h.calls("openInSidebar");
+    h.assert(
+      sidebarCalls.some((entry) => entry[1] === "b-alpha-friend" && entry[2] === "block"),
+      "openInSidebar was called for source block b-alpha-friend",
+    );
+    h.assert(Boolean(h.q('.compass-node[data-uid="p-beta"]')), "Project Beta remains on map");
+    const friendBlock = pageBlocks(h, "p-alpha").find((blk) => blk.uid === "b-alpha-friend");
+    h.equal(friendBlock?.children?.length, 1, "nested note under Friend:: block was preserved");
+  },
+
   async "flip-owner"(h) {
     await h.open("p-alpha");
     openDetailsFor(h, "p-programs");
@@ -168,6 +196,8 @@ export const SCENARIOS = {
 
   async "unlink-dialog"(h) {
     h.harness.graph.addBlock("p-alpha", "Sync timeline with [[Project Beta]]");
+    h.harness.graph.addBlock("p-alpha", "Since:: 2025", { parentUid: "b-alpha-friend" });
+    h.harness.graph.addBlock("p-alpha", "Scope:: Core", { parentUid: "b-alpha-friend" });
     await h.open("p-alpha");
     openDetailsFor(h, "p-beta");
     await h.wait(40);
@@ -175,6 +205,11 @@ export const SCENARIOS = {
     await h.wait(60);
 
     h.assert(Boolean(h.q('.compass-edit-backdrop:not([hidden]) [role="alertdialog"]')), "Unlink dialog visible");
+    h.equal(
+      h.text(".compass-edit-labels"),
+      "This also removes its 2 labels.",
+      "Unlink dialog notes removed labels",
+    );
     h.equal(
       h.text(".compass-edit-other"),
       "These two are still connected by 1 other block.",

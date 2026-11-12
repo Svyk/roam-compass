@@ -1,12 +1,12 @@
 import { describeRelation, planFlipOwner, planUnlink } from "../../model/edit.js";
 import { inverseRole } from "../../model/neighborhood.js";
 import { inverseAttribute } from "../../model/ontology.js";
-import { parseAttribute } from "../../model/text.js";
 
 const REASONS = Object.freeze({
   changed: "That block changed in Roam. Compass reloaded it; try again.",
   missing: "The source block is gone. Compass reloaded.",
   "missing-value": "That value is no longer in its block. Compass reloaded.",
+  "has-children": "That block has nested content, so Compass left it alone and opened it for you.",
   "read-only": "That attribute belongs to another plugin. Compass reloaded.",
   "text-value": "That value is plain text, not a link. Compass reloaded.",
   "not-pages": "Both ends must be pages to move a relation. Compass reloaded.",
@@ -49,6 +49,12 @@ function isLinkablePage(endpoint) {
     && Boolean(endpoint.title.trim())
     && !endpoint.title.includes("[")
     && !endpoint.title.includes("]");
+}
+
+function unlinkValueFor(endpoint) {
+  return endpoint.kind === "page"
+    ? { uid: endpoint.uid, title: endpoint.title }
+    : { uid: endpoint.uid };
 }
 
 export function createEdit(ctx) {
@@ -170,6 +176,17 @@ export function createEdit(ctx) {
         ctx.el("p", "compass-edit-relation", relation),
         ctx.el("p", "compass-edit-note", "This removes one block value. The page and its other links stay."),
       );
+      const fresh = ctx.host?.sourceBlock?.(resolved.sourceUid) ?? null;
+      const preview = fresh
+        ? planUnlink({ source: fresh, attribute: resolved.attribute, value: unlinkValueFor(resolved.value) })
+        : null;
+      const labelCount = preview?.removesLabels ?? 0;
+      if (labelCount > 0) {
+        const noun = labelCount === 1 ? "label" : "labels";
+        bodyEl.append(
+          ctx.el("p", "compass-edit-note compass-edit-labels", `This also removes its ${labelCount} ${noun}.`),
+        );
+      }
       if (resolved.otherCount > 0) {
         const noun = resolved.otherCount === 1 ? "block" : "blocks";
         bodyEl.append(
@@ -210,40 +227,12 @@ export function createEdit(ctx) {
     cancelBtn.focus();
   }
 
-  function pullFreshSource(sourceUid) {
-    if (typeof ctx.host?.sourceBlock === "function") {
-      return ctx.host.sourceBlock(sourceUid);
+  function handlePlanRefusal(reason, sourceUid) {
+    ctx.setStatus(reasonMessage(reason));
+    if (reason === "has-children") {
+      void ctx.openSidebar?.(sourceUid, "block");
     }
-    const snap = ctx.host?.snapshot?.(sourceUid, ctx.state?.settings?.model);
-    if (!snap || snap.missing || snap.center?.kind !== "block") return null;
-    return {
-      uid: snap.center.uid,
-      string: snap.center.string ?? "",
-      order: null,
-      parentUid: snap.center.parent?.uid ?? snap.center.page?.uid ?? null,
-      children: (snap.outline ?? []).map((child, index) => ({
-        uid: child.uid,
-        string: child.string ?? "",
-        order: Number.isFinite(child.order) ? child.order : index,
-      })),
-    };
-  }
-
-  function pullFreshTarget(pageUid, attribute) {
-    if (typeof ctx.host?.attributeBlock === "function") {
-      return ctx.host.attributeBlock(pageUid, attribute);
-    }
-    const target = typeof attribute === "string" ? attribute.trim().toLowerCase() : "";
-    if (!pageUid || !target) return null;
-    const snap = ctx.host?.snapshot?.(pageUid, ctx.state?.settings?.model);
-    if (!snap || snap.missing) return null;
-    for (const child of snap.outline ?? []) {
-      const parsed = parseAttribute(child?.string);
-      if (parsed && parsed.name.toLowerCase() === target && typeof child.uid === "string") {
-        return { uid: child.uid, string: child.string };
-      }
-    }
-    return null;
+    ctx.load?.();
   }
 
   async function confirmPending() {
@@ -252,15 +241,15 @@ export function createEdit(ctx) {
     closeDialog();
     busy = true;
     try {
-      const source = pullFreshSource(job.sourceUid);
+      const source = ctx.host.sourceBlock(job.sourceUid);
       if (job.mode === "unlink") {
-        const unlinkValue = job.value.kind === "page"
-          ? { uid: job.value.uid, title: job.value.title }
-          : { uid: job.value.uid };
-        const plan = planUnlink({ source, attribute: job.attribute, value: unlinkValue });
+        const plan = planUnlink({
+          source,
+          attribute: job.attribute,
+          value: unlinkValueFor(job.value),
+        });
         if (plan.reason) {
-          ctx.setStatus(reasonMessage(plan.reason));
-          ctx.load();
+          handlePlanRefusal(plan.reason, job.sourceUid);
           return;
         }
         const expected = typeof job.sourceString === "string" ? job.sourceString : source.string;
@@ -278,7 +267,7 @@ export function createEdit(ctx) {
         return;
       }
 
-      const target = pullFreshTarget(job.value.uid, job.inverse);
+      const target = ctx.host.attributeBlock(job.value.uid, job.inverse);
       const plan = planFlipOwner({
         source,
         attribute: job.attribute,
@@ -288,8 +277,7 @@ export function createEdit(ctx) {
         target,
       });
       if (plan.reason) {
-        ctx.setStatus(reasonMessage(plan.reason));
-        ctx.load();
+        handlePlanRefusal(plan.reason, job.sourceUid);
         return;
       }
       const guards = plan.guards.map((entry) => (

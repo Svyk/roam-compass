@@ -292,7 +292,7 @@ test("host.applyPlan covers happy path, missing, changed, forbidden, empty, and 
   }
 });
 
-test("host.attributeBlock finds the first matching direct child case-insensitively and catches errors", () => {
+test("host.attributeBlock finds the first matching direct child case-insensitively with its children and catches errors", () => {
   const seen = [];
   installRoam({
     data: {
@@ -304,7 +304,15 @@ test("host.attributeBlock finds the first matching direct child case-insensitive
             ":block/children": [
               { ":block/uid": "b-second", ":block/string": "Child:: [[Project Beta]]", ":block/order": 2 },
               { ":block/uid": "b-note", ":block/string": "Plain note", ":block/order": 0 },
-              { ":block/uid": "b-first", ":block/string": "[[child]]:: [[Project Gamma]]", ":block/order": 1 },
+              {
+                ":block/uid": "b-first",
+                ":block/string": "[[child]]::",
+                ":block/order": 1,
+                ":block/children": [
+                  { ":block/uid": "gc-2", ":block/string": "[[Project Alpha]]", ":block/order": 1 },
+                  { ":block/uid": "gc-1", ":block/string": "[[Project Gamma]]", ":block/order": 0 },
+                ],
+              },
             ],
           };
         }
@@ -320,9 +328,16 @@ test("host.attributeBlock finds the first matching direct child case-insensitive
   try {
     assert.deepEqual(host.attributeBlock("p-prog", "Child"), {
       uid: "b-first",
-      string: "[[child]]:: [[Project Gamma]]",
+      string: "[[child]]::",
+      children: [
+        { uid: "gc-1", string: "[[Project Gamma]]", order: 0 },
+        { uid: "gc-2", string: "[[Project Alpha]]", order: 1 },
+      ],
     });
-    assert.equal(seen[0][0], "[:block/uid {:block/children [:block/uid :block/string :block/order]}]");
+    assert.equal(
+      seen[0][0],
+      "[:block/uid {:block/children [:block/uid :block/string :block/order {:block/children [:block/uid :block/string :block/order]}]}]",
+    );
     assert.equal(host.attributeBlock("p-prog", "Parent"), null);
     assert.equal(host.attributeBlock("missing", "Child"), null);
     assert.equal(host.attributeBlock("", "Child"), null);
@@ -335,7 +350,7 @@ test("host.attributeBlock finds the first matching direct child case-insensitive
   }
 });
 
-test("host.sourceBlock pulls and normalizes a fresh source block with ordered children and catches errors", () => {
+test("host.sourceBlock pulls one level deeper for childCount without changing SOURCE and catches errors", () => {
   const seen = [];
   installRoam({
     data: {
@@ -348,7 +363,12 @@ test("host.sourceBlock pulls and normalizes a fresh source block with ordered ch
             ":block/order": 3,
             ":block/_children": [{ ":block/uid": "p-alpha" }],
             ":block/children": [
-              { ":block/uid": "c-2", ":block/string": "[[Task Two]]", ":block/order": 1 },
+              {
+                ":block/uid": "c-2",
+                ":block/string": "[[Task Two]]",
+                ":block/order": 1,
+                ":block/children": [{ ":block/uid": "n-1" }, { ":block/uid": "n-2" }],
+              },
               { ":block/uid": "c-1", ":block/string": "[[Task One]]", ":block/order": 0 },
             ],
           };
@@ -369,11 +389,14 @@ test("host.sourceBlock pulls and normalizes a fresh source block with ordered ch
       order: 3,
       parentUid: "p-alpha",
       children: [
-        { uid: "c-1", string: "[[Task One]]", order: 0 },
-        { uid: "c-2", string: "[[Task Two]]", order: 1 },
+        { uid: "c-1", string: "[[Task One]]", order: 0, childCount: 0 },
+        { uid: "c-2", string: "[[Task Two]]", order: 1, childCount: 2 },
       ],
     });
-    assert.ok(seen[0][0].includes(":block/children"));
+    assert.equal(
+      seen[0][0],
+      "[:block/uid :block/string :block/order {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order {:block/children [:block/uid]}]}]",
+    );
     assert.equal(host.sourceBlock("missing"), null);
     assert.equal(host.sourceBlock(""), null);
     assert.equal(host.sourceBlock("boom"), null);

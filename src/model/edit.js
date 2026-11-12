@@ -12,12 +12,17 @@ function hasForbidden(ops) {
 }
 
 function unlinkRefused(reason) {
-  return { ops: [], reason, removesBlock: false };
+  return { ops: [], reason, removesBlock: false, removesLabels: 0 };
 }
 
-function safeUnlink(ops, removesBlock) {
+function safeUnlink(ops, removesBlock, removesLabels = 0) {
   if (hasForbidden(ops)) return unlinkRefused("forbidden");
-  return { ops, reason: null, removesBlock: Boolean(removesBlock) };
+  return {
+    ops,
+    reason: null,
+    removesBlock: Boolean(removesBlock),
+    removesLabels: removesBlock ? removesLabels : 0,
+  };
 }
 
 function flipRefused(reason) {
@@ -32,6 +37,16 @@ function safeFlip(ops, guards) {
 function refsIn(string) {
   const shape = tailShape(string);
   return shape.kind === "refs" ? shape.values : [];
+}
+
+function childCountOf(block) {
+  if (Number.isFinite(block?.childCount) && block.childCount >= 0) return Math.floor(block.childCount);
+  if (Array.isArray(block?.children)) return block.children.filter((child) => child?.uid).length;
+  return 0;
+}
+
+function isRelationLabel(child) {
+  return Boolean(parseAttribute(child?.string)) && childCountOf(child) === 0;
 }
 
 function isPageEndpoint(endpoint) {
@@ -49,20 +64,23 @@ export function planUnlink({ source, attribute, value } = {}) {
   if (!parsed || !same(parsed.name, attribute)) return unlinkRefused("changed");
   if (isReadOnlyAttribute(parsed.name)) return unlinkRefused("read-only");
   const shape = tailShape(parsed.tail);
+  const children = [...(source.children ?? [])]
+    .filter((child) => child?.uid)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
   if (shape.kind === "refs") {
     const token = shape.values.find((item) => tokenMatches(item, value));
     if (!token) return unlinkRefused("missing-value");
-    if (shape.values.length === 1) return safeUnlink([{ op: "delete", uid: source.uid }], true);
+    if (shape.values.length === 1) {
+      if (!children.every(isRelationLabel)) return unlinkRefused("has-children");
+      return safeUnlink([{ op: "delete", uid: source.uid }], true, children.length);
+    }
     const offset = parsed.prefix.length;
     const shifted = { ...token, start: token.start + offset, end: token.end + offset };
-    return safeUnlink([{ op: "update", uid: source.uid, string: removeToken(source.string, shifted) }], false);
+    return safeUnlink([{ op: "update", uid: source.uid, string: removeToken(source.string, shifted) }], false, 0);
   }
 
   if (shape.kind !== "bare") return unlinkRefused("text-value");
-  const children = [...(source.children ?? [])]
-    .filter((child) => child?.uid)
-    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const values = children.filter((child) => !parseAttribute(child.string));
   const holder = values.find((child) => (
     child.uid === value?.uid || refsIn(child.string).some((item) => tokenMatches(item, value))
@@ -71,12 +89,15 @@ export function planUnlink({ source, attribute, value } = {}) {
   const holderRefs = refsIn(holder.string);
   if (holder.uid !== value?.uid && holderRefs.length > 1) {
     const token = scanRefs(holder.string, { nested: false }).find((item) => tokenMatches(item, value));
-    return safeUnlink([{ op: "update", uid: holder.uid, string: removeToken(holder.string, token) }], false);
+    return safeUnlink([{ op: "update", uid: holder.uid, string: removeToken(holder.string, token) }], false, 0);
   }
-  if (values.length === 1 && children.length === 1) {
-    return safeUnlink([{ op: "delete", uid: source.uid }], true);
+  if (childCountOf(holder) > 0) return unlinkRefused("has-children");
+  if (values.length === 1) {
+    const rest = children.filter((child) => child.uid !== holder.uid);
+    if (!rest.every(isRelationLabel)) return unlinkRefused("has-children");
+    return safeUnlink([{ op: "delete", uid: source.uid }], true, rest.length);
   }
-  return safeUnlink([{ op: "delete", uid: holder.uid }], false);
+  return safeUnlink([{ op: "delete", uid: holder.uid }], false, 0);
 }
 
 export function planFlipOwner({ source, attribute, owner, value, inverse, target } = {}) {
@@ -106,12 +127,19 @@ export function planFlipOwner({ source, attribute, owner, value, inverse, target
         });
       }
     } else {
-      writeOps.push({
-        op: "create",
-        parentUid: target.uid,
-        order: "last",
-        string: `[[${owner.title}]]`,
-      });
+      const targetChildren = Array.isArray(target.children) ? target.children : [];
+      const hasOwner = targetChildren.some((child) => (
+        child?.uid === owner.uid
+        || (!parseAttribute(child?.string) && refsIn(child?.string).some((token) => tokenMatches(token, owner)))
+      ));
+      if (!hasOwner) {
+        writeOps.push({
+          op: "create",
+          parentUid: target.uid,
+          order: "last",
+          string: `[[${owner.title}]]`,
+        });
+      }
     }
   } else {
     writeOps.push({
