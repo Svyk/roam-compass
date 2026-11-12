@@ -2,7 +2,7 @@
 
 Compass is a spatial navigator for a Roam graph. One page or block sits in the center, and everything connected to it sits around it. Click a neighbor and it becomes the center. The page you came from lands on the opposite side, so position keeps its meaning as you move.
 
-Run **Compass: Open** from the command palette. It opens on the page in the main window, or today's daily note when the main window shows the daily notes log. **Compass: Focus block** (palette or block context menu) centers the block under the cursor. **Compass: Mind Map**, **Compass: Facets** and **Compass: Wander** open straight into those modes.
+Run **Compass: Open** from the command palette. It opens on the page in the main window, or today's daily note when the main window shows the daily notes log. **Compass: Focus page** centers the page in the main window. **Compass: Focus block** (palette or block context menu) centers the block under the cursor. **Compass: Mind Map**, **Compass: Facets** and **Compass: Wander** open straight into those modes.
 
 ## Three views
 
@@ -156,7 +156,7 @@ Right-click empty canvas, or open **More**.
 
 ## Settings
 
-- **Relations.** Parents, Children, Friends, Challengers, Previous and Next are comma-separated attribute names, matched without case. `Name|Partner` pairs two fields. Hidden lists attributes to leave out.
+- **Relations.** Parents, Children, Friends, Challengers, Previous and Next are comma-separated attribute names, matched without case. In Parents, Children, Previous and Next, `Name|Partner` pairs two fields. Hidden lists attributes to leave out.
 - **Types.** Node type attribute names the attribute that gives a page its type (`Type` by default). Grouping, lenses and Facets use it.
 - **View.** Canvas view, Mind Map direction and generations.
 - **Layout.** Group, Expanded, Flip East–West, One-sided layout, Reflow when filtering, Nodes per side, Sort nodes.
@@ -174,10 +174,11 @@ The **Sidecar** setting keeps the center open in the right sidebar. Compass only
 |---|---|
 | `focus(uid)`, `open(uid, { sidecar })`, `focusBlock(uid)` | Center a page or block |
 | `isOpen()`, `isAvailable()` | State |
+| `version` | The extension version |
 | `ontology()` | The role lists, pairs, hidden attributes and the type attribute |
 | `neighborhood(uid)` | The neighbors of any page or block with role, side, label and evidence |
 | `search(text, limit)` | Page titles, ranked |
-| `canvas()` | Whether Compass is open, the center, the view, the preset and the trail |
+| `canvas()` | Whether Compass is open, the center, the view, the preset, whether Zen is on, and the trail |
 | `setView(view, preset)` | Switch to `compass`, `mindmap` or `facets` |
 | `trail()` | The visit trail, newest first |
 | `commands()`, `run(id)` | List and run Compass commands |
