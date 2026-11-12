@@ -1,1 +1,134 @@
 /* mindmap */
+.compass-root .compass-mindmap {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+}
+
+.compass-root .compass-mindmap[hidden] {
+  display: none;
+}
+
+.compass-root .compass-mindmap .compass-node:not(.compass-node-center) {
+  gap: 6px;
+  padding: 0 8px 0 10px;
+}
+
+.compass-root .compass-mindmap .compass-node[data-side="left"]:not(.compass-node-center) {
+  padding: 0 10px 0 8px;
+}
+
+.compass-root .compass-mindmap .compass-node:not(.compass-node-center) .compass-node-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.compass-root .compass-mindmap .compass-node.compass-mm-repeat {
+  border-style: dashed;
+}
+
+.compass-root .compass-mindmap .compass-mm-chevron {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  box-sizing: border-box;
+  height: 22px;
+  min-width: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--compass-line);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--compass-ink) 6%, var(--compass-paper));
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.compass-root .compass-mindmap .compass-mm-chevron-icon {
+  display: block;
+  flex: none;
+  pointer-events: none;
+}
+
+.compass-root .compass-mindmap .compass-mm-chevron-stroke {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.compass-root .compass-mindmap .compass-mm-count {
+  pointer-events: none;
+}
+
+.compass-root .compass-mindmap .compass-mm-chevron:hover {
+  border-color: var(--compass-accent);
+  background: var(--compass-hover);
+}
+
+.compass-root .compass-mindmap .compass-mm-chevron[aria-expanded="true"] {
+  border-color: var(--compass-accent);
+}
+
+.compass-root .compass-mindmap .compass-mm-repeat-mark {
+  flex: none;
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+.compass-root .compass-mindmap .compass-mm-more {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px dashed var(--compass-line);
+  border-radius: 13px;
+  background: var(--compass-paper);
+  font-size: 11px;
+  white-space: nowrap;
+  transition: transform 260ms ease, opacity 200ms ease;
+}
+
+.compass-root .compass-mindmap .compass-mm-more:hover {
+  border-color: var(--compass-accent);
+  background: var(--compass-hover);
+}
+
+.compass-root .compass-mindmap .compass-edge[data-style="more"] .compass-edge-line {
+  stroke: var(--compass-faint);
+  stroke-dasharray: 3 3;
+}
+
+.compass-root .compass-mindmap .compass-mm-empty {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 260px;
+  margin: 0;
+  font-size: 13px;
+  text-align: center;
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+.compass-root .compass-mindmap .compass-mm-empty[hidden] {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compass-root .compass-mindmap .compass-mm-more {
+    transition: none;
+  }
+}
