@@ -2583,6 +2583,18 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     back,
     forward,
   });
+  function openBoard(boardUid, opts) {
+    const api = diagramApi();
+    if (!boardUid || typeof api?.open !== "function") return;
+    compassNavUntil = Date.now() + 800;
+    const options = opts && typeof opts === "object" ? opts : {};
+    try {
+      Promise.resolve(api.open(boardUid, options)).catch((error) => console.error("[compass] board", error));
+    } catch (error) {
+      console.error("[compass] board", error);
+    }
+  }
+
   const ctx = Object.freeze({
     extensionAPI,
     lifecycle,
@@ -2618,6 +2630,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     openZonePop,
     openSidebar,
     openMain,
+    openBoard,
     togglePin,
     savePins,
     clientToWorld,
