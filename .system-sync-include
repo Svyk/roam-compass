@@ -2,4 +2,4 @@
 exclude:
   - node_modules/
   - coverage/
-
+  - .tmp/
