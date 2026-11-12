@@ -67,17 +67,36 @@
   border-bottom: 1px solid var(--compass-line);
 }
 
-.compass-root .compass-bar button[aria-pressed="true"] {
+.compass-root .compass-bar > button,
+.compass-root .compass-bar .compass-find,
+.compass-root .compass-bar .compass-status {
+  box-sizing: border-box;
+  height: 28px;
+}
+
+.compass-root .compass-bar > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.compass-root .compass-bar button[aria-pressed="true"],
+.compass-root .compass-bar button[aria-expanded="true"] {
   border-color: var(--compass-accent);
+  background: color-mix(in srgb, var(--compass-accent) 14%, var(--compass-paper));
   font-weight: 600;
 }
 
 .compass-root .compass-find {
   position: relative;
+  display: inline-flex;
+  align-items: center;
 }
 
 .compass-root .compass-search {
-  width: 220px;
+  width: 184px;
+  height: 28px;
   box-sizing: border-box;
   border: 1px solid var(--compass-line);
   border-radius: 4px;
@@ -127,13 +146,20 @@
 }
 
 .compass-root .compass-status {
-  flex: 1 1 160px;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
   min-width: 0;
+  max-width: 180px;
   overflow: hidden;
   font-size: 12px;
   white-space: nowrap;
   text-overflow: ellipsis;
   opacity: 0.85;
+}
+
+.compass-root .compass-status:empty {
+  margin-left: -6px;
 }
 
 .compass-root .compass-pins {
@@ -618,6 +644,10 @@
   pointer-events: none;
 }
 
+.compass-root .compass-hover[hidden] {
+  display: none;
+}
+
 .compass-root .compass-hover-img {
   display: block;
   max-width: 480px;
@@ -659,8 +689,8 @@
 
 .compass-root .compass-related {
   position: absolute;
-  right: 8px;
-  bottom: 8px;
+  right: 12px;
+  bottom: 68px;
   z-index: 4;
   display: flex;
   flex-direction: column;
@@ -672,6 +702,10 @@
   border: 1px solid var(--compass-line);
   border-radius: 6px;
   background: var(--compass-paper);
+}
+
+.compass-root .compass-related[hidden] {
+  display: none;
 }
 
 .compass-root .compass-related-title {
@@ -695,7 +729,21 @@
 }
 
 .compass-root .compass-node.compass-empty-page {
+  gap: 6px;
   border-style: dashed;
+}
+
+.compass-root .compass-node.compass-empty-page > .compass-node-title {
+  flex: 1 1 auto;
+}
+
+.compass-root .compass-start {
+  flex: none;
+  margin-left: auto;
+  padding: 2px 6px;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .compass-root .compass-edge.compass-cross .compass-edge-line {
@@ -775,8 +823,8 @@
 }
 
 .compass-root .compass-zone-count-siblings {
-  right: 12px;
-  bottom: 40px;
+  right: 14px;
+  bottom: 46px;
 }
 
 .compass-root .compass-zone-count[hidden] {
@@ -1947,21 +1995,21 @@
 }
 
 /* lenses */
-.compass-root .compass-node[class~="compass-lensed"]:not(.compass-node-center) {
+.compass-root .compass-node.compass-lensed:not(.compass-node-center) {
   background-color: var(--compass-lens-fill, var(--compass-paper));
   border-color: var(--compass-lens-border, var(--compass-line));
   color: var(--compass-lens-text, inherit);
 }
 
-.compass-root .compass-node[data-style="typed"][class~="compass-lensed"]:not(.compass-node-center) {
+.compass-root .compass-node[data-style="typed"].compass-lensed:not(.compass-node-center) {
   border-color: var(--compass-lens-border, var(--compass-accent));
 }
 
-.compass-root .compass-node[data-style="sibling"][class~="compass-lensed"]:not(.compass-node-center) {
+.compass-root .compass-node[data-style="sibling"].compass-lensed:not(.compass-node-center) {
   border-color: var(--compass-lens-border, var(--compass-faint));
 }
 
-.compass-root .compass-node[class~="compass-lensed"]:not(.compass-node-center):hover {
+.compass-root .compass-node.compass-lensed:not(.compass-node-center):hover {
   background-color: color-mix(in srgb, var(--compass-ink) 7%, var(--compass-lens-fill, var(--compass-paper)));
 }
 
@@ -2628,6 +2676,19 @@
   }
 }
 
+/* more */
+.compass-root .compass-bar .compass-export-btn {
+  display: none;
+}
+
+.compass-root .compass-bar .compass-pin {
+  margin-left: 6px;
+}
+
+.compass-root .compass-bar .compass-more {
+  margin-left: auto;
+}
+
 /* palette */
 .compass-root .compass-palette-backdrop {
   position: absolute;
@@ -3160,15 +3221,18 @@
   z-index: 1000;
 }
 
-.compass-root .compass-zone-count-siblings,
+.compass-root .compass-zone-count-siblings {
+  bottom: 46px;
+}
+
 .compass-root .compass-related {
-  bottom: 44px;
+  bottom: 68px;
 }
 
 .compass-root .compass-corner {
   position: absolute;
   right: 12px;
-  bottom: 6px;
+  bottom: 8px;
   z-index: 6;
   display: inline-flex;
   align-items: center;

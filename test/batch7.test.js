@@ -22,6 +22,16 @@ test("turning pages off hides a page and keeps a drawing", () => {
   ], { pages: false }), ["p"]);
 });
 
+test("group nodes pass kind filters while keyword still applies to their title", () => {
+  const group = { uid: "group:south:type:Task", kind: "group", title: "Tasks" };
+  assert.deepEqual(
+    hiddenUids([group], { pages: false, blocks: false, drawings: false, regions: false }),
+    [],
+  );
+  assert.deepEqual(hiddenUids([group], { keyword: "task" }), []);
+  assert.deepEqual(hiddenUids([group], { keyword: "project" }), ["group:south:type:Task"]);
+});
+
 test("keyword hides a miss", () => {
   assert.deepEqual(hiddenUids([
     { uid: "hit", kind: "page", title: "Apollo launch" },

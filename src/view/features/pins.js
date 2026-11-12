@@ -1,20 +1,9 @@
 import { movePin, periodTitle, periodicPins, reorderPins } from "../../model/periodic.js";
-import { SETTING_IDS } from "../../settings.js";
 
 function isAltShortcut(event, letter, code) {
   if (!event?.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
   if (event.code === code) return true;
   return typeof event.key === "string" && event.key.toLowerCase() === letter;
-}
-
-function hasTodaySource(ctx) {
-  const settingsApi = ctx?.extensionAPI?.settings;
-  if (!settingsApi || typeof settingsApi.get !== "function") return true;
-  if (settingsApi.canSet === false) return true;
-  if (settingsApi.get(SETTING_IDS.pinToday) != null) return true;
-  const scope = globalThis.window ?? globalThis;
-  const roam = scope?.roamAlphaAPI ?? globalThis.roamAlphaAPI;
-  return typeof roam?.util?.dateToPageUid === "function";
 }
 
 export function createPins(ctx) {
@@ -38,10 +27,7 @@ export function createPins(ctx) {
   let picker = null;
 
   function resolvePeriodic(now = new Date()) {
-    const rawSettings = ctx?.state?.settings ?? {};
-    const settings = rawSettings.pinToday === true && !hasTodaySource(ctx)
-      ? { ...rawSettings, pinToday: false }
-      : rawSettings;
+    const settings = ctx?.state?.settings ?? {};
     const daily = ctx?.host?.dailyPage?.(now) ?? null;
     const base = periodicPins({ settings, now, daily });
     return base.map((item) => {

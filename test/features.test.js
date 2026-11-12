@@ -97,8 +97,8 @@ test("createFeatures hook runners isolate errors and follow each, any, first, pi
   }
 });
 
-test("FEATURES lists all 13 feature factories in exact specification order", () => {
-  assert.equal(FEATURES.length, 13);
+test("FEATURES lists all 14 feature factories in exact specification order", () => {
+  assert.equal(FEATURES.length, 14);
   const names = FEATURES.map((create) => create(null).name);
   assert.deepEqual(names, [
     "trail",
@@ -114,6 +114,7 @@ test("FEATURES lists all 13 feature factories in exact specification order", () 
     "zen",
     "export",
     "edit",
+    "more",
   ]);
 });
 
@@ -241,6 +242,7 @@ function makeFakeDom() {
       },
       append(...kids) {
         for (const kid of kids) {
+          if (!kid || typeof kid !== "object") continue;
           if (kid?.parentElement) kid.remove();
           kid.parentElement = node;
           kid.parentNode = node;
@@ -344,7 +346,7 @@ test("overlay seam exposes frozen ctx, removes bar lens widgets, and fires all 1
   globalThis.getComputedStyle = () => ({ backgroundColor: "rgb(255, 255, 255)", color: "rgb(0, 0, 0)" });
   listen(globalThis);
 
-  const settingsMap = new Map([["compass-follow", true]]);
+  const settingsMap = new Map([["compass-follow", true], ["compass-pin-today", false]]);
   const extensionAPI = {
     settings: {
       canSet: true,
@@ -406,9 +408,11 @@ test("overlay seam exposes frozen ctx, removes bar lens widgets, and fires all 1
     const { ctx, features } = overlay;
     assert.equal(Object.isFrozen(ctx), true);
     assert.equal(Object.isFrozen(ctx.dom), true);
-    assert.equal(features.list().length, 13);
+    assert.equal(features.list().length, 14);
     assert.equal(doc.querySelector(".compass-lens"), null);
     assert.equal(doc.querySelector(".compass-lens-keyword"), null);
+    assert.equal(doc.querySelector(".compass-fit"), null);
+    assert.ok(doc.querySelector(".compass-more"));
 
     const extraBtn = ctx.button("compass-extra-btn", "Extra");
     assert.equal(ctx.addBarButton(extraBtn), extraBtn);
@@ -632,6 +636,18 @@ test("overlay seam exposes frozen ctx, removes bar lens widgets, and fires all 1
     assert.ok(log.some(([name]) => name === "onEscape"));
     consumeEscape = false;
 
+    // Alt+Enter on a leaf node does not fall through to centering the node.
+    const leafEl = ctx.state.nodeEls.get("child-page");
+    assert.ok(leafEl);
+    doc.dispatchEvent({
+      type: "keydown",
+      target: leafEl,
+      key: "Enter",
+      altKey: true,
+      preventDefault() {},
+    });
+    assert.equal(ctx.state.current, "center-page");
+
     // Hook 1 follow path via recenter on hashchange
     log.length = 0;
     openUid = "other-page";
@@ -822,6 +838,28 @@ test("ctx.facts caches page attributes across calls, clears on load, degrades on
     assert.equal(ctx.dom.root.classList.contains("compass-dragging"), true);
     globalThis.dispatchEvent({ type: "pointercancel", clientX: 140, clientY: 140 });
     assert.equal(ctx.dom.root.classList.contains("compass-dragging"), false);
+
+    // Switching directly between custom views clears the outgoing custom view layer in both directions.
+    const views = overlay.features.get("views");
+    await views.set("mindmap");
+    assert.equal(ctx.dom.root.dataset.view, "mindmap");
+    assert.ok(doc.querySelector(".compass-mindmap").querySelectorAll(".compass-node").length > 0);
+    assert.equal(doc.querySelector(".compass-facets").querySelectorAll(".compass-node").length, 0);
+
+    await views.set("facets");
+    assert.equal(ctx.dom.root.dataset.view, "facets");
+    assert.equal(doc.querySelector(".compass-mindmap").querySelectorAll(".compass-node").length, 0);
+    assert.ok(doc.querySelector(".compass-facets").querySelectorAll(".compass-node").length > 0);
+
+    await views.set("mindmap");
+    assert.equal(ctx.dom.root.dataset.view, "mindmap");
+    assert.ok(doc.querySelector(".compass-mindmap").querySelectorAll(".compass-node").length > 0);
+    assert.equal(doc.querySelector(".compass-facets").querySelectorAll(".compass-node").length, 0);
+
+    await views.set("compass");
+    assert.equal(ctx.dom.root.dataset.view, "compass");
+    assert.equal(doc.querySelector(".compass-mindmap").querySelectorAll(".compass-node").length, 0);
+    assert.equal(doc.querySelector(".compass-facets").querySelectorAll(".compass-node").length, 0);
   } finally {
     console.error = originalError;
     await lifecycle.dispose();

@@ -41,12 +41,23 @@ function refsIn(string) {
 
 function childCountOf(block) {
   if (Number.isFinite(block?.childCount) && block.childCount >= 0) return Math.floor(block.childCount);
-  if (Array.isArray(block?.children)) return block.children.filter((child) => child?.uid).length;
-  return 0;
+  if (Array.isArray(block?.children)) return block.children.length;
+  return Infinity;
 }
 
 function isRelationLabel(child) {
   return Boolean(parseAttribute(child?.string)) && childCountOf(child) === 0;
+}
+
+function canDeleteSource(source, remainingChildren) {
+  if (Array.isArray(source?.children)) {
+    if (Number.isFinite(source.childCount) && Math.floor(source.childCount) !== source.children.length) {
+      return false;
+    }
+    if (source.children.some((child) => !child?.uid)) return false;
+    return remainingChildren.every(isRelationLabel);
+  }
+  return childCountOf(source) === 0;
 }
 
 function isPageEndpoint(endpoint) {
@@ -72,7 +83,7 @@ export function planUnlink({ source, attribute, value } = {}) {
     const token = shape.values.find((item) => tokenMatches(item, value));
     if (!token) return unlinkRefused("missing-value");
     if (shape.values.length === 1) {
-      if (!children.every(isRelationLabel)) return unlinkRefused("has-children");
+      if (!canDeleteSource(source, children)) return unlinkRefused("has-children");
       return safeUnlink([{ op: "delete", uid: source.uid }], true, children.length);
     }
     const offset = parsed.prefix.length;
@@ -94,7 +105,7 @@ export function planUnlink({ source, attribute, value } = {}) {
   if (childCountOf(holder) > 0) return unlinkRefused("has-children");
   if (values.length === 1) {
     const rest = children.filter((child) => child.uid !== holder.uid);
-    if (!rest.every(isRelationLabel)) return unlinkRefused("has-children");
+    if (!canDeleteSource(source, rest)) return unlinkRefused("has-children");
     return safeUnlink([{ op: "delete", uid: source.uid }], true, rest.length);
   }
   return safeUnlink([{ op: "delete", uid: holder.uid }], false, 0);

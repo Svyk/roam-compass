@@ -25,13 +25,42 @@ function copyWithTextarea(value) {
   }
 }
 
+const CLIPBOARD_TIMEOUT_MS = 1500;
+
+function withTimeLimit(promise, timeoutMs = CLIPBOARD_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(false);
+    }, timeoutMs);
+    timer?.unref?.();
+    Promise.resolve(promise).then(
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(true);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(false);
+      },
+    );
+  });
+}
+
 export async function copyText(text) {
   const value = String(text ?? "");
   const clipboard = globalThis.navigator?.clipboard;
   if (typeof clipboard?.writeText === "function") {
     try {
-      await clipboard.writeText(value);
-      return true;
+      if (await withTimeLimit(clipboard.writeText(value))) {
+        return true;
+      }
     } catch {
       // Fall back to execCommand below.
     }
@@ -45,8 +74,7 @@ export async function copyBlob(blob) {
   const Item = globalThis.ClipboardItem;
   if (typeof clipboard?.write !== "function" || typeof Item !== "function") return false;
   try {
-    await clipboard.write([new Item({ [blob.type]: blob })]);
-    return true;
+    return await withTimeLimit(clipboard.write([new Item({ [blob.type]: blob })]));
   } catch {
     return false;
   }

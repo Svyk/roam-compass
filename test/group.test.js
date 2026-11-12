@@ -383,11 +383,14 @@ test("createLayoutOptions manages commands, toggles, grouping, unfolded menu/nav
   currentHood = layoutFeat.transformHood(rawHood);
   assert.deepEqual(currentHood.nodes.map((n) => n.uid), ["group:south:type:Task", "solo"]);
 
-  // Group node is not spuriously hidden when pages are visible, and is hidden when pages are hidden.
+  // Group node passes kind filters and fades only when all of its members are hidden.
+  assert.deepEqual(layoutFeat.hiddenUids([], currentHood), []);
   assert.deepEqual(layoutFeat.hiddenUids(["group:south:type:Task"], currentHood), []);
   lens = { ...lens, pages: false };
-  assert.deepEqual(layoutFeat.hiddenUids(["group:south:type:Task"], currentHood), ["group:south:type:Task"]);
-  lens = { ...lens, pages: true };
+  assert.deepEqual(layoutFeat.hiddenUids([], currentHood), ["group:south:type:Task"]);
+  lens = { ...lens, pages: true, keyword: "Task 1" };
+  assert.deepEqual(layoutFeat.hiddenUids(["group:south:type:Task"], currentHood), []);
+  lens = { ...lens, keyword: "" };
 
   // Unfold via nodeMenu, verify Fold group appears on members, and verify onNavigate resets unfolded state.
   const groupNode = currentHood.nodes[0];

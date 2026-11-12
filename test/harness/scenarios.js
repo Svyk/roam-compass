@@ -1,3 +1,4 @@
+import { installRoamCompass } from "../../src/extension.js";
 import { SETTING_IDS } from "../../src/settings.js";
 import * as baseModule from "./scenarios/base.js";
 import * as trailModule from "./scenarios/trail.js";
@@ -9,6 +10,7 @@ import * as layoutModule from "./scenarios/layout.js";
 import * as keysModule from "./scenarios/keys.js";
 import * as exportModule from "./scenarios/export.js";
 import * as editModule from "./scenarios/edit.js";
+import * as releaseModule from "./scenarios/release.js";
 
 const SCENARIO_SOURCES = [
   ["test/harness/scenarios/base.js", baseModule],
@@ -21,6 +23,7 @@ const SCENARIO_SOURCES = [
   ["test/harness/scenarios/keys.js", keysModule],
   ["test/harness/scenarios/export.js", exportModule],
   ["test/harness/scenarios/edit.js", editModule],
+  ["test/harness/scenarios/release.js", releaseModule],
 ];
 
 function extractScenarios(mod) {
@@ -100,6 +103,15 @@ function describeElement(el, index) {
 }
 
 export function createScenarioHelper(harness, assertions) {
+  if (typeof window !== "undefined" && !window.RoamCompass && harness?.overlay) {
+    const cleanupApi = installRoamCompass(window, {
+      overlay: harness.overlay,
+      host: harness.host,
+      extensionAPI: harness.extensionAPI,
+      version: "1.0.0",
+    });
+    harness.lifecycle?.add?.(cleanupApi);
+  }
   const root = () => document.querySelector(".compass-root");
   const q = (selector) => {
     const container = root();

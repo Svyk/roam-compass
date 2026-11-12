@@ -18,6 +18,7 @@ function isDrawing(node) {
 }
 
 function chipKeeps(node, flags) {
+  if (node.kind === "group") return true;
   const region = isRegion(node);
   const drawing = isDrawing(node);
   if (flags.pages && node.kind === "page") return true;

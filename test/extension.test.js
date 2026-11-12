@@ -189,10 +189,19 @@ test("extension exports the Roam lifecycle contract and survives repeated unload
     assert.equal(typeof compass?.isAvailable, "function");
     assert.equal(compass.isAvailable(), true);
     assert.equal(typeof compass.focus, "function");
-    assert.equal(compass.apiVersion, 1);
+    assert.equal(compass.apiVersion, 2);
+    assert.equal(compass.version, "test");
     assert.equal(typeof compass.open, "function");
     assert.equal(typeof compass.focusBlock, "function");
     assert.equal(typeof compass.isOpen, "function");
+    assert.equal(typeof compass.ontology, "function");
+    assert.equal(typeof compass.neighborhood, "function");
+    assert.equal(typeof compass.search, "function");
+    assert.equal(typeof compass.canvas, "function");
+    assert.equal(typeof compass.setView, "function");
+    assert.equal(typeof compass.trail, "function");
+    assert.equal(typeof compass.commands, "function");
+    assert.equal(typeof compass.run, "function");
     assert.equal(compass.isOpen(), false);
     assert.equal(Object.isFrozen(compass), true);
     compass.focus("block-x");
@@ -227,6 +236,15 @@ test("extension exports the Roam lifecycle contract and survives repeated unload
     assert.equal(api.settings.get("compass-wander-seconds"), "6");
     assert.equal(api.panel.settings.length, 37);
     assert.deepEqual(api.panel.settings.map((row) => row.id), SETTING_IDS);
+    const pairSentence = "Write `Name|Partner` to pair two fields so each end gets its own word.";
+    for (const id of ["compass-north", "compass-south", "compass-previous", "compass-next"]) {
+      const row = api.panel.settings.find((item) => item.id === id);
+      assert.ok(row?.description.endsWith(pairSentence), `${id} ends with Name|Partner sentence`);
+    }
+    for (const id of ["compass-west", "compass-east"]) {
+      const row = api.panel.settings.find((item) => item.id === id);
+      assert.equal(row?.description.includes(pairSentence), false);
+    }
     for (const row of api.panel.settings) {
       const selectItems = SELECT_ITEMS[row.id];
       const type = selectItems ? "select" : SWITCH_IDS.includes(row.id) ? "switch" : "input";
@@ -264,9 +282,16 @@ test("extension exports the Roam lifecycle contract and survives repeated unload
   assert.ok(names.indexOf("panel:create") < names.indexOf("command:add"));
   assert.deepEqual(
     api.calls.filter(([name]) => name === "command:add").map(([, label]) => label),
-    ["Compass: Open", "Compass: Focus page", "Compass: Focus block"],
+    [
+      "Compass: Open",
+      "Compass: Focus page",
+      "Compass: Focus block",
+      "Compass: Mind Map",
+      "Compass: Facets",
+      "Compass: Wander",
+    ],
   );
-  assert.equal(api.calls.filter(([name]) => name === "command:remove").length, 3);
+  assert.equal(api.calls.filter(([name]) => name === "command:remove").length, 6);
   assert.deepEqual(
     api.calls.filter(([name]) => name === "menu:add").map(([, label]) => label),
     ["Compass: Focus block"],
@@ -288,8 +313,8 @@ test("a second load disposes the previous runtime before registering again", asy
     const cleanup = await extension.onload({ extensionAPI: secondApi, extension: { version: "two" } });
 
     assert.equal(versionHost().__ROAM_COMPASS_VERSION, "two");
-    assert.equal(firstApi.calls.filter(([name]) => name === "command:remove").length, 3);
-    assert.equal(secondApi.calls.filter(([name]) => name === "command:add").length, 3);
+    assert.equal(firstApi.calls.filter(([name]) => name === "command:remove").length, 6);
+    assert.equal(secondApi.calls.filter(([name]) => name === "command:add").length, 6);
     assert.equal(menuCalls.filter(([name]) => name === "menu:add").length, 2);
     assert.equal(menuCalls.filter(([name]) => name === "menu:remove").length, 1);
     await cleanup();
@@ -603,7 +628,8 @@ test("open hides Find a page and Show on board uses the shipped plan", async () 
     await extension.onload({ extensionAPI: api, extension: { version: "eco-6" } });
     const compass = versionHost().RoamCompass;
     assert.equal(Object.isFrozen(compass), true);
-    assert.equal(compass.apiVersion, 1);
+    assert.equal(compass.apiVersion, 2);
+    assert.equal(compass.version, "eco-6");
     assert.equal(compass.isOpen(), false);
     compass.focus("page-1");
     const results = doc.querySelector(".compass-results");
@@ -685,6 +711,9 @@ test("open hides Find a page and Show on board uses the shipped plan", async () 
       "Compass: Open",
       "Compass: Focus page",
       "Compass: Focus block",
+      "Compass: Mind Map",
+      "Compass: Facets",
+      "Compass: Wander",
     ]);
   } finally {
     await new Promise((resolve) => setTimeout(resolve, 0));

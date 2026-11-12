@@ -1,0 +1,12 @@
+/* more */
+.compass-root .compass-bar .compass-export-btn {
+  display: none;
+}
+
+.compass-root .compass-bar .compass-pin {
+  margin-left: 6px;
+}
+
+.compass-root .compass-bar .compass-more {
+  margin-left: auto;
+}

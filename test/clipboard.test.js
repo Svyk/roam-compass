@@ -173,3 +173,65 @@ test("saveBlob clicks a temporary download link, removes it, and revokes the obj
     else globalThis.document = previousDocument;
   }
 });
+
+test("copyText falls back to textarea and copyBlob returns false when clipboard permission hangs past 1.5 s", async (t) => {
+  const previousNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const previousDocument = globalThis.document;
+  const previousItem = globalThis.ClipboardItem;
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    let fallbackCopied = null;
+    globalThis.ClipboardItem = function ClipboardItem(map) {
+      this.map = map;
+    };
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: {
+        clipboard: {
+          writeText() {
+            return new Promise(() => {});
+          },
+          write() {
+            return new Promise(() => {});
+          },
+        },
+      },
+    });
+    globalThis.document = {
+      body: {
+        append(node) {
+          fallbackCopied = node.value;
+        },
+      },
+      createElement() {
+        return {
+          value: "",
+          style: {},
+          setAttribute() {},
+          focus() {},
+          select() {},
+          remove() {},
+        };
+      },
+      execCommand(cmd) {
+        return cmd === "copy";
+      },
+    };
+
+    const textPromise = copyText("hung text");
+    t.mock.timers.tick(1500);
+    assert.equal(await textPromise, true);
+    assert.equal(fallbackCopied, "hung text");
+
+    const blobPromise = copyBlob(new Blob(["png"], { type: "image/png" }));
+    t.mock.timers.tick(1500);
+    assert.equal(await blobPromise, false);
+  } finally {
+    if (previousNavigator) Object.defineProperty(globalThis, "navigator", previousNavigator);
+    else delete globalThis.navigator;
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    if (previousItem === undefined) delete globalThis.ClipboardItem;
+    else globalThis.ClipboardItem = previousItem;
+  }
+});

@@ -171,32 +171,6 @@ function canvasToPngBlob(canvas) {
   });
 }
 
-function withClipboardTimeout(promise, timeoutMs = 250) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      resolve(false);
-    }, timeoutMs);
-    timer?.unref?.();
-    Promise.resolve(promise).then(
-      (value) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve(Boolean(value));
-      },
-      () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve(false);
-      },
-    );
-  });
-}
-
 export function createExport(ctx) {
   if (!ctx?.dom?.root) {
     return {
@@ -218,7 +192,6 @@ export function createExport(ctx) {
   backdrop.hidden = true;
   lifecycle.node(backdrop, dom.root);
 
-  const localVisits = [];
   let activeMode = null;
   let returnFocusEl = null;
   let previewUrl = null;
@@ -377,7 +350,7 @@ export function createExport(ctx) {
     const closeBtn = button("compass-export-close", "Close");
 
     copyBtn.addEventListener("click", ctx.guard(async () => {
-      const ok = await withClipboardTimeout(copyText(currentMarkdown));
+      const ok = await copyText(currentMarkdown);
       if (ok) {
         ctx.setStatus?.("Outline copied");
       } else {
@@ -730,7 +703,7 @@ export function createExport(ctx) {
 
     copyBtn.addEventListener("click", ctx.guard(async () => {
       if (!currentBlob) return;
-      const ok = await withClipboardTimeout(copyBlob(currentBlob));
+      const ok = await copyBlob(currentBlob);
       if (ok) {
         closeDialog();
         ctx.setStatus?.("Image copied");
@@ -849,9 +822,6 @@ export function createExport(ctx) {
         count = entries.length;
         md = breadcrumbs(entries);
       }
-    } else if (localVisits.length > 0) {
-      count = localVisits.length;
-      md = breadcrumbs(localVisits);
     }
 
     if (!md || count === 0) {
@@ -859,7 +829,7 @@ export function createExport(ctx) {
       return false;
     }
 
-    const ok = await withClipboardTimeout(copyText(md));
+    const ok = await copyText(md);
     const word = count === 1 ? "visit" : "visits";
     if (ok) {
       ctx.setStatus?.(`Copied ${count} ${word}`);
@@ -867,35 +837,6 @@ export function createExport(ctx) {
       ctx.setStatus?.(`Could not copy ${count} ${word}.`);
     }
     return ok;
-  }
-
-  function onNavigate(info) {
-    const uid = info?.uid;
-    if (typeof uid !== "string" || !uid) return;
-    const nextAt = Math.max(Date.now(), (localVisits[0]?.at ?? 0) + 1);
-    if (localVisits[0]?.uid === uid) {
-      localVisits[0].at = nextAt;
-      return;
-    }
-    const existingIdx = localVisits.findIndex((item) => item.uid === uid);
-    const prev = existingIdx >= 0 ? localVisits.splice(existingIdx, 1)[0] : null;
-    localVisits.unshift({
-      uid,
-      title: ctx.titleOf?.(uid) || prev?.title || uid,
-      kind: ctx.nodeKind?.(uid) || prev?.kind || "page",
-      at: nextAt,
-    });
-    if (localVisits.length > 100) localVisits.length = 100;
-  }
-
-  function afterRender(info) {
-    const center = info?.hood?.center;
-    if (!center?.uid) return;
-    const hit = localVisits.find((item) => item.uid === center.uid);
-    if (hit) {
-      if (center.title) hit.title = center.title;
-      if (center.kind) hit.kind = center.kind;
-    }
   }
 
   function onEscape() {
@@ -937,8 +878,6 @@ export function createExport(ctx) {
     openOutline,
     openImage,
     copyBreadcrumbs,
-    onNavigate,
-    afterRender,
     onEscape,
     onClose,
     stageMenu,

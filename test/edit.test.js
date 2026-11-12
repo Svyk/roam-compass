@@ -252,6 +252,69 @@ test("planUnlink deletes labels-only relation blocks with count and refuses nest
   );
 });
 
+test("planUnlink fails closed when a block lacks both childCount and children", () => {
+  assert.deepEqual(
+    planUnlink({
+      source: { uid: "b-src", string: "Friend:: [[Project Beta]]" },
+      attribute: "Friend",
+      value: beta,
+    }),
+    {
+      ops: [],
+      reason: "has-children",
+      removesBlock: false,
+      removesLabels: 0,
+    },
+  );
+
+  assert.deepEqual(
+    planUnlink({
+      source: { uid: "b-src", string: "Friend:: [[Project Beta]]", childCount: 0 },
+      attribute: "Friend",
+      value: beta,
+    }),
+    {
+      ops: [{ op: "delete", uid: "b-src" }],
+      reason: null,
+      removesBlock: true,
+      removesLabels: 0,
+    },
+  );
+
+  assert.deepEqual(
+    planUnlink({
+      source: src("Owner:: [[Project Beta]]", [
+        { uid: "l1", string: "Role:: Lead", order: 0 },
+      ]),
+      attribute: "Owner",
+      value: beta,
+    }),
+    {
+      ops: [],
+      reason: "has-children",
+      removesBlock: false,
+      removesLabels: 0,
+    },
+  );
+
+  assert.deepEqual(
+    planUnlink({
+      source: src("Child::", [
+        { uid: "c1", string: "[[Project Beta]]", order: 0 },
+        { uid: "c2", string: "[[Programs]]", order: 1, childCount: 0 },
+      ]),
+      attribute: "Child",
+      value: beta,
+    }),
+    {
+      ops: [],
+      reason: "has-children",
+      removesBlock: false,
+      removesLabels: 0,
+    },
+  );
+});
+
 test("planUnlink refuses missing, changed, read-only, text-value, missing-value, and forbidden writes", () => {
   assert.deepEqual(planUnlink({ source: null, attribute: "Friend", value: beta }), {
     ops: [],
@@ -629,7 +692,7 @@ test("createEdit exposes Unlink and Flip owner only where allowed", () => {
   assert.equal("commands" in edit, false);
 });
 
-test("createFakeHost sourceBlock and attributeBlock return real-host shapes with childCount and children", () => {
+test("createFakeHost sourceBlock and attributeBlock return real-host shapes with childCount and children", async () => {
   const graph = createGraph();
   const noteChildUid = graph.addBlock("p-alpha", "Nested note under Task One value", { parentUid: "b-alpha-c1" });
   assert.ok(noteChildUid);
@@ -659,4 +722,12 @@ test("createFakeHost sourceBlock and attributeBlock return real-host shapes with
   });
   assert.equal(host.attributeBlock("p-alpha", "Nonexistent"), null);
   assert.equal(host.attributeBlock("missing", "Child"), null);
+
+  const dailyUid = await host.createPage("November 11th, 2026", "11-11-2026");
+  assert.equal(dailyUid, "11-11-2026");
+  assert.deepEqual(host.entity("11-11-2026"), {
+    uid: "11-11-2026",
+    kind: "page",
+    title: "November 11th, 2026",
+  });
 });

@@ -1082,7 +1082,7 @@ export function createFakeHost(graph = createGraph(), { lifecycle } = {}) {
 
   function createPage(...args) {
     record("createPage", args);
-    const [title] = args;
+    const [title, requestedUid] = args;
     return enqueue(async () => {
       if (typeof title !== "string") return null;
       const clean = title.trim();
@@ -1090,7 +1090,8 @@ export function createFakeHost(graph = createGraph(), { lifecycle } = {}) {
       const index = buildIndex(graph);
       const existing = index.pagesByTitle.get(clean);
       if (existing) return existing.uid;
-      const uid = nextUid(graph);
+      const explicitUid = typeof requestedUid === "string" ? requestedUid.trim() : "";
+      const uid = explicitUid || nextUid(graph);
       const now = Date.now();
       graph.pages.push({
         uid,

@@ -101,6 +101,7 @@ function isDrawing(node) {
   return DRAWING_PREFIXES.some((prefix) => text.startsWith(prefix));
 }
 function chipKeeps(node, flags) {
+  if (node.kind === "group") return true;
   const region = isRegion(node);
   const drawing = isDrawing(node);
   if (flags.pages && node.kind === "page") return true;
@@ -2170,6 +2171,240 @@ function createHost({ lifecycle }) {
   };
 }
 
+// src/model/views.js
+var VIEWS = Object.freeze(["compass", "mindmap", "facets"]);
+var VIEW_OPTIONS = Object.freeze([
+  Object.freeze({ view: "compass", id: "view-compass", title: "View: Compass" }),
+  Object.freeze({ view: "mindmap", id: "view-mindmap", title: "View: Mind Map" }),
+  Object.freeze({ view: "facets", id: "view-facets", title: "View: Facets" })
+]);
+function isValidView(value) {
+  return typeof value === "string" && VIEWS.includes(value);
+}
+function normalizeView(value) {
+  return isValidView(value) ? value : "compass";
+}
+function viewEntries(currentView, onSelect) {
+  const active = normalizeView(currentView);
+  return VIEW_OPTIONS.map((item) => ({
+    view: item.view,
+    id: item.id,
+    title: item.title,
+    menuTitle: item.view === active ? `✓ ${item.title}` : item.title,
+    active: item.view === active,
+    run: typeof onSelect === "function" ? () => onSelect(item.view) : void 0
+  }));
+}
+
+// src/model/api.js
+function extractPairs(pairMap) {
+  if (!(pairMap instanceof Map)) return [];
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const [lk, right] of pairMap) {
+    if (seen.has(lk)) continue;
+    const rk = String(right ?? "").toLowerCase();
+    seen.add(lk);
+    seen.add(rk);
+    if (lk === rk) {
+      out.push([right, right]);
+    } else {
+      const left = pairMap.get(rk) ?? lk;
+      out.push([left, right]);
+    }
+  }
+  return out;
+}
+function shapeCenter(center) {
+  if (!center || typeof center.uid !== "string" || !center.uid) return null;
+  const kind = typeof center.kind === "string" && center.kind ? center.kind : "page";
+  return {
+    uid: center.uid,
+    kind,
+    title: typeof center.title === "string" && center.title ? center.title : center.uid
+  };
+}
+function shapeOntology(settings = {}) {
+  const rawModel = settings?.model && typeof settings.model === "object" ? settings.model : settings;
+  const model = modelSettings(rawModel ?? {});
+  const roles = {};
+  for (const role of ROLES2) {
+    roles[role] = [...model.lists[role] ?? []];
+  }
+  const rawType = typeof settings?.typeAttribute === "string" ? settings.typeAttribute.trim() : "";
+  return {
+    roles,
+    pairs: extractPairs(model.pairs),
+    hidden: [...model.hidden ?? []],
+    typeAttribute: rawType || "Type"
+  };
+}
+function shapeNeighborhood(hood, snapshot) {
+  const missing = Boolean(snapshot?.missing ?? hood?.missing);
+  const fallbackCenter = snapshot?.center ? shapeCenter(snapshot.center) : null;
+  const center = shapeCenter(hood?.center) ?? fallbackCenter ?? { uid: "", kind: "page", title: "" };
+  const nodes = (hood?.nodes ?? []).map((node) => ({
+    uid: String(node?.uid ?? ""),
+    kind: typeof node?.kind === "string" && node.kind ? node.kind : "page",
+    title: String(node?.title ?? node?.uid ?? ""),
+    role: String(node?.role ?? ""),
+    zone: String(node?.zone ?? ""),
+    label: String(node?.label ?? ""),
+    evidence: (node?.evidence ?? []).map((item) => ({
+      kind: String(item?.kind ?? ""),
+      attribute: typeof item?.attribute === "string" ? item.attribute : null,
+      direction: typeof item?.direction === "string" ? item.direction : null,
+      sourceUid: typeof item?.sourceUid === "string" ? item.sourceUid : null
+    }))
+  }));
+  const overflow = {};
+  if (hood?.overflow && typeof hood.overflow === "object") {
+    for (const [zone, counts] of Object.entries(hood.overflow)) {
+      if (counts && typeof counts === "object") {
+        overflow[zone] = {
+          shown: Number(counts.shown) || 0,
+          total: Number(counts.total) || 0
+        };
+      }
+    }
+  }
+  return { center, nodes, overflow, missing };
+}
+function shapeSearch(rows) {
+  if (!Array.isArray(rows)) return [];
+  return rows.flatMap((row) => {
+    if (!row || typeof row.uid !== "string" || !row.uid) return [];
+    return [{
+      uid: row.uid,
+      title: typeof row.title === "string" && row.title ? row.title : row.uid
+    }];
+  });
+}
+function shapeTrail(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries.flatMap((entry) => {
+    if (!entry || typeof entry.uid !== "string" || !entry.uid) return [];
+    const kind = typeof entry.kind === "string" && entry.kind ? entry.kind : "page";
+    return [{
+      uid: entry.uid,
+      title: typeof entry.title === "string" && entry.title ? entry.title : entry.uid,
+      kind,
+      at: Number(entry.at) || 0
+    }];
+  });
+}
+function shapeCanvas({ open = false, center = null, view = "compass", preset = "roles", zen = false, trail = [] } = {}) {
+  const cleanPreset = typeof preset === "string" && preset.trim() ? preset.trim() : "roles";
+  return {
+    open: Boolean(open),
+    center: shapeCenter(center),
+    view: normalizeView(view),
+    preset: cleanPreset,
+    zen: Boolean(zen),
+    trail: shapeTrail(trail)
+  };
+}
+function shapeCommands(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const item of list) {
+    if (!item || typeof item !== "object" || typeof item.run !== "function") continue;
+    const title = typeof item.title === "string" ? item.title.trim() : "";
+    if (!title) continue;
+    const id = typeof item.id === "string" ? item.id.trim() : "";
+    const key = id || `title:${title}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      id,
+      title,
+      hint: typeof item.hint === "string" ? item.hint : ""
+    });
+  }
+  return out;
+}
+
+// src/model/search.js
+function subsequence(needle, haystack) {
+  let at = 0;
+  let gaps = 0;
+  for (const char of needle) {
+    const found = haystack.indexOf(char, at);
+    if (found < 0) return -1;
+    gaps += found - at;
+    at = found + 1;
+  }
+  return gaps;
+}
+function score(query, title) {
+  const text = title.toLowerCase();
+  if (text === query) return 0;
+  if (text.startsWith(query)) return 1 + text.length / 1e3;
+  const word = text.search(new RegExp(`(^|[\\s/_(-])${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  if (word >= 0) return 2 + word / 1e3;
+  const at = text.indexOf(query);
+  if (at >= 0) return 3 + at / 1e3;
+  const gaps = subsequence(query, text);
+  if (gaps >= 0 && gaps <= query.length * 3) return 4 + gaps / 100;
+  return null;
+}
+function rankTitles(entries, input, limit = 20) {
+  const query = String(input ?? "").trim().toLowerCase();
+  if (!query) return [];
+  const ranked = [];
+  for (const entry of entries ?? []) {
+    if (!entry?.uid || typeof entry.title !== "string") continue;
+    const value = score(query, entry.title);
+    if (value != null) ranked.push({ ...entry, score: value });
+  }
+  ranked.sort((a, b) => a.score - b.score || a.title.length - b.title.length || (a.title < b.title ? -1 : 1));
+  return ranked.slice(0, limit).map(({ uid, title }) => ({ uid, title }));
+}
+function shownTitle(row) {
+  return row.title ?? row.uid;
+}
+function hasUid(row) {
+  return row?.uid != null && row.uid !== "";
+}
+function emptyQueryRows({ pins = [], today = null, pages = [], drawings = [], limit = 8 } = {}) {
+  const seen = /* @__PURE__ */ new Set();
+  const rows = [];
+  for (const pin of pins ?? []) {
+    if (!hasUid(pin) || seen.has(pin.uid)) continue;
+    seen.add(pin.uid);
+    rows.push({ uid: pin.uid, title: shownTitle(pin), kind: "pin" });
+  }
+  if (hasUid(today) && !seen.has(today.uid)) {
+    seen.add(today.uid);
+    rows.push({ uid: today.uid, title: shownTitle(today), kind: "today" });
+  }
+  const recent = [];
+  for (const row of [...pages ?? [], ...drawings ?? []]) {
+    if (!hasUid(row) || !Number.isFinite(row.editTime)) continue;
+    recent.push(row);
+  }
+  recent.sort((a, b) => {
+    if (a.editTime !== b.editTime) return b.editTime - a.editTime;
+    const left = shownTitle(a);
+    const right = shownTitle(b);
+    if (left < right) return -1;
+    if (left > right) return 1;
+    if (a.uid < b.uid) return -1;
+    if (a.uid > b.uid) return 1;
+    return 0;
+  });
+  let kept = 0;
+  for (const row of recent) {
+    if (kept >= limit) break;
+    if (seen.has(row.uid)) continue;
+    seen.add(row.uid);
+    rows.push({ uid: row.uid, title: shownTitle(row), kind: "recent" });
+    kept += 1;
+  }
+  return rows;
+}
+
 // src/model/boards.js
 var ARROWS = ["→", "↔", "—"];
 function listOf(value) {
@@ -2618,111 +2853,6 @@ function matchConditions(match, fact) {
   return true;
 }
 
-// src/model/search.js
-function subsequence(needle, haystack) {
-  let at = 0;
-  let gaps = 0;
-  for (const char of needle) {
-    const found = haystack.indexOf(char, at);
-    if (found < 0) return -1;
-    gaps += found - at;
-    at = found + 1;
-  }
-  return gaps;
-}
-function score(query, title) {
-  const text = title.toLowerCase();
-  if (text === query) return 0;
-  if (text.startsWith(query)) return 1 + text.length / 1e3;
-  const word = text.search(new RegExp(`(^|[\\s/_(-])${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-  if (word >= 0) return 2 + word / 1e3;
-  const at = text.indexOf(query);
-  if (at >= 0) return 3 + at / 1e3;
-  const gaps = subsequence(query, text);
-  if (gaps >= 0 && gaps <= query.length * 3) return 4 + gaps / 100;
-  return null;
-}
-function rankTitles(entries, input, limit = 20) {
-  const query = String(input ?? "").trim().toLowerCase();
-  if (!query) return [];
-  const ranked = [];
-  for (const entry of entries ?? []) {
-    if (!entry?.uid || typeof entry.title !== "string") continue;
-    const value = score(query, entry.title);
-    if (value != null) ranked.push({ ...entry, score: value });
-  }
-  ranked.sort((a, b) => a.score - b.score || a.title.length - b.title.length || (a.title < b.title ? -1 : 1));
-  return ranked.slice(0, limit).map(({ uid, title }) => ({ uid, title }));
-}
-function shownTitle(row) {
-  return row.title ?? row.uid;
-}
-function hasUid(row) {
-  return row?.uid != null && row.uid !== "";
-}
-function emptyQueryRows({ pins = [], today = null, pages = [], drawings = [], limit = 8 } = {}) {
-  const seen = /* @__PURE__ */ new Set();
-  const rows = [];
-  for (const pin of pins ?? []) {
-    if (!hasUid(pin) || seen.has(pin.uid)) continue;
-    seen.add(pin.uid);
-    rows.push({ uid: pin.uid, title: shownTitle(pin), kind: "pin" });
-  }
-  if (hasUid(today) && !seen.has(today.uid)) {
-    seen.add(today.uid);
-    rows.push({ uid: today.uid, title: shownTitle(today), kind: "today" });
-  }
-  const recent = [];
-  for (const row of [...pages ?? [], ...drawings ?? []]) {
-    if (!hasUid(row) || !Number.isFinite(row.editTime)) continue;
-    recent.push(row);
-  }
-  recent.sort((a, b) => {
-    if (a.editTime !== b.editTime) return b.editTime - a.editTime;
-    const left = shownTitle(a);
-    const right = shownTitle(b);
-    if (left < right) return -1;
-    if (left > right) return 1;
-    if (a.uid < b.uid) return -1;
-    if (a.uid > b.uid) return 1;
-    return 0;
-  });
-  let kept = 0;
-  for (const row of recent) {
-    if (kept >= limit) break;
-    if (seen.has(row.uid)) continue;
-    seen.add(row.uid);
-    rows.push({ uid: row.uid, title: shownTitle(row), kind: "recent" });
-    kept += 1;
-  }
-  return rows;
-}
-
-// src/model/views.js
-var VIEWS = Object.freeze(["compass", "mindmap", "facets"]);
-var VIEW_OPTIONS = Object.freeze([
-  Object.freeze({ view: "compass", id: "view-compass", title: "View: Compass" }),
-  Object.freeze({ view: "mindmap", id: "view-mindmap", title: "View: Mind Map" }),
-  Object.freeze({ view: "facets", id: "view-facets", title: "View: Facets" })
-]);
-function isValidView(value) {
-  return typeof value === "string" && VIEWS.includes(value);
-}
-function normalizeView(value) {
-  return isValidView(value) ? value : "compass";
-}
-function viewEntries(currentView, onSelect) {
-  const active = normalizeView(currentView);
-  return VIEW_OPTIONS.map((item) => ({
-    view: item.view,
-    id: item.id,
-    title: item.title,
-    menuTitle: item.view === active ? `✓ ${item.title}` : item.title,
-    active: item.view === active,
-    run: typeof onSelect === "function" ? () => onSelect(item.view) : void 0
-  }));
-}
-
 // src/settings.js
 var SETTING_IDS = Object.freeze({
   north: "compass-north",
@@ -2836,12 +2966,12 @@ var SELECT_ITEMS = Object.freeze({
   [SETTING_IDS.mindmapDirection]: Object.freeze(["right", "left", "balanced"])
 });
 var ROWS = [
-  [SETTING_IDS.north, "Parents (north)", "Attributes whose value sits above the center. The first one is written when you drag a node north."],
-  [SETTING_IDS.south, "Children (south)", "Attributes whose value sits below. Any attribute not listed anywhere also lands here."],
+  [SETTING_IDS.north, "Parents (north)", "Attributes whose value sits above the center. The first one is written when you drag a node north. Write `Name|Partner` to pair two fields so each end gets its own word."],
+  [SETTING_IDS.south, "Children (south)", "Attributes whose value sits below. Any attribute not listed anywhere also lands here. Write `Name|Partner` to pair two fields so each end gets its own word."],
   [SETTING_IDS.west, "Friends (west)", "Attributes whose value sits to the left, from either end."],
   [SETTING_IDS.east, "Challengers (east)", "Attributes whose value sits to the right, from either end."],
-  [SETTING_IDS.previous, "Previous (west)", "The value sits left; seen from the value, this page sits right."],
-  [SETTING_IDS.next, "Next (east)", "The value sits right; seen from the value, this page sits left."],
+  [SETTING_IDS.previous, "Previous (west)", "The value sits left; seen from the value, this page sits right. Write `Name|Partner` to pair two fields so each end gets its own word."],
+  [SETTING_IDS.next, "Next (east)", "The value sits right; seen from the value, this page sits left. Write `Name|Partner` to pair two fields so each end gets its own word."],
   [SETTING_IDS.hidden, "Hidden", "Attributes Compass leaves out."],
   [SETTING_IDS.links, "Plain links", "Show [[links]] inside the outline (south) and linked references (north)."],
   [SETTING_IDS.siblings, "Siblings", "Show other children of the center's parents."],
@@ -3205,13 +3335,40 @@ function copyWithTextarea(value) {
     }
   }
 }
+var CLIPBOARD_TIMEOUT_MS = 1500;
+function withTimeLimit(promise, timeoutMs = CLIPBOARD_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(false);
+    }, timeoutMs);
+    timer?.unref?.();
+    Promise.resolve(promise).then(
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(true);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(false);
+      }
+    );
+  });
+}
 async function copyText(text) {
   const value = String(text ?? "");
   const clipboard = globalThis.navigator?.clipboard;
   if (typeof clipboard?.writeText === "function") {
     try {
-      await clipboard.writeText(value);
-      return true;
+      if (await withTimeLimit(clipboard.writeText(value))) {
+        return true;
+      }
     } catch {
     }
   }
@@ -3223,8 +3380,7 @@ async function copyBlob(blob) {
   const Item = globalThis.ClipboardItem;
   if (typeof clipboard?.write !== "function" || typeof Item !== "function") return false;
   try {
-    await clipboard.write([new Item({ [blob.type]: blob })]);
-    return true;
+    return await withTimeLimit(clipboard.write([new Item({ [blob.type]: blob })]));
   } catch {
     return false;
   }
@@ -3790,15 +3946,6 @@ function isAltShortcut2(event, letter, code) {
   if (event.code === code) return true;
   return typeof event.key === "string" && event.key.toLowerCase() === letter;
 }
-function hasTodaySource(ctx) {
-  const settingsApi = ctx?.extensionAPI?.settings;
-  if (!settingsApi || typeof settingsApi.get !== "function") return true;
-  if (settingsApi.canSet === false) return true;
-  if (settingsApi.get(SETTING_IDS.pinToday) != null) return true;
-  const scope = globalThis.window ?? globalThis;
-  const roam = scope?.roamAlphaAPI ?? globalThis.roamAlphaAPI;
-  return typeof roam?.util?.dateToPageUid === "function";
-}
 function createPins(ctx) {
   const hasDom = Boolean(
     ctx?.dom?.root && ctx?.dom?.pinRow && typeof ctx?.el === "function" && typeof ctx?.button === "function" && ctx?.lifecycle?.node && ctx?.lifecycle?.event
@@ -3813,8 +3960,7 @@ function createPins(ctx) {
   let dropMarker = null;
   let picker = null;
   function resolvePeriodic(now = /* @__PURE__ */ new Date()) {
-    const rawSettings = ctx?.state?.settings ?? {};
-    const settings = rawSettings.pinToday === true && !hasTodaySource(ctx) ? { ...rawSettings, pinToday: false } : rawSettings;
+    const settings = ctx?.state?.settings ?? {};
     const daily = ctx?.host?.dailyPage?.(now) ?? null;
     const base = periodicPins({ settings, now, daily });
     return base.map((item) => {
@@ -8920,26 +9066,6 @@ function isExpandableNeighbor(node) {
   if (node.style === "board" || node.style === "card") return false;
   return true;
 }
-function applyEdgeShape(edgeEl, shape) {
-  const hit = edgeEl.querySelector(".compass-edge-hit");
-  const line = edgeEl.querySelector(".compass-edge-line");
-  const label = edgeEl.querySelector(".compass-edge-label");
-  if (hit) hit.setAttribute("d", shape.d);
-  if (line) line.setAttribute("d", shape.d);
-  if (label) {
-    label.setAttribute("x", String(shape.mid[0]));
-    label.setAttribute("y", String(shape.mid[1] - 4));
-  }
-}
-function anchorRowUid(uid, hood, visibleRowUids, outlineOn) {
-  if (!outlineOn || !visibleRowUids.size) return null;
-  let at = uid;
-  while (at) {
-    if (visibleRowUids.has(at)) return at;
-    at = hood.outlineIndex?.get?.(at)?.parentUid ?? null;
-  }
-  return null;
-}
 function createLayoutOptions(ctx) {
   let groupOn = Boolean(ctx?.state?.settings?.group);
   let expandedOn = Boolean(ctx?.state?.settings?.expanded);
@@ -9102,103 +9228,27 @@ function createLayoutOptions(ctx) {
     }
     return next;
   }
+  function isGroupHidden(group) {
+    const members = (group?.members ?? []).map((id) => originalNodes.get(id)).filter(Boolean);
+    if (!members.length) return false;
+    const lensesFeature = ctx?.features?.get?.("lenses");
+    const lensState = ctx?.state?.lens ?? { pages: true, blocks: true, drawings: true, regions: true, keyword: "" };
+    const hiddenMembers = typeof lensesFeature?.hiddenFor === "function" ? lensesFeature.hiddenFor(members) : new Set(hiddenUids(members, lensState));
+    return members.every((member) => hiddenMembers?.has?.(member.uid));
+  }
   function hiddenUids2(uids, hood) {
     if (!Array.isArray(uids) || !hood || !Array.isArray(hood.nodes)) return uids;
     const groups = hood.nodes.filter((node) => node?.kind === "group");
     if (!groups.length) return uids;
-    const groupById = new Map(groups.map((item) => [item.uid, item]));
-    const lensesFeature = ctx?.features?.get?.("lenses");
-    const lensState = ctx?.state?.lens ?? { pages: true, blocks: true, drawings: true, regions: true, keyword: "" };
-    const hiddenGroups = /* @__PURE__ */ new Set();
+    const out = new Set(uids);
     for (const group of groups) {
-      const members = (group.members ?? []).map((id) => originalNodes.get(id)).filter(Boolean);
-      if (!members.length) continue;
-      const hiddenMembers = typeof lensesFeature?.hiddenFor === "function" ? lensesFeature.hiddenFor(members) : new Set(hiddenUids(members, lensState));
-      const keyword = String(lensState.keyword ?? "").trim().toLowerCase();
-      const titleHit = !keyword || typeof group.title === "string" && group.title.toLowerCase().includes(keyword);
-      const everyMemberHidden = members.every((member) => hiddenMembers?.has?.(member.uid));
-      if (everyMemberHidden && (!keyword || !titleHit)) hiddenGroups.add(group.uid);
+      if (!(group.members ?? []).some((id) => originalNodes.has(id))) continue;
+      if (isGroupHidden(group)) out.add(group.uid);
+      else out.delete(group.uid);
     }
-    return uids.filter((id) => !groupById.has(id) || hiddenGroups.has(id));
+    return [...out];
   }
-  function lateralEdgeFromCenter(center, box) {
-    const sign = box.x < 0 ? -1 : 1;
-    const sx = sign * (center.w / 2);
-    const sy = ctx.clamp(box.y, -center.h / 2 + 12, center.h / 2 - 12);
-    const ex = box.x - sign * (box.w / 2);
-    return ctx.curve(sx, sy, ex, box.y, false);
-  }
-  function lateralEdgeFromRow(center, row, box) {
-    const sign = box.x < 0 ? -1 : 1;
-    const sx = sign * (center.w / 2);
-    const end = [box.x - sign * (box.w / 2), box.y];
-    const c1 = [sx + sign * 48, row.y];
-    const c2 = [end[0] - sign * 48, end[1]];
-    return {
-      d: `M${sx},${row.y} C${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${end[0]},${end[1]}`,
-      mid: [(sx + 3 * c1[0] + 3 * c2[0] + end[0]) / 8, (row.y + 3 * c1[1] + 3 * c2[1] + end[1]) / 8]
-    };
-  }
-  function siblingEdge(via, box) {
-    const sign = box.x < 0 ? -1 : 1;
-    const sx = via.x;
-    const sy = via.y - via.h / 2;
-    const ex = box.x - sign * (box.w / 2);
-    const lift = Math.min(sy, box.y) - 36;
-    return {
-      d: `M${sx},${sy} C${sx},${lift} ${ex - sign * 36},${lift} ${ex},${box.y}`,
-      mid: [(sx + ex) / 2, lift]
-    };
-  }
-  function fixEdges(hood, geometry, boxes) {
-    const edgeLayer = ctx?.dom?.edgeLayer;
-    if (!edgeLayer || !geometry || !geometry.flip && !geometry.oneSided) return;
-    const edgesByUid = /* @__PURE__ */ new Map();
-    for (const edgeEl of edgeLayer.querySelectorAll(".compass-edge:not(.compass-cross)")) {
-      if (edgeEl.dataset.style === "card") continue;
-      const uid = edgeEl.dataset.uid;
-      if (!uid) continue;
-      let list = edgesByUid.get(uid);
-      if (!list) {
-        list = [];
-        edgesByUid.set(uid, list);
-      }
-      list.push(edgeEl);
-    }
-    const rows = geometry.rows ?? [];
-    const rowBoxes = new Map(rows.map((row) => [row.uid, row]));
-    const visibleRowUids = new Set(rowBoxes.keys());
-    const outlineOn = Boolean(ctx?.state?.settings?.outline);
-    for (const node of hood.nodes ?? []) {
-      const box = boxes.get(node.uid);
-      if (!box) continue;
-      const needsFix = box.zone === "west" && box.x > 0 || box.zone === "east" && box.x < 0 || box.zone === "siblings" && box.x < 0;
-      if (!needsFix) continue;
-      const edgeEls = edgesByUid.get(node.uid);
-      if (!edgeEls?.length) continue;
-      if (node.zone === "siblings") {
-        const via = node.via ? boxes.get(node.via) : null;
-        if (via) applyEdgeShape(edgeEls[0], siblingEdge(via, box));
-        for (let i = 1; i < edgeEls.length; i += 1) {
-          applyEdgeShape(edgeEls[i], lateralEdgeFromCenter(geometry.center, box));
-        }
-        continue;
-      }
-      const anchors = /* @__PURE__ */ new Set();
-      for (const item of node.evidence ?? []) {
-        const rowUid = item.sourceUid ? anchorRowUid(item.sourceUid, hood, visibleRowUids, outlineOn) : null;
-        if (rowUid && (item.kind === "link" || item.kind === "typed" && item.direction === "out")) anchors.add(rowUid);
-        else anchors.add("");
-      }
-      const anchorList = [...anchors];
-      for (let i = 0; i < edgeEls.length; i += 1) {
-        const anchor = i < anchorList.length ? anchorList[i] : "";
-        const shape = anchor && rowBoxes.has(anchor) ? lateralEdgeFromRow(geometry.center, rowBoxes.get(anchor), box) : lateralEdgeFromCenter(geometry.center, box);
-        applyEdgeShape(edgeEls[i], shape);
-      }
-    }
-  }
-  function afterRender({ hood, geometry, boxes, nodeEls, view } = {}) {
+  function afterRender({ hood, nodeEls, view } = {}) {
     syncButtons();
     if (view !== "compass" || !hood || !nodeEls) {
       syncRootAttributes(false);
@@ -9212,6 +9262,9 @@ function createLayoutOptions(ctx) {
       if (node.kind === "group") {
         element.classList.add("compass-node-group");
         element.dataset.kind = "group";
+        if ((node.members ?? []).some((id) => originalNodes.has(id))) {
+          element.classList.toggle?.("compass-fade", isGroupHidden(node));
+        }
         const titleEl = element.querySelector(".compass-node-title");
         if (titleEl) titleEl.textContent = node.title;
         if (!element.querySelector(".compass-group-count")) {
@@ -9243,7 +9296,6 @@ function createLayoutOptions(ctx) {
         }
       }
     }
-    if (boxes) fixEdges(hood, geometry, boxes);
   }
   function unfoldGroup(groupId, focusFirst = false) {
     const centerUid = ctx?.state?.current;
@@ -9400,8 +9452,8 @@ var SHORTCUTS = Object.freeze([
   Object.freeze({ keys: "Alt+Left / Alt+Right", action: "Back or forward from the center", group: "Actions" }),
   Object.freeze({ keys: "Ctrl/Cmd+Arrow keys", action: "Add a related page on that side", group: "Actions" }),
   Object.freeze({ keys: "Alt+P", action: "Pin or unpin the selected node", group: "Actions" }),
-  Object.freeze({ keys: "Alt+B", action: "Open periodic pins", group: "Actions" }),
-  Object.freeze({ keys: "Alt+H", action: "Toggle trail", group: "Actions" }),
+  Object.freeze({ keys: "Alt+B", action: "Open pins", group: "Actions" }),
+  Object.freeze({ keys: "Alt+H", action: "Open Footprints", group: "Actions" }),
   Object.freeze({ keys: "Alt+M", action: "Open the selected node menu", group: "Actions" }),
   Object.freeze({ keys: "Alt+/ or Ctrl/Cmd+F", action: "Focus the search box", group: "Actions" }),
   Object.freeze({ keys: "Alt+.", action: "Open the command palette", group: "Actions" }),
@@ -11662,31 +11714,6 @@ function canvasToPngBlob(canvas) {
     }
   });
 }
-function withClipboardTimeout(promise, timeoutMs = 250) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      resolve(false);
-    }, timeoutMs);
-    timer?.unref?.();
-    Promise.resolve(promise).then(
-      (value) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve(Boolean(value));
-      },
-      () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve(false);
-      }
-    );
-  });
-}
 function createExport(ctx) {
   if (!ctx?.dom?.root) {
     return {
@@ -11706,7 +11733,6 @@ function createExport(ctx) {
   const backdrop = el2("div", "compass-export-backdrop");
   backdrop.hidden = true;
   lifecycle.node(backdrop, dom.root);
-  const localVisits = [];
   let activeMode = null;
   let returnFocusEl = null;
   let previewUrl = null;
@@ -11847,7 +11873,7 @@ function createExport(ctx) {
     const saveBtn = button2("compass-export-save-md", "Save .md");
     const closeBtn = button2("compass-export-close", "Close");
     copyBtn.addEventListener("click", ctx.guard(async () => {
-      const ok = await withClipboardTimeout(copyText(currentMarkdown));
+      const ok = await copyText(currentMarkdown);
       if (ok) {
         ctx.setStatus?.("Outline copied");
       } else {
@@ -12147,7 +12173,7 @@ function createExport(ctx) {
     saveBtn.disabled = true;
     copyBtn.addEventListener("click", ctx.guard(async () => {
       if (!currentBlob) return;
-      const ok = await withClipboardTimeout(copyBlob(currentBlob));
+      const ok = await copyBlob(currentBlob);
       if (ok) {
         closeDialog();
         ctx.setStatus?.("Image copied");
@@ -12253,15 +12279,12 @@ function createExport(ctx) {
         count2 = entries.length;
         md = breadcrumbs(entries);
       }
-    } else if (localVisits.length > 0) {
-      count2 = localVisits.length;
-      md = breadcrumbs(localVisits);
     }
     if (!md || count2 === 0) {
       ctx.setStatus?.("There is no trail yet.");
       return false;
     }
-    const ok = await withClipboardTimeout(copyText(md));
+    const ok = await copyText(md);
     const word = count2 === 1 ? "visit" : "visits";
     if (ok) {
       ctx.setStatus?.(`Copied ${count2} ${word}`);
@@ -12269,33 +12292,6 @@ function createExport(ctx) {
       ctx.setStatus?.(`Could not copy ${count2} ${word}.`);
     }
     return ok;
-  }
-  function onNavigate(info) {
-    const uid = info?.uid;
-    if (typeof uid !== "string" || !uid) return;
-    const nextAt = Math.max(Date.now(), (localVisits[0]?.at ?? 0) + 1);
-    if (localVisits[0]?.uid === uid) {
-      localVisits[0].at = nextAt;
-      return;
-    }
-    const existingIdx = localVisits.findIndex((item) => item.uid === uid);
-    const prev = existingIdx >= 0 ? localVisits.splice(existingIdx, 1)[0] : null;
-    localVisits.unshift({
-      uid,
-      title: ctx.titleOf?.(uid) || prev?.title || uid,
-      kind: ctx.nodeKind?.(uid) || prev?.kind || "page",
-      at: nextAt
-    });
-    if (localVisits.length > 100) localVisits.length = 100;
-  }
-  function afterRender(info) {
-    const center = info?.hood?.center;
-    if (!center?.uid) return;
-    const hit = localVisits.find((item) => item.uid === center.uid);
-    if (hit) {
-      if (center.title) hit.title = center.title;
-      if (center.kind) hit.kind = center.kind;
-    }
   }
   function onEscape() {
     if (!activeMode || backdrop.hidden) return false;
@@ -12331,8 +12327,6 @@ function createExport(ctx) {
     openOutline,
     openImage,
     copyBreadcrumbs,
-    onNavigate,
-    afterRender,
     onEscape,
     onClose,
     stageMenu,
@@ -12373,11 +12367,21 @@ function refsIn2(string) {
 }
 function childCountOf(block) {
   if (Number.isFinite(block?.childCount) && block.childCount >= 0) return Math.floor(block.childCount);
-  if (Array.isArray(block?.children)) return block.children.filter((child) => child?.uid).length;
-  return 0;
+  if (Array.isArray(block?.children)) return block.children.length;
+  return Infinity;
 }
 function isRelationLabel(child) {
   return Boolean(parseAttribute(child?.string)) && childCountOf(child) === 0;
+}
+function canDeleteSource(source, remainingChildren) {
+  if (Array.isArray(source?.children)) {
+    if (Number.isFinite(source.childCount) && Math.floor(source.childCount) !== source.children.length) {
+      return false;
+    }
+    if (source.children.some((child) => !child?.uid)) return false;
+    return remainingChildren.every(isRelationLabel);
+  }
+  return childCountOf(source) === 0;
 }
 function isPageEndpoint(endpoint) {
   if (!endpoint || typeof endpoint !== "object") return false;
@@ -12398,7 +12402,7 @@ function planUnlink({ source, attribute, value } = {}) {
     const token = shape.values.find((item) => tokenMatches(item, value));
     if (!token) return unlinkRefused("missing-value");
     if (shape.values.length === 1) {
-      if (!children.every(isRelationLabel)) return unlinkRefused("has-children");
+      if (!canDeleteSource(source, children)) return unlinkRefused("has-children");
       return safeUnlink([{ op: "delete", uid: source.uid }], true, children.length);
     }
     const offset = parsed.prefix.length;
@@ -12417,7 +12421,7 @@ function planUnlink({ source, attribute, value } = {}) {
   if (childCountOf(holder) > 0) return unlinkRefused("has-children");
   if (values.length === 1) {
     const rest = children.filter((child) => child.uid !== holder.uid);
-    if (!rest.every(isRelationLabel)) return unlinkRefused("has-children");
+    if (!canDeleteSource(source, rest)) return unlinkRefused("has-children");
     return safeUnlink([{ op: "delete", uid: source.uid }], true, rest.length);
   }
   return safeUnlink([{ op: "delete", uid: holder.uid }], false, 0);
@@ -12791,6 +12795,167 @@ function createEdit(ctx) {
   };
 }
 
+// src/view/features/more.js
+var MORE_COMMAND_IDS = Object.freeze([
+  "fit",
+  "refresh",
+  "linked",
+  "cross",
+  "with-links",
+  "send",
+  "export-image",
+  "export-outline",
+  "export-breadcrumbs",
+  "wander",
+  "zen",
+  "fullscreen",
+  "keys-help",
+  "palette"
+]);
+function createMore(ctx) {
+  if (!ctx?.dom?.root || !ctx?.dom?.menu || typeof ctx?.addBarButton !== "function") {
+    return {
+      name: "more",
+      open() {
+      },
+      close() {
+      },
+      toggle() {
+      }
+    };
+  }
+  const { button: button2, lifecycle, dom } = ctx;
+  const moreBtn = button2("compass-more", "More", "More actions");
+  moreBtn.setAttribute("aria-haspopup", "menu");
+  moreBtn.setAttribute("aria-expanded", "false");
+  ctx.addBarButton(moreBtn);
+  let firstItem = null;
+  let closedOnPointerDown = false;
+  function isOpen() {
+    return Boolean(firstItem && !dom.menu.hidden && dom.menu.contains(firstItem));
+  }
+  function syncButton() {
+    moreBtn.setAttribute("aria-expanded", isOpen() ? "true" : "false");
+  }
+  function close({ restoreFocus = false } = {}) {
+    if (!isOpen()) {
+      firstItem = null;
+      syncButton();
+      return;
+    }
+    firstItem = null;
+    ctx.hideFloating?.();
+    syncButton();
+    if (restoreFocus && moreBtn.isConnected) {
+      moreBtn.focus?.({ preventScroll: true });
+    }
+  }
+  function open() {
+    ctx.hideFloating?.();
+    firstItem = null;
+    const byId = /* @__PURE__ */ new Map();
+    for (const cmd of ctx.commands?.() ?? []) {
+      if (!cmd || typeof cmd.id !== "string" || !cmd.id) continue;
+      if (typeof cmd.title !== "string" || !cmd.title.trim()) continue;
+      if (typeof cmd.run !== "function") continue;
+      if (!byId.has(cmd.id)) byId.set(cmd.id, cmd);
+    }
+    for (const id of MORE_COMMAND_IDS) {
+      const cmd = byId.get(id);
+      if (!cmd) continue;
+      const item = ctx.menuItem(cmd.title, cmd.run);
+      item.dataset.command = id;
+      if (!firstItem) firstItem = item;
+    }
+    if (!firstItem) {
+      syncButton();
+      return;
+    }
+    const rect = moreBtn.getBoundingClientRect();
+    ctx.placeFloating(dom.menu, rect.left, rect.bottom);
+    syncButton();
+    firstItem.focus?.({ preventScroll: true });
+  }
+  function toggle() {
+    if (isOpen()) close();
+    else open();
+  }
+  lifecycle.event(moreBtn, "pointerdown", (event) => {
+    if (event?.button === 0) closedOnPointerDown = isOpen();
+  });
+  lifecycle.event(moreBtn, "click", (event) => {
+    if (closedOnPointerDown && (event?.detail ?? 0) > 0) {
+      closedOnPointerDown = false;
+      syncButton();
+      return;
+    }
+    closedOnPointerDown = false;
+    toggle();
+  });
+  lifecycle.event(moreBtn, "keydown", (event) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      event.stopPropagation();
+      open();
+    }
+  });
+  const win = globalThis.window ?? globalThis;
+  if (typeof win?.addEventListener === "function") {
+    lifecycle.event(win, "resize", () => {
+      if (!isOpen()) return;
+      ctx.frame?.(() => {
+        if (!isOpen()) return;
+        const rect = moreBtn.getBoundingClientRect();
+        ctx.placeFloating(dom.menu, rect.left, rect.bottom);
+      });
+    });
+  }
+  lifecycle.event(dom.menu, "keydown", (event) => {
+    if (dom.menu.hidden) return;
+    if (event.key === "Escape" && isOpen()) {
+      event.preventDefault();
+      event.stopPropagation();
+      close({ restoreFocus: true });
+      return;
+    }
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const items = [...dom.menu.querySelectorAll(".compass-menu-item")];
+    if (!items.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const active = globalThis.document?.activeElement;
+    const cur = items.indexOf(active);
+    let next = 0;
+    if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = items.length - 1;
+    else if (event.key === "ArrowDown") next = cur < 0 ? 0 : (cur + 1) % items.length;
+    else if (event.key === "ArrowUp") next = cur <= 0 ? items.length - 1 : cur - 1;
+    items[next]?.focus?.({ preventScroll: true });
+  });
+  if (typeof globalThis.MutationObserver === "function") {
+    try {
+      const observer = new globalThis.MutationObserver(() => syncButton());
+      observer.observe(dom.menu, { attributes: true, attributeFilter: ["hidden"], childList: true });
+      lifecycle.add(() => observer.disconnect());
+    } catch {
+    }
+  }
+  function onClose() {
+    firstItem = null;
+    closedOnPointerDown = false;
+    syncButton();
+  }
+  return {
+    name: "more",
+    open,
+    close,
+    toggle,
+    onClose
+  };
+}
+
 // src/view/features/index.js
 var FEATURES = Object.freeze([
   createTrail2,
@@ -12805,7 +12970,8 @@ var FEATURES = Object.freeze([
   createWander,
   createZen,
   createExport,
-  createEdit
+  createEdit,
+  createMore
 ]);
 
 // src/view/hover-dim.js
@@ -12925,7 +13091,10 @@ async function registerCommands({ extensionAPI, lifecycle, host, view }) {
   const paletteCommands = [
     { label: "Compass: Open", callback: guard(() => view.toggle()) },
     { label: "Compass: Focus page", callback: guard(() => view.focusPage()) },
-    { label: "Compass: Focus block", callback: guard(() => view.focusBlock()) }
+    { label: "Compass: Focus block", callback: guard(() => view.focusBlock()) },
+    { label: "Compass: Mind Map", callback: guard(() => view.openView("mindmap")) },
+    { label: "Compass: Facets", callback: guard(() => view.openView("facets")) },
+    { label: "Compass: Wander", callback: guard(() => view.openWander()) }
   ];
   let paletteOn = false;
   const enablePalette = () => {
@@ -13060,6 +13229,12 @@ function mountOverlay({ extensionAPI, lifecycle, host }) {
         view.focusUid(uid);
         return Promise.resolve();
       },
+      openView() {
+        return Promise.resolve();
+      },
+      openWander() {
+        return Promise.resolve();
+      },
       focusUid() {
       },
       isOpen() {
@@ -13098,15 +13273,6 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   const pinButton = button("compass-pin", "Pin", "Pin the center");
   const outlineButton = button("compass-outline", "Outline", "Expand the center into its blocks");
   outlineButton.setAttribute("aria-pressed", "false");
-  const fitButton = button("compass-fit", "Fit", "Fit the neighborhood");
-  const refreshButton = button("compass-refresh", "Refresh", "Read the graph again");
-  const linkedButton = button("compass-linked", "Show linked window", "Open this page in the main window");
-  const crossButton = button("compass-cross", "Cross links", "Faint edges between neighbours");
-  crossButton.setAttribute("aria-pressed", "false");
-  const linksButton = button("compass-with-links", "With links", "Snapshot text includes page links");
-  linksButton.setAttribute("aria-pressed", "false");
-  const sendButton = button("compass-send", "Send to drawing", "Commit this neighborhood to the open drawing");
-  sendButton.hidden = true;
   const status = el("span", "compass-status");
   status.setAttribute("role", "status");
   const closeButton = button("compass-close", "Close", "Close (Esc)");
@@ -13116,12 +13282,6 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     find,
     pinButton,
     outlineButton,
-    fitButton,
-    refreshButton,
-    linkedButton,
-    crossButton,
-    linksButton,
-    sendButton,
     status,
     closeButton
   );
@@ -13224,7 +13384,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   let hoverX = 0;
   let hoverY = 0;
   let lens = { pages: true, blocks: true, drawings: true, regions: true, keyword: "" };
-  let customView = false;
+  let customView = "";
   let emptyCounts = {};
   const pageAttrCache = /* @__PURE__ */ new Map();
   let linksMode = false;
@@ -13350,8 +13510,16 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (!element) return element;
     return bar.insertBefore(element, status);
   }
+  async function toggleCrossLinks() {
+    if (!settings) settings = readSettings();
+    if (!settings) return;
+    const next = settings.crossLinks !== true;
+    settings.crossLinks = next;
+    await writeSetting(extensionAPI, SETTING_IDS.crossLinks, next);
+    render();
+  }
   function commands() {
-    return [
+    const builtIn = [
       { id: "back", title: "Back", hint: "Alt+Left", run: () => goBack() },
       { id: "forward", title: "Forward", hint: "Alt+Right", run: () => goForward() },
       {
@@ -13368,8 +13536,37 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       { id: "pin", title: "Pin or unpin the center", hint: "", run: () => togglePin() },
       { id: "outline", title: "Toggle outline", hint: "", run: () => toggleOutline() },
       { id: "close", title: "Close Compass", hint: "Esc", run: () => close() },
-      ...features.collect("commands")
+      {
+        id: "linked",
+        title: "Show linked window",
+        hint: "",
+        run: () => {
+          if (current) void host.openInMain(current);
+        }
+      },
+      {
+        id: "cross",
+        title: settings?.crossLinks ? "✓ Cross links" : "Cross links",
+        hint: "",
+        run: () => toggleCrossLinks()
+      },
+      {
+        id: "with-links",
+        title: linksMode ? "✓ With links" : "With links",
+        hint: "",
+        run: () => {
+          linksMode = !linksMode;
+        }
+      }
     ];
+    if (plexus()?.isAvailable?.() === true) {
+      builtIn.push({ id: "send", title: "Send to drawing", hint: "", run: () => sendToDrawing() });
+    }
+    const palette = features.get("palette");
+    if (typeof palette?.open === "function") {
+      builtIn.push({ id: "palette", title: "Command palette…", hint: "Alt+.", run: () => palette.open() });
+    }
+    return [...builtIn, ...features.collect("commands")];
   }
   function facts(nodes) {
     const list = Array.isArray(nodes) ? nodes : [];
@@ -13488,8 +13685,6 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     pinButton.textContent = pinned ? "Unpin" : "Pin";
     pinButton.setAttribute("aria-pressed", pinned ? "true" : "false");
     outlineButton.setAttribute("aria-pressed", settings?.outline ? "true" : "false");
-    crossButton.setAttribute("aria-pressed", settings?.crossLinks ? "true" : "false");
-    sendButton.hidden = plexus()?.isAvailable?.() !== true;
   }
   function reveal() {
     if (!root.hidden) return;
@@ -13551,9 +13746,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     setStatus("");
     lens = { pages: true, blocks: true, drawings: true, regions: true, keyword: "" };
     linksMode = false;
-    linksButton.setAttribute("aria-pressed", "false");
     emptyCounts = {};
     pageAttrCache.clear();
+    customView = "";
     features.each("onClose");
   }
   function recenter(uid) {
@@ -13621,18 +13816,29 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       await sleep(40);
     }
   }
+  async function openOnCurrentOrLast() {
+    const uid = await host.openPageUid();
+    if (uid) focusUid(uid);
+    else if (root.hidden && current) focusUid(current, { record: false });
+  }
   async function toggle() {
     if (!root.hidden) {
       close();
       return;
     }
-    const uid = await host.openPageUid();
-    if (uid) focusUid(uid);
-    else if (current) focusUid(current, { record: false });
+    await openOnCurrentOrLast();
   }
   async function focusPage() {
     const uid = await host.openPageUid();
     if (uid) focusUid(uid);
+  }
+  async function openView(nextView) {
+    await openOnCurrentOrLast();
+    await features.get("views")?.set?.(nextView);
+  }
+  async function openWander() {
+    if (root.hidden) await openOnCurrentOrLast();
+    features.get("wander")?.start?.();
   }
   function isOpen() {
     return root.hidden !== true;
@@ -14223,7 +14429,18 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (!hood) return;
     const custom = features.first("renderView", { hood, settings, navigate });
     if (custom) {
-      customView = true;
+      if (customView && customView !== custom.view) {
+        for (const feature of features.list()) {
+          if (feature.name !== custom.view && typeof feature.clearView === "function") {
+            try {
+              feature.clearView();
+            } catch (error) {
+              console.error("[compass] feature", feature.name, "clearView", error);
+            }
+          }
+        }
+      }
+      customView = custom.view;
       root.dataset.view = custom.view;
       for (const [uid, element] of nodeEls) {
         element.remove();
@@ -14244,7 +14461,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       return;
     }
     if (customView) {
-      customView = false;
+      customView = "";
       features.each("clearView");
     }
     root.dataset.view = "compass";
@@ -14378,14 +14595,14 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (box.zone === "south") {
       return curve(clamp3(box.x, -c.w / 2 + 16, c.w / 2 - 16), c.h / 2, box.x, box.y - box.h / 2, true);
     }
-    if (box.zone === "west") {
+    if (box.x < 0) {
       return curve(-c.w / 2, clamp3(box.y, -c.h / 2 + 12, c.h / 2 - 12), box.x + box.w / 2, box.y, false);
     }
     return curve(c.w / 2, clamp3(box.y, -c.h / 2 + 12, c.h / 2 - 12), box.x - box.w / 2, box.y, false);
   }
   function edgeFromRow(row, box) {
     const c = geometry.center;
-    const sign = box.zone === "west" || box.zone !== "east" && box.x < 0 ? -1 : 1;
+    const sign = box.x < 0 ? -1 : 1;
     const sx = sign * (c.w / 2);
     if (box.zone === "north" || box.zone === "south") {
       const dir = box.zone === "north" ? -1 : 1;
@@ -14407,12 +14624,13 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     };
   }
   function edgeToSibling(via, box) {
+    const sign = box.x < 0 ? -1 : 1;
     const sx = via.x;
     const sy = via.y - via.h / 2;
-    const ex = box.x - box.w / 2;
+    const ex = box.x - sign * (box.w / 2);
     const lift = Math.min(sy, box.y) - 36;
     return {
-      d: `M${sx},${sy} C${sx},${lift} ${ex - 36},${lift} ${ex},${box.y}`,
+      d: `M${sx},${sy} C${sx},${lift} ${ex - sign * 36},${lift} ${ex},${box.y}`,
       mid: [(sx + ex) / 2, lift]
     };
   }
@@ -15160,7 +15378,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       return;
     }
     const element = event.target.closest?.(".compass-node");
-    if (element && element.dataset.kind !== "group" && (event.key === "Enter" || event.key === " ")) {
+    if (element && element.dataset.kind !== "group" && !event.altKey && !event.ctrlKey && !event.metaKey && (event.key === "Enter" || event.key === " " && !event.shiftKey)) {
       event.preventDefault();
       if (event.shiftKey) void openSidebar(element.dataset.uid);
       else if (!element.classList.contains("compass-node-center")) focusUid(element.dataset.uid);
@@ -15285,20 +15503,6 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   lifecycle.event(forwardButton, "click", () => goForward());
   lifecycle.event(pinButton, "click", guard(() => togglePin()));
   lifecycle.event(outlineButton, "click", guard(() => toggleOutline()));
-  lifecycle.event(crossButton, "click", guard(async () => {
-    if (!settings) settings = readSettings();
-    if (!settings) return;
-    const next = settings.crossLinks !== true;
-    settings.crossLinks = next;
-    crossButton.setAttribute("aria-pressed", next ? "true" : "false");
-    await writeSetting(extensionAPI, SETTING_IDS.crossLinks, next);
-    render();
-  }));
-  lifecycle.event(linksButton, "click", () => {
-    linksMode = !linksMode;
-    linksButton.setAttribute("aria-pressed", linksMode ? "true" : "false");
-  });
-  lifecycle.event(sendButton, "click", guard(() => sendToDrawing()));
   lifecycle.event(zoneInput, "input", () => paintZoneResults(zoneInput.value));
   lifecycle.event(zoneInput, "keydown", (event) => {
     if (event.key === "Enter" && !zoneCreate.disabled) {
@@ -15317,11 +15521,6 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   lifecycle.event(zoneCreate, "click", () => {
     void createDrawingHere();
   });
-  lifecycle.event(fitButton, "click", () => fit(true));
-  lifecycle.event(refreshButton, "click", () => load());
-  lifecycle.event(linkedButton, "click", guard(() => {
-    if (current) void host.openInMain(current);
-  }));
   lifecycle.event(related, "click", (event) => {
     const item = event.target.closest?.(".compass-related-item");
     if (!item?.dataset.uid) return;
@@ -15406,7 +15605,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   });
   applyCamera(false);
   updateButtons();
-  const view = { repullIfOpen, toggle, focusPage, focusBlock, focusUid, isOpen, hideResults };
+  const view = { repullIfOpen, toggle, focusPage, focusBlock, openView, openWander, focusUid, isOpen, hideResults };
   return { ...view, ctx, features, installCommands: () => registerCommands({ extensionAPI, lifecycle, host, view }) };
 }
 
@@ -15419,25 +15618,154 @@ function versionHost() {
 function stampVersion(version) {
   versionHost()[VERSION_FLAG] = version;
 }
-function installRoamCompass(win, overlay) {
+function installRoamCompass(win, { overlay, host, extensionAPI, version = "development" } = {}) {
+  const currentSettings = () => {
+    if (extensionAPI?.settings?.get) return readCompassSettings(extensionAPI);
+    if (overlay?.ctx?.state?.settings) return overlay.ctx.state.settings;
+    return readCompassSettings({ settings: { get: () => null } });
+  };
   const api = Object.freeze({
-    apiVersion: 1,
+    apiVersion: 2,
+    version: typeof version === "string" && version ? version : "development",
     isAvailable() {
       return true;
     },
     focus(uid) {
-      if (typeof overlay?.focusUid === "function") overlay.focusUid(uid);
+      try {
+        if (typeof overlay?.focusUid === "function") overlay.focusUid(uid);
+      } catch (error) {
+        console.error("[compass]", error);
+      }
     },
     open(uid, options) {
-      const sidecar = options?.sidecar === true;
-      if (typeof overlay?.focusUid === "function") overlay.focusUid(uid, sidecar ? { sidecar: true } : void 0);
-      if (typeof overlay?.hideResults === "function") overlay.hideResults();
+      try {
+        const sidecar = options?.sidecar === true;
+        if (typeof overlay?.focusUid === "function") overlay.focusUid(uid, sidecar ? { sidecar: true } : void 0);
+        if (typeof overlay?.hideResults === "function") overlay.hideResults();
+      } catch (error) {
+        console.error("[compass]", error);
+      }
     },
     focusBlock(uid) {
-      if (typeof overlay?.focusUid === "function") overlay.focusUid(uid);
+      try {
+        if (typeof overlay?.focusUid === "function") overlay.focusUid(uid);
+      } catch (error) {
+        console.error("[compass]", error);
+      }
     },
     isOpen() {
-      return typeof overlay?.isOpen === "function" ? overlay.isOpen() === true : false;
+      try {
+        return typeof overlay?.isOpen === "function" ? overlay.isOpen() === true : false;
+      } catch (error) {
+        console.error("[compass]", error);
+        return false;
+      }
+    },
+    ontology() {
+      try {
+        return shapeOntology(currentSettings());
+      } catch (error) {
+        console.error("[compass]", error);
+        return null;
+      }
+    },
+    neighborhood(uid) {
+      try {
+        const cleanUid = typeof uid === "string" ? uid.trim() : "";
+        if (!cleanUid || typeof host?.snapshot !== "function") {
+          return shapeNeighborhood(null, {
+            center: { uid: cleanUid, kind: "page", title: cleanUid },
+            missing: true
+          });
+        }
+        const settings = currentSettings();
+        const snap = host.snapshot(cleanUid, settings.model);
+        const hood = buildNeighborhood(snap, settings.model);
+        return shapeNeighborhood(hood, snap);
+      } catch (error) {
+        console.error("[compass]", error);
+        return null;
+      }
+    },
+    search(text, limit = 20) {
+      try {
+        const titles = typeof host?.titles === "function" ? host.titles() : [];
+        return shapeSearch(rankTitles(titles, text, limit));
+      } catch (error) {
+        console.error("[compass]", error);
+        return [];
+      }
+    },
+    canvas() {
+      try {
+        const settings = currentSettings();
+        const views = overlay?.features?.get?.("views")?.current?.();
+        return shapeCanvas({
+          open: typeof overlay?.isOpen === "function" ? overlay.isOpen() === true : false,
+          center: overlay?.ctx?.state?.hood?.center ?? null,
+          view: views?.view ?? settings.view,
+          preset: views?.preset ?? settings.facetsPreset,
+          zen: overlay?.features?.get?.("zen")?.isZen?.() === true,
+          trail: overlay?.features?.get?.("trail")?.entries?.() ?? []
+        });
+      } catch (error) {
+        console.error("[compass]", error);
+        return null;
+      }
+    },
+    async setView(view, preset) {
+      try {
+        const viewsFeature = overlay?.features?.get?.("views");
+        if (typeof viewsFeature?.set === "function") {
+          await viewsFeature.set(view, preset);
+        } else if (isValidView(view) && extensionAPI?.settings) {
+          await writeSetting(extensionAPI, SETTING_IDS.view, view);
+          if (typeof preset === "string" && preset.trim()) {
+            await writeSetting(extensionAPI, SETTING_IDS.facetsPreset, preset.trim());
+          }
+        }
+        return api.canvas();
+      } catch (error) {
+        console.error("[compass]", error);
+        return null;
+      }
+    },
+    trail() {
+      try {
+        return shapeTrail(overlay?.features?.get?.("trail")?.entries?.() ?? []);
+      } catch (error) {
+        console.error("[compass]", error);
+        return [];
+      }
+    },
+    commands() {
+      try {
+        return shapeCommands(overlay?.ctx?.commands?.() ?? []);
+      } catch (error) {
+        console.error("[compass]", error);
+        return [];
+      }
+    },
+    async run(id) {
+      try {
+        if (typeof id !== "string" || !id) return false;
+        const list = overlay?.ctx?.commands?.() ?? [];
+        const seen = /* @__PURE__ */ new Set();
+        for (const item of list) {
+          if (!item || typeof item !== "object" || typeof item.run !== "function") continue;
+          const itemId = typeof item.id === "string" ? item.id.trim() : "";
+          if (!itemId || seen.has(itemId)) continue;
+          seen.add(itemId);
+          if (itemId === id) {
+            await item.run();
+            return true;
+          }
+        }
+        return false;
+      } catch (error) {
+        console.error("[compass]", error);
+        return false;
+      }
     }
   });
   win.RoamCompass = api;
@@ -15481,7 +15809,7 @@ async function onload({ extensionAPI, extension }) {
     stampVersion(version);
     const host = createHost({ lifecycle });
     const overlay = mountOverlay({ extensionAPI, lifecycle, host });
-    lifecycle.add(installRoamCompass(versionHost(), overlay));
+    lifecycle.add(installRoamCompass(versionHost(), { overlay, host, extensionAPI, version }));
     await initializeSettings(extensionAPI);
     await lifecycle.settingsPanel(extensionAPI, createSettingsPanel({
       extensionAPI,
@@ -15515,6 +15843,7 @@ async function onunload() {
 var extension_default = { onload, onunload };
 export {
   extension_default as default,
+  installRoamCompass,
   onload,
   onunload
 };

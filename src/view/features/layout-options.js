@@ -14,28 +14,6 @@ function isExpandableNeighbor(node) {
   return true;
 }
 
-function applyEdgeShape(edgeEl, shape) {
-  const hit = edgeEl.querySelector(".compass-edge-hit");
-  const line = edgeEl.querySelector(".compass-edge-line");
-  const label = edgeEl.querySelector(".compass-edge-label");
-  if (hit) hit.setAttribute("d", shape.d);
-  if (line) line.setAttribute("d", shape.d);
-  if (label) {
-    label.setAttribute("x", String(shape.mid[0]));
-    label.setAttribute("y", String(shape.mid[1] - 4));
-  }
-}
-
-function anchorRowUid(uid, hood, visibleRowUids, outlineOn) {
-  if (!outlineOn || !visibleRowUids.size) return null;
-  let at = uid;
-  while (at) {
-    if (visibleRowUids.has(at)) return at;
-    at = hood.outlineIndex?.get?.(at)?.parentUid ?? null;
-  }
-  return null;
-}
-
 export function createLayoutOptions(ctx) {
   let groupOn = Boolean(ctx?.state?.settings?.group);
   let expandedOn = Boolean(ctx?.state?.settings?.expanded);
@@ -222,120 +200,31 @@ export function createLayoutOptions(ctx) {
     return next;
   }
 
+  function isGroupHidden(group) {
+    const members = (group?.members ?? []).map((id) => originalNodes.get(id)).filter(Boolean);
+    if (!members.length) return false;
+    const lensesFeature = ctx?.features?.get?.("lenses");
+    const lensState = ctx?.state?.lens ?? { pages: true, blocks: true, drawings: true, regions: true, keyword: "" };
+    const hiddenMembers = typeof lensesFeature?.hiddenFor === "function"
+      ? lensesFeature.hiddenFor(members)
+      : new Set(baseHiddenUids(members, lensState));
+    return members.every((member) => hiddenMembers?.has?.(member.uid));
+  }
+
   function hiddenUids(uids, hood) {
     if (!Array.isArray(uids) || !hood || !Array.isArray(hood.nodes)) return uids;
     const groups = hood.nodes.filter((node) => node?.kind === "group");
     if (!groups.length) return uids;
-    const groupById = new Map(groups.map((item) => [item.uid, item]));
-    const lensesFeature = ctx?.features?.get?.("lenses");
-    const lensState = ctx?.state?.lens ?? { pages: true, blocks: true, drawings: true, regions: true, keyword: "" };
-    const hiddenGroups = new Set();
-
+    const out = new Set(uids);
     for (const group of groups) {
-      const members = (group.members ?? []).map((id) => originalNodes.get(id)).filter(Boolean);
-      if (!members.length) continue;
-      const hiddenMembers = typeof lensesFeature?.hiddenFor === "function"
-        ? lensesFeature.hiddenFor(members)
-        : new Set(baseHiddenUids(members, lensState));
-      const keyword = String(lensState.keyword ?? "").trim().toLowerCase();
-      const titleHit = !keyword || (typeof group.title === "string" && group.title.toLowerCase().includes(keyword));
-      const everyMemberHidden = members.every((member) => hiddenMembers?.has?.(member.uid));
-      if (everyMemberHidden && (!keyword || !titleHit)) hiddenGroups.add(group.uid);
+      if (!(group.members ?? []).some((id) => originalNodes.has(id))) continue;
+      if (isGroupHidden(group)) out.add(group.uid);
+      else out.delete(group.uid);
     }
-
-    return uids.filter((id) => !groupById.has(id) || hiddenGroups.has(id));
+    return [...out];
   }
 
-  function lateralEdgeFromCenter(center, box) {
-    const sign = box.x < 0 ? -1 : 1;
-    const sx = sign * (center.w / 2);
-    const sy = ctx.clamp(box.y, -center.h / 2 + 12, center.h / 2 - 12);
-    const ex = box.x - sign * (box.w / 2);
-    return ctx.curve(sx, sy, ex, box.y, false);
-  }
-
-  function lateralEdgeFromRow(center, row, box) {
-    const sign = box.x < 0 ? -1 : 1;
-    const sx = sign * (center.w / 2);
-    const end = [box.x - sign * (box.w / 2), box.y];
-    const c1 = [sx + sign * 48, row.y];
-    const c2 = [end[0] - sign * 48, end[1]];
-    return {
-      d: `M${sx},${row.y} C${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${end[0]},${end[1]}`,
-      mid: [(sx + 3 * c1[0] + 3 * c2[0] + end[0]) / 8, (row.y + 3 * c1[1] + 3 * c2[1] + end[1]) / 8],
-    };
-  }
-
-  function siblingEdge(via, box) {
-    const sign = box.x < 0 ? -1 : 1;
-    const sx = via.x;
-    const sy = via.y - via.h / 2;
-    const ex = box.x - sign * (box.w / 2);
-    const lift = Math.min(sy, box.y) - 36;
-    return {
-      d: `M${sx},${sy} C${sx},${lift} ${ex - sign * 36},${lift} ${ex},${box.y}`,
-      mid: [(sx + ex) / 2, lift],
-    };
-  }
-
-  function fixEdges(hood, geometry, boxes) {
-    const edgeLayer = ctx?.dom?.edgeLayer;
-    if (!edgeLayer || !geometry || (!geometry.flip && !geometry.oneSided)) return;
-    const edgesByUid = new Map();
-    for (const edgeEl of edgeLayer.querySelectorAll(".compass-edge:not(.compass-cross)")) {
-      if (edgeEl.dataset.style === "card") continue;
-      const uid = edgeEl.dataset.uid;
-      if (!uid) continue;
-      let list = edgesByUid.get(uid);
-      if (!list) {
-        list = [];
-        edgesByUid.set(uid, list);
-      }
-      list.push(edgeEl);
-    }
-
-    const rows = geometry.rows ?? [];
-    const rowBoxes = new Map(rows.map((row) => [row.uid, row]));
-    const visibleRowUids = new Set(rowBoxes.keys());
-    const outlineOn = Boolean(ctx?.state?.settings?.outline);
-
-    for (const node of hood.nodes ?? []) {
-      const box = boxes.get(node.uid);
-      if (!box) continue;
-      const needsFix = (box.zone === "west" && box.x > 0)
-        || (box.zone === "east" && box.x < 0)
-        || (box.zone === "siblings" && box.x < 0);
-      if (!needsFix) continue;
-      const edgeEls = edgesByUid.get(node.uid);
-      if (!edgeEls?.length) continue;
-
-      if (node.zone === "siblings") {
-        const via = node.via ? boxes.get(node.via) : null;
-        if (via) applyEdgeShape(edgeEls[0], siblingEdge(via, box));
-        for (let i = 1; i < edgeEls.length; i += 1) {
-          applyEdgeShape(edgeEls[i], lateralEdgeFromCenter(geometry.center, box));
-        }
-        continue;
-      }
-
-      const anchors = new Set();
-      for (const item of node.evidence ?? []) {
-        const rowUid = item.sourceUid ? anchorRowUid(item.sourceUid, hood, visibleRowUids, outlineOn) : null;
-        if (rowUid && (item.kind === "link" || (item.kind === "typed" && item.direction === "out"))) anchors.add(rowUid);
-        else anchors.add("");
-      }
-      const anchorList = [...anchors];
-      for (let i = 0; i < edgeEls.length; i += 1) {
-        const anchor = i < anchorList.length ? anchorList[i] : "";
-        const shape = anchor && rowBoxes.has(anchor)
-          ? lateralEdgeFromRow(geometry.center, rowBoxes.get(anchor), box)
-          : lateralEdgeFromCenter(geometry.center, box);
-        applyEdgeShape(edgeEls[i], shape);
-      }
-    }
-  }
-
-  function afterRender({ hood, geometry, boxes, nodeEls, view } = {}) {
+  function afterRender({ hood, nodeEls, view } = {}) {
     syncButtons();
     if (view !== "compass" || !hood || !nodeEls) {
       syncRootAttributes(false);
@@ -351,6 +240,9 @@ export function createLayoutOptions(ctx) {
       if (node.kind === "group") {
         element.classList.add("compass-node-group");
         element.dataset.kind = "group";
+        if ((node.members ?? []).some((id) => originalNodes.has(id))) {
+          element.classList.toggle?.("compass-fade", isGroupHidden(node));
+        }
         const titleEl = element.querySelector(".compass-node-title");
         if (titleEl) titleEl.textContent = node.title;
         if (!element.querySelector(".compass-group-count")) {
@@ -387,8 +279,6 @@ export function createLayoutOptions(ctx) {
         }
       }
     }
-
-    if (boxes) fixEdges(hood, geometry, boxes);
   }
 
   function unfoldGroup(groupId, focusFirst = false) {

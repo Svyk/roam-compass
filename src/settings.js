@@ -117,12 +117,12 @@ const SELECT_ITEMS = Object.freeze({
 });
 
 const ROWS = [
-  [SETTING_IDS.north, "Parents (north)", "Attributes whose value sits above the center. The first one is written when you drag a node north."],
-  [SETTING_IDS.south, "Children (south)", "Attributes whose value sits below. Any attribute not listed anywhere also lands here."],
+  [SETTING_IDS.north, "Parents (north)", "Attributes whose value sits above the center. The first one is written when you drag a node north. Write `Name|Partner` to pair two fields so each end gets its own word."],
+  [SETTING_IDS.south, "Children (south)", "Attributes whose value sits below. Any attribute not listed anywhere also lands here. Write `Name|Partner` to pair two fields so each end gets its own word."],
   [SETTING_IDS.west, "Friends (west)", "Attributes whose value sits to the left, from either end."],
   [SETTING_IDS.east, "Challengers (east)", "Attributes whose value sits to the right, from either end."],
-  [SETTING_IDS.previous, "Previous (west)", "The value sits left; seen from the value, this page sits right."],
-  [SETTING_IDS.next, "Next (east)", "The value sits right; seen from the value, this page sits left."],
+  [SETTING_IDS.previous, "Previous (west)", "The value sits left; seen from the value, this page sits right. Write `Name|Partner` to pair two fields so each end gets its own word."],
+  [SETTING_IDS.next, "Next (east)", "The value sits right; seen from the value, this page sits left. Write `Name|Partner` to pair two fields so each end gets its own word."],
   [SETTING_IDS.hidden, "Hidden", "Attributes Compass leaves out."],
   [SETTING_IDS.links, "Plain links", "Show [[links]] inside the outline (south) and linked references (north)."],
   [SETTING_IDS.siblings, "Siblings", "Show other children of the center's parents."],

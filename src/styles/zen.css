@@ -10,15 +10,18 @@
   z-index: 1000;
 }
 
-.compass-root .compass-zone-count-siblings,
+.compass-root .compass-zone-count-siblings {
+  bottom: 46px;
+}
+
 .compass-root .compass-related {
-  bottom: 44px;
+  bottom: 68px;
 }
 
 .compass-root .compass-corner {
   position: absolute;
   right: 12px;
-  bottom: 6px;
+  bottom: 8px;
   z-index: 6;
   display: inline-flex;
   align-items: center;

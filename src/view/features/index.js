@@ -11,6 +11,7 @@ import { createWander } from "./wander.js";
 import { createZen } from "./zen.js";
 import { createExport } from "./export.js";
 import { createEdit } from "./edit.js";
+import { createMore } from "./more.js";
 
 export const FEATURES = Object.freeze([
   createTrail,
@@ -26,4 +27,5 @@ export const FEATURES = Object.freeze([
   createZen,
   createExport,
   createEdit,
+  createMore,
 ]);

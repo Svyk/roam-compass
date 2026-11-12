@@ -141,8 +141,8 @@ test("CSS concatenation appends src/styles/*.css in ascending filename order and
     readFile(resolve(rootPath, "src/extension.css"), "utf8"),
   ]);
   assert.equal(css.startsWith(`${baseSheet}\n`), true);
-  assert.equal(css.includes(".compass-lens"), false);
-  assert.equal(css.includes(".compass-lens-keyword"), false);
+  assert.doesNotMatch(css, /\.compass-lens(?![a-zA-Z0-9_-])/);
+  assert.doesNotMatch(css, /\.compass-lens-keyword(?![a-zA-Z0-9_-])/);
 
   const expectedStubs = [
     "/* edit */",
@@ -152,6 +152,7 @@ test("CSS concatenation appends src/styles/*.css in ascending filename order and
     "/* layout-options */",
     "/* lenses */",
     "/* mindmap */",
+    "/* more */",
     "/* palette */",
     "/* pins */",
     "/* trail */",

@@ -23,7 +23,7 @@ test("uidFromHash reads page and block uids only", () => {
   assert.equal(uidFromHash("#/daily-notes"), null);
 });
 
-test("palette stays the three Compass commands", () => {
+test("palette stays the six Compass commands", () => {
   const source = readFileSync(new URL("../src/view/overlay.js", import.meta.url), "utf8");
   const start = source.indexOf("async function registerCommands");
   const end = source.indexOf("function el(", start);
@@ -32,6 +32,9 @@ test("palette stays the three Compass commands", () => {
     "Compass: Open",
     "Compass: Focus page",
     "Compass: Focus block",
+    "Compass: Mind Map",
+    "Compass: Facets",
+    "Compass: Wander",
     "Compass: Focus block",
   ]);
   assert.equal(source.includes("Show linked window"), true);
@@ -70,7 +73,7 @@ test("a keyup while the palette is closed does not schedule a timer", async () =
         add() {},
       },
       host: {},
-      view: { toggle() {}, focusPage() {}, focusBlock() {} },
+      view: { toggle() {}, focusPage() {}, focusBlock() {}, openView() {}, openWander() {} },
     });
     assert.deepEqual(added, []);
     const keyup = listeners.find((entry) => entry.type === "keyup")?.fn;
@@ -79,7 +82,14 @@ test("a keyup while the palette is closed does not schedule a timer", async () =
     keyup({ key: "a" });
     assert.deepEqual(scheduled, []);
     keydown({ key: "p", metaKey: true });
-    assert.deepEqual(added, ["Compass: Open", "Compass: Focus page", "Compass: Focus block"]);
+    assert.deepEqual(added, [
+      "Compass: Open",
+      "Compass: Focus page",
+      "Compass: Focus block",
+      "Compass: Mind Map",
+      "Compass: Facets",
+      "Compass: Wander",
+    ]);
     keyup({ key: "p" });
     assert.deepEqual(scheduled, [0]);
   } finally {

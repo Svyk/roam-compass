@@ -141,6 +141,8 @@ test("SHORTCUTS exposes the two expected groups including Arrow keys", () => {
   const groups = new Set(SHORTCUTS.map((entry) => entry.group));
   assert.deepEqual(groups, new Set(["Move and select", "Actions"]));
   assert.ok(SHORTCUTS.some((entry) => entry.keys === "Arrow keys"));
+  assert.ok(SHORTCUTS.some((entry) => entry.keys === "Alt+B" && entry.action === "Open pins"));
+  assert.ok(SHORTCUTS.some((entry) => entry.keys === "Alt+H" && entry.action === "Open Footprints"));
 });
 
 test("createKeys handles shortcuts, flip-aware Ctrl/Cmd+Arrow, and Escape precedence", () => {

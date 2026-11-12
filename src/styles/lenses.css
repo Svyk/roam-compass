@@ -1,19 +1,19 @@
 /* lenses */
-.compass-root .compass-node[class~="compass-lensed"]:not(.compass-node-center) {
+.compass-root .compass-node.compass-lensed:not(.compass-node-center) {
   background-color: var(--compass-lens-fill, var(--compass-paper));
   border-color: var(--compass-lens-border, var(--compass-line));
   color: var(--compass-lens-text, inherit);
 }
 
-.compass-root .compass-node[data-style="typed"][class~="compass-lensed"]:not(.compass-node-center) {
+.compass-root .compass-node[data-style="typed"].compass-lensed:not(.compass-node-center) {
   border-color: var(--compass-lens-border, var(--compass-accent));
 }
 
-.compass-root .compass-node[data-style="sibling"][class~="compass-lensed"]:not(.compass-node-center) {
+.compass-root .compass-node[data-style="sibling"].compass-lensed:not(.compass-node-center) {
   border-color: var(--compass-lens-border, var(--compass-faint));
 }
 
-.compass-root .compass-node[class~="compass-lensed"]:not(.compass-node-center):hover {
+.compass-root .compass-node.compass-lensed:not(.compass-node-center):hover {
   background-color: color-mix(in srgb, var(--compass-ink) 7%, var(--compass-lens-fill, var(--compass-paper)));
 }
 
