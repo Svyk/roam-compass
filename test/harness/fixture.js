@@ -1,3 +1,9 @@
+// Scenario graph helpers on `h.harness.graph` (safe to call before `h.open(...)` or live mid-scenario;
+// each mutates the in-memory graph, auto-creates any referenced `[[Page]]`s, and fires `watch`):
+//   graph.addPage(title, { uid } = {})                  -> pageUid (adds or updates a page)
+//   graph.addBlock(pageUid, string, { parentUid } = {}) -> blockUid (adds a plain or `Attr:: val` block under parentUid ?? pageUid)
+//   graph.setBlock(uid, string)                         -> blockUid (updates an existing block's string)
+
 import { adjacentDayUids, aliasFromBlock } from "../../src/host.js";
 import { ZONE_ATTR, planAttributeWrite } from "../../src/model/batch7.js";
 import { typedParentUids } from "../../src/model/neighborhood.js";
@@ -155,11 +161,100 @@ export function createGraph(now = new Date()) {
     ]),
   ];
 
-  return {
+  const watchers = new Set();
+  const notifyGraph = () => {
+    for (const listener of watchers) listener();
+  };
+
+  const graph = {
     defaultCenterUid: "p-alpha",
     nextId: 1,
     pages,
+
+    addPage(title, { uid } = {}) {
+      const clean = String(title ?? "").trim();
+      if (!clean) throw new Error("addPage requires a non-empty title");
+      const index = buildIndex(graph);
+      const now = Date.now();
+
+      if (uid && index.pagesByUid.has(uid)) {
+        const page = index.pagesByUid.get(uid);
+        page.title = clean;
+        page.editTime = now;
+        notifyGraph();
+        return page.uid;
+      }
+
+      if (index.pagesByTitle.has(clean)) {
+        const existing = index.pagesByTitle.get(clean);
+        if (uid && uid !== existing.uid) {
+          if (index.pagesByUid.has(uid) || index.blocksByUid.has(uid)) {
+            throw new Error(`UID already in use: ${uid}`);
+          }
+          existing.uid = uid;
+        }
+        existing.editTime = now;
+        notifyGraph();
+        return existing.uid;
+      }
+
+      const pageUid = uid || nextUid(graph);
+      if (index.blocksByUid.has(pageUid)) {
+        throw new Error(`UID already in use: ${pageUid}`);
+      }
+      graph.pages.push({
+        uid: pageUid,
+        title: clean,
+        editTime: now,
+        createTime: now,
+        children: [],
+      });
+      notifyGraph();
+      return pageUid;
+    },
+
+    addBlock(pageUid, string, { parentUid, uid, order } = {}) {
+      const targetUid = parentUid || pageUid;
+      const index = buildIndex(graph);
+      const parent = index.pagesByUid.get(targetUid) ?? index.blocksByUid.get(targetUid)?.block;
+      if (!parent) throw new Error(`Unknown parent uid: ${String(targetUid)}`);
+      if (uid && (index.pagesByUid.has(uid) || index.blocksByUid.has(uid))) {
+        throw new Error(`UID already in use: ${uid}`);
+      }
+      if (!Array.isArray(parent.children)) parent.children = [];
+      const blockUid = uid || nextUid(graph);
+      const now = Date.now();
+      const text = String(string ?? "");
+      const block = {
+        uid: blockUid,
+        string: text,
+        order: 0,
+        editTime: now,
+        createTime: now,
+        children: [],
+      };
+      insertAtOrder(parent.children, block, order ?? "last");
+      parent.editTime = now;
+      ensureReferencedPages(graph, text);
+      notifyGraph();
+      return blockUid;
+    },
+
+    setBlock(uid, string) {
+      const index = buildIndex(graph);
+      const hit = index.blocksByUid.get(uid);
+      if (!hit) throw new Error(`Unknown block uid: ${String(uid)}`);
+      const text = String(string ?? "");
+      hit.block.string = text;
+      hit.block.editTime = Date.now();
+      ensureReferencedPages(graph, text);
+      notifyGraph();
+      return hit.block.uid;
+    },
   };
+
+  Object.defineProperty(graph, "_watchers", { value: watchers });
+  return graph;
 }
 
 function nextUid(graph) {
@@ -474,6 +569,10 @@ export function createFakeHost(graph = createGraph(), { lifecycle } = {}) {
     if (alive && typeof watchState?.onChange === "function") {
       watchState.onChange();
     }
+  }
+
+  if (graph?._watchers instanceof Set) {
+    graph._watchers.add(notifyWatch);
   }
 
   function outlineTree(children, index) {
@@ -1055,7 +1154,10 @@ export function createFakeHost(graph = createGraph(), { lifecycle } = {}) {
   if (lifecycle?.add) {
     lifecycle.add(() => closeSidecarInternal());
     lifecycle.add(() => { watchState = null; });
-    lifecycle.add(() => { alive = false; });
+    lifecycle.add(() => {
+      alive = false;
+      if (graph?._watchers instanceof Set) graph._watchers.delete(notifyWatch);
+    });
   }
 
   return {

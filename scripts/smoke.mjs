@@ -17,12 +17,15 @@ function parseArgs(argv) {
   let list = false;
   let outDir = resolve(rootDir, ".tmp/harness/out");
   let theme = null;
+  let allThemes = false;
   let settings = null;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--list") {
       list = true;
+    } else if (arg === "--all-themes") {
+      allThemes = true;
     } else if (arg === "--out") {
       const next = argv[++i];
       if (!next) throw new Error("--out requires a directory path");
@@ -48,7 +51,11 @@ function parseArgs(argv) {
     }
   }
 
-  return { scenarios, list, outDir, theme, settings };
+  if (theme != null && theme !== "light" && theme !== "dark") {
+    throw new Error(`Unknown theme: ${theme} (expected "light" or "dark")`);
+  }
+
+  return { scenarios, list, outDir, theme, allThemes, settings };
 }
 
 async function fileExists(path) {
@@ -108,6 +115,13 @@ function parseHarnessResult(domHtml) {
   return JSON.parse(raw);
 }
 
+function extractStderrConsoleLines(stderr) {
+  if (!stderr) return [];
+  return stderr
+    .split(/\r?\n/)
+    .filter((line) => /CONSOLE\(\d+\)/.test(line));
+}
+
 async function runChrome(chromeBin, extraArgs) {
   const profileDir = await mkdtemp(join(tmpdir(), "compass-smoke-"));
   const baseArgs = [
@@ -117,6 +131,7 @@ async function runChrome(chromeBin, extraArgs) {
     "--no-default-browser-check",
     "--disable-gpu",
     "--hide-scrollbars",
+    "--force-prefers-reduced-motion",
     "--window-size=1440,900",
     "--virtual-time-budget=8000",
     ...extraArgs,
@@ -163,14 +178,17 @@ async function runChrome(chromeBin, extraArgs) {
 }
 
 async function runScenario({ chromeBin, indexHtmlPath, outDir, name, theme, settings }) {
+  const effectiveTheme = theme === "dark" ? "dark" : "light";
+  const suffix = effectiveTheme === "dark" ? ".dark" : "";
+
   const url = pathToFileURL(indexHtmlPath);
   url.searchParams.set("scenario", name);
-  if (theme) url.searchParams.set("theme", theme);
+  if (effectiveTheme === "dark") url.searchParams.set("theme", "dark");
   if (settings) url.searchParams.set("settings", settings);
   const pageUrl = url.href;
 
-  const screenshotPath = resolve(outDir, `${name}.png`);
-  const jsonPath = resolve(outDir, `${name}.json`);
+  const screenshotPath = resolve(outDir, `${name}${suffix}.png`);
+  const jsonPath = resolve(outDir, `${name}${suffix}.json`);
   await rm(screenshotPath, { force: true });
 
   const domRun = await runChrome(chromeBin, ["--dump-dom", pageUrl]);
@@ -179,9 +197,11 @@ async function runScenario({ chromeBin, indexHtmlPath, outDir, name, theme, sett
   if (domRun.timedOut) {
     result = {
       scenario: name,
+      theme: effectiveTheme,
       ok: false,
       assertions: [],
       errors: [`Chrome --dump-dom timed out after ${CHROME_TIMEOUT_MS / 1000}s`],
+      consoleErrors: extractStderrConsoleLines(domRun.stderr),
       done: false,
     };
   } else {
@@ -190,9 +210,11 @@ async function runScenario({ chromeBin, indexHtmlPath, outDir, name, theme, sett
     } catch (error) {
       result = {
         scenario: name,
+        theme: effectiveTheme,
         ok: false,
         assertions: [],
         errors: [`Invalid JSON in #harness-result: ${error.message}`],
+        consoleErrors: extractStderrConsoleLines(domRun.stderr),
         done: false,
       };
     }
@@ -202,11 +224,18 @@ async function runScenario({ chromeBin, indexHtmlPath, outDir, name, theme, sett
         : "Scenario produced no completed result in #harness-result";
       result = {
         scenario: name,
+        theme: effectiveTheme,
         ok: false,
         assertions: result?.assertions ?? [],
         errors: [...(result?.errors ?? []), detail],
+        consoleErrors: result?.consoleErrors?.length
+          ? result.consoleErrors
+          : extractStderrConsoleLines(domRun.stderr),
         done: false,
       };
+    } else {
+      result.theme = effectiveTheme;
+      if (!Array.isArray(result.consoleErrors)) result.consoleErrors = [];
     }
   }
 
@@ -230,7 +259,7 @@ async function runScenario({ chromeBin, indexHtmlPath, outDir, name, theme, sett
     }
   }
 
-  if (result.errors.length > 0 || result.assertions.some((item) => !item.ok)) {
+  if (result.errors.length > 0 || result.consoleErrors.length > 0 || result.assertions.some((item) => !item.ok)) {
     result.ok = false;
   }
 
@@ -238,8 +267,32 @@ async function runScenario({ chromeBin, indexHtmlPath, outDir, name, theme, sett
   return { result, screenshotPath };
 }
 
+function printFailureDetails(result) {
+  for (const assertion of result.assertions ?? []) {
+    if (!assertion.ok) process.stdout.write(`  assertion failed: ${assertion.message}\n`);
+  }
+
+  const consoleCounts = new Map();
+  for (const entry of result.consoleErrors ?? []) {
+    consoleCounts.set(entry, (consoleCounts.get(entry) ?? 0) + 1);
+  }
+
+  for (const err of result.errors ?? []) {
+    const remaining = consoleCounts.get(err) ?? 0;
+    if (remaining > 0) {
+      consoleCounts.set(err, remaining - 1);
+      continue;
+    }
+    process.stdout.write(`  error: ${err}\n`);
+  }
+
+  for (const cerr of result.consoleErrors ?? []) {
+    process.stdout.write(`  console.error: ${cerr}\n`);
+  }
+}
+
 async function main() {
-  const { scenarios, list, outDir, theme, settings } = parseArgs(process.argv.slice(2));
+  const { scenarios, list, outDir, theme, allThemes, settings } = parseArgs(process.argv.slice(2));
   const allNames = Object.keys(SCENARIOS);
 
   if (list) {
@@ -257,29 +310,29 @@ async function main() {
   await mkdir(outDir, { recursive: true });
   const indexHtmlPath = resolve(harnessDir, "index.html");
   const targets = scenarios.length > 0 ? scenarios : allNames;
+  const themes = allThemes ? ["light", "dark"] : [theme ?? "light"];
 
   let anyFailed = false;
   for (const name of targets) {
-    const { result, screenshotPath } = await runScenario({
-      chromeBin,
-      indexHtmlPath,
-      outDir,
-      name,
-      theme,
-      settings,
-    });
-    if (!result.ok) anyFailed = true;
+    for (const currentTheme of themes) {
+      const { result, screenshotPath } = await runScenario({
+        chromeBin,
+        indexHtmlPath,
+        outDir,
+        name,
+        theme: currentTheme,
+        settings,
+      });
+      if (!result.ok) anyFailed = true;
 
-    const label = result.ok ? "ok" : "FAIL";
-    const assertionCount = Array.isArray(result.assertions) ? result.assertions.length : 0;
-    const shownPath = relative(process.cwd(), screenshotPath) || screenshotPath;
-    process.stdout.write(`${label} ${name} (${assertionCount} assertions) ${shownPath}\n`);
+      const label = result.ok ? "ok" : "FAIL";
+      const assertionCount = Array.isArray(result.assertions) ? result.assertions.length : 0;
+      const shownPath = relative(process.cwd(), screenshotPath) || screenshotPath;
+      process.stdout.write(`${label} ${name} (${assertionCount} assertions) ${shownPath}\n`);
 
-    for (const assertion of result.assertions ?? []) {
-      if (!assertion.ok) process.stdout.write(`  assertion failed: ${assertion.message}\n`);
-    }
-    for (const err of result.errors ?? []) {
-      process.stdout.write(`  error: ${err}\n`);
+      if (!result.ok) {
+        printFailureDetails(result);
+      }
     }
   }
 

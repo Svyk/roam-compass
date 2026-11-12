@@ -1,7 +1,15 @@
 const errors = [];
+const consoleErrors = [];
 
 function formatError(value) {
-  if (value instanceof Error) return value.stack || value.message || String(value);
+  if (value instanceof Error) {
+    if (value.stack) {
+      return value.message && !value.stack.includes(value.message)
+        ? `${value.name || "Error"}: ${value.message}\n${value.stack}`
+        : value.stack;
+    }
+    return value.message || String(value);
+  }
   if (typeof value === "string") return value;
   try {
     return JSON.stringify(value);
@@ -12,7 +20,9 @@ function formatError(value) {
 
 const originalConsoleError = console.error.bind(console);
 console.error = (...args) => {
-  errors.push(args.map(formatError).join(" "));
+  const formatted = args.map(formatError).join(" ");
+  consoleErrors.push(formatted);
+  errors.push(formatted);
   originalConsoleError(...args);
 };
 
@@ -25,11 +35,16 @@ window.addEventListener("unhandledrejection", (event) => {
   errors.push(`Unhandled rejection: ${formatError(event?.reason)}`);
 });
 
+if (new URLSearchParams(window.location.search).has("scenario")) {
+  window.requestAnimationFrame = (callback) => window.setTimeout(() => callback(performance.now()), 16);
+  window.cancelAnimationFrame = (id) => window.clearTimeout(id);
+}
+
 import { createLifecycle } from "../../src/lifecycle.js";
 import { SETTING_IDS, createSettingsPanel, initializeSettings } from "../../src/settings.js";
 import { mountOverlay } from "../../src/view/overlay.js";
 import { createFakeHost, createGraph } from "./fixture.js";
-import { SCENARIOS, createScenarioHelper } from "./scenarios.js";
+import { SCENARIOS, SCENARIO_ERRORS, createScenarioHelper } from "./scenarios.js";
 
 function createFakeExtensionAPI() {
   const values = new Map();
@@ -74,8 +89,14 @@ function writeResult(payload) {
 }
 
 async function boot() {
+  for (const duplicateError of SCENARIO_ERRORS) {
+    errors.push(duplicateError);
+  }
+
   const params = new URLSearchParams(window.location.search);
   if (params.get("theme") === "dark") {
+    document.documentElement.style.backgroundColor = "#182026";
+    document.documentElement.style.colorScheme = "dark";
     document.body.style.backgroundColor = "#182026";
     document.body.style.color = "#f5f8fa";
   }
@@ -116,6 +137,7 @@ async function boot() {
   const scenarioName = params.get("scenario");
   if (!scenarioName) {
     overlay.focusUid(graph.defaultCenterUid);
+    overlay.hideResults();
     return;
   }
 
@@ -138,6 +160,7 @@ async function boot() {
     ok,
     assertions,
     errors: [...errors],
+    consoleErrors: [...consoleErrors],
     done: true,
   });
 }
