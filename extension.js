@@ -5552,9 +5552,1926 @@ function createMindMap(ctx) {
   };
 }
 
+// src/model/facets.js
+var FACET_PALETTE = Object.freeze([
+  "#2563eb",
+  "#16a34a",
+  "#d97706",
+  "#9333ea",
+  "#dc2626",
+  "#0891b2",
+  "#db2777"
+]);
+var VALID_SOURCES = /* @__PURE__ */ new Set(["attribute", "type", "role", "kind", "rule"]);
+var AUTO_SOURCES = /* @__PURE__ */ new Set(["attribute", "type", "kind"]);
+var VALID_LAYOUTS = /* @__PURE__ */ new Set(["circular", "concentric", "horizontal", "vertical", "quadrants"]);
+var VALID_ROLES = /* @__PURE__ */ new Set(["parent", "child", "friend", "challenger", "previous", "next", "sibling"]);
+var VALID_KINDS = /* @__PURE__ */ new Set(["page", "block", "drawing", "region", "board", "card", "empty"]);
+var RULE_SINGLE_FIELDS = /* @__PURE__ */ new Set(["title", "kind", "group", "type", "role", "zone", "style", "label"]);
+var RULE_OPS = /* @__PURE__ */ new Set(["exists", "missing", "is", "is-not", "contains", "not-contains"]);
+var VALUE_OPS = /* @__PURE__ */ new Set(["is", "is-not", "contains", "not-contains"]);
+var RESERVED_CATEGORY_IDS = /* @__PURE__ */ new Set(["unassigned", "conflicting"]);
+var ID_PATTERN = /^[a-z0-9-]+$/;
+var SAFE_COLOR_PATTERN = /^(#[0-9a-fA-F]{3,8}|[a-zA-Z]{3,32}|(?:rgb|hsl)a?\(\s*[-0-9.,%\s/]+\))$/;
+var STATUS_NEUTRAL_COLOR = "#64748b";
+var BUILTIN_PRESETS = Object.freeze([
+  Object.freeze({
+    id: "roles",
+    name: "Local roles",
+    help: "Each neighbor by the relationship it has to the center.",
+    source: "role",
+    categories: Object.freeze([
+      Object.freeze({ id: "parents", label: "Parents", values: Object.freeze(["parent"]), color: FACET_PALETTE[0] }),
+      Object.freeze({ id: "children", label: "Children", values: Object.freeze(["child"]), color: FACET_PALETTE[1] }),
+      Object.freeze({ id: "friends", label: "Friends", values: Object.freeze(["friend", "previous"]), color: FACET_PALETTE[2] }),
+      Object.freeze({ id: "challengers", label: "Challengers", values: Object.freeze(["challenger", "next"]), color: FACET_PALETTE[3] }),
+      Object.freeze({ id: "siblings", label: "Siblings", values: Object.freeze(["sibling"]), color: FACET_PALETTE[4] })
+    ]),
+    layout: "circular",
+    edges: true,
+    focusInCategory: false,
+    hideEmptyStatus: true
+  }),
+  Object.freeze({
+    id: "types",
+    name: "By type",
+    help: "Neighbors grouped by the Node type attribute setting.",
+    source: "type",
+    categories: "auto",
+    layout: "circular",
+    edges: true,
+    focusInCategory: false,
+    hideEmptyStatus: true
+  }),
+  Object.freeze({
+    id: "status",
+    name: "Status board",
+    help: "Neighbors by their Status:: value.",
+    source: "attribute",
+    attribute: "Status",
+    categories: "auto",
+    layout: "horizontal",
+    edges: true,
+    focusInCategory: false,
+    hideEmptyStatus: true
+  })
+]);
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+function slugify(text, fallback) {
+  const slug = String(text ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug || fallback;
+}
+function clonePreset(preset, builtin) {
+  const categories = Array.isArray(preset.categories) ? preset.categories.map((cat) => ({
+    id: cat.id,
+    label: cat.label,
+    color: cat.color,
+    ...cat.match ? {
+      match: {
+        ...Array.isArray(cat.match.all) ? { all: cat.match.all.map((cond) => ({ ...cond })) } : {},
+        ...Array.isArray(cat.match.any) ? { any: cat.match.any.map((cond) => ({ ...cond })) } : {}
+      }
+    } : { values: [...cat.values ?? []] }
+  })) : preset.categories;
+  const out = {
+    id: preset.id,
+    name: preset.name,
+    help: preset.help ?? "",
+    source: preset.source,
+    ...preset.source === "attribute" ? { attribute: preset.attribute } : {},
+    categories,
+    layout: preset.layout,
+    edges: preset.edges,
+    focusInCategory: preset.focusInCategory,
+    hideEmptyStatus: preset.hideEmptyStatus
+  };
+  if (typeof builtin === "boolean") out.builtin = builtin;
+  return out;
+}
+function validateRuleCondition(cond, catIndex, errors) {
+  if (!isPlainObject(cond)) {
+    errors.push(`Category ${catIndex} has an invalid match condition.`);
+    return null;
+  }
+  const field = typeof cond.field === "string" ? cond.field.trim() : "";
+  const validAttr = field.startsWith("attr:") && field.slice(5).trim().length > 0;
+  if (!RULE_SINGLE_FIELDS.has(field) && !validAttr) {
+    errors.push(`Category ${catIndex} has an unknown condition field "${field || "(empty)"}".`);
+    return null;
+  }
+  const normalizedField = validAttr ? `attr:${field.slice(5).trim()}` : field;
+  const op = typeof cond.op === "string" ? cond.op.trim() : "";
+  if (!RULE_OPS.has(op)) {
+    errors.push(`Category ${catIndex} has an unknown operator "${op || "(empty)"}".`);
+    return null;
+  }
+  if (!VALUE_OPS.has(op)) {
+    return { field: normalizedField, op };
+  }
+  const rawVal = cond.value;
+  const value = typeof rawVal === "string" ? rawVal.trim() : rawVal == null ? "" : String(rawVal).trim();
+  if (!value) {
+    errors.push(`Category ${catIndex} has a condition without a value.`);
+    return null;
+  }
+  return { field: normalizedField, op, value };
+}
+function validateCategory(rawCat, index, source, seenIds, errors) {
+  const num = index + 1;
+  if (!isPlainObject(rawCat)) {
+    errors.push(`Category ${num} must be an object.`);
+    return null;
+  }
+  const label = typeof rawCat.label === "string" ? rawCat.label.trim() : "";
+  if (!label) {
+    errors.push(`Category ${num} needs a label.`);
+  }
+  let id = "";
+  if (rawCat.id !== void 0 && rawCat.id !== null && String(rawCat.id).trim() !== "") {
+    id = typeof rawCat.id === "string" ? rawCat.id.trim() : "";
+    if (!ID_PATTERN.test(id)) {
+      errors.push(`Category ${num} id must use lowercase letters, numbers, and hyphens.`);
+    }
+  } else if (label) {
+    id = slugify(label, `category-${num}`);
+  }
+  if (id && RESERVED_CATEGORY_IDS.has(id)) {
+    errors.push(`Category ${num} cannot use the reserved id "${id}".`);
+  } else if (id && seenIds.has(id)) {
+    errors.push(`Category ${num} has a duplicate id "${id}".`);
+  } else if (id) {
+    seenIds.add(id);
+  }
+  let color = FACET_PALETTE[index % FACET_PALETTE.length];
+  if (rawCat.color !== void 0 && rawCat.color !== null && String(rawCat.color).trim() !== "") {
+    const trimmedColor = typeof rawCat.color === "string" ? rawCat.color.trim() : "";
+    if (!SAFE_COLOR_PATTERN.test(trimmedColor)) {
+      errors.push(`Category ${num} has an invalid color.`);
+    } else {
+      color = trimmedColor;
+    }
+  }
+  if (source === "rule") {
+    const match = rawCat.match;
+    if (!isPlainObject(match)) {
+      errors.push(`Category ${num} needs a match rule.`);
+      return null;
+    }
+    const rawAll = match.all !== void 0 ? match.all : [];
+    const rawAny = match.any !== void 0 ? match.any : [];
+    if (!Array.isArray(rawAll) || !Array.isArray(rawAny)) {
+      errors.push(`Category ${num} match all/any must be arrays.`);
+      return null;
+    }
+    if (!rawAll.length && !rawAny.length) {
+      errors.push(`Category ${num} needs at least one match condition.`);
+      return null;
+    }
+    const all = rawAll.map((item) => validateRuleCondition(item, num, errors)).filter(Boolean);
+    const any = rawAny.map((item) => validateRuleCondition(item, num, errors)).filter(Boolean);
+    const normalizedMatch = {};
+    if (all.length) normalizedMatch.all = all;
+    if (any.length) normalizedMatch.any = any;
+    return { id, label, color, match: normalizedMatch };
+  }
+  if (!Array.isArray(rawCat.values)) {
+    errors.push(`Category ${num} has no values.`);
+    return null;
+  }
+  const values = [];
+  const seenValues = /* @__PURE__ */ new Set();
+  for (const item of rawCat.values) {
+    if (typeof item !== "string") continue;
+    const trimmed = item.trim();
+    if (!trimmed || seenValues.has(trimmed)) continue;
+    seenValues.add(trimmed);
+    values.push(trimmed);
+  }
+  if (!values.length) {
+    errors.push(`Category ${num} has no values.`);
+    return null;
+  }
+  if (source === "role") {
+    for (const val of values) {
+      if (!VALID_ROLES.has(val)) {
+        errors.push(`Category ${num} has an unknown role "${val}".`);
+      }
+    }
+  } else if (source === "kind") {
+    for (const val of values) {
+      if (!VALID_KINDS.has(val)) {
+        errors.push(`Category ${num} has an unknown kind "${val}".`);
+      }
+    }
+  }
+  return { id, label, color, values };
+}
+function validatePreset(raw) {
+  if (!isPlainObject(raw)) {
+    return { ok: false, errors: ["A preset must be a JSON object."] };
+  }
+  const errors = [];
+  const id = typeof raw.id === "string" ? raw.id.trim() : "";
+  if (!id) {
+    errors.push("Preset id is required.");
+  } else if (!ID_PATTERN.test(id)) {
+    errors.push("Preset id must use lowercase letters, numbers, and hyphens only.");
+  }
+  const name = typeof raw.name === "string" ? raw.name.trim() : "";
+  if (!name) {
+    errors.push("Preset name is required.");
+  }
+  let help = "";
+  if (raw.help !== void 0 && raw.help !== null) {
+    if (typeof raw.help !== "string") errors.push("Help text must be a string.");
+    else help = raw.help.trim();
+  }
+  const source = typeof raw.source === "string" ? raw.source.trim() : "";
+  if (!VALID_SOURCES.has(source)) {
+    errors.push("Source must be attribute, type, role, kind, or rule.");
+  }
+  let attribute = "";
+  if (source === "attribute") {
+    const rawAttr = typeof raw.attribute === "string" ? raw.attribute.trim().replace(/::$/, "").trim() : "";
+    if (!rawAttr) {
+      errors.push("Attribute name is required when source is attribute.");
+    } else {
+      attribute = rawAttr;
+    }
+  }
+  let layout2 = "circular";
+  if (raw.layout !== void 0 && raw.layout !== null && raw.layout !== "") {
+    const rawLayout = typeof raw.layout === "string" ? raw.layout.trim() : "";
+    if (!VALID_LAYOUTS.has(rawLayout)) {
+      errors.push("Layout must be circular, concentric, horizontal, vertical, or quadrants.");
+    } else {
+      layout2 = rawLayout;
+    }
+  }
+  let edges = true;
+  if (raw.edges !== void 0) {
+    if (typeof raw.edges !== "boolean") errors.push("Edges must be true or false.");
+    else edges = raw.edges;
+  }
+  let focusInCategory = false;
+  if (raw.focusInCategory !== void 0) {
+    if (typeof raw.focusInCategory !== "boolean") errors.push("focusInCategory must be true or false.");
+    else focusInCategory = raw.focusInCategory;
+  }
+  let hideEmptyStatus = true;
+  if (raw.hideEmptyStatus !== void 0) {
+    if (typeof raw.hideEmptyStatus !== "boolean") errors.push("hideEmptyStatus must be true or false.");
+    else hideEmptyStatus = raw.hideEmptyStatus;
+  }
+  let categories = null;
+  const rawCategories = typeof raw.categories === "string" ? raw.categories.trim() : raw.categories;
+  if (rawCategories === "auto") {
+    if (VALID_SOURCES.has(source) && !AUTO_SOURCES.has(source)) {
+      errors.push("Auto categories are only supported for attribute, type, and kind sources.");
+    } else {
+      categories = "auto";
+    }
+  } else if (!Array.isArray(rawCategories) || rawCategories.length < 2 || rawCategories.length > 7) {
+    errors.push("A preset needs 2 to 7 categories.");
+  } else if (VALID_SOURCES.has(source)) {
+    const seenIds = /* @__PURE__ */ new Set();
+    const normalized = rawCategories.map((cat, idx) => validateCategory(cat, idx, source, seenIds, errors));
+    if (!errors.length) categories = normalized;
+  }
+  if (errors.length) {
+    return { ok: false, errors };
+  }
+  const preset = {
+    id,
+    name,
+    help,
+    source,
+    ...source === "attribute" ? { attribute } : {},
+    categories,
+    layout: layout2,
+    edges,
+    focusInCategory,
+    hideEmptyStatus
+  };
+  return { ok: true, preset };
+}
+function allPresets(custom = []) {
+  const customById = /* @__PURE__ */ new Map();
+  const customOrder = [];
+  if (Array.isArray(custom)) {
+    for (const raw of custom) {
+      const checked = validatePreset(raw);
+      if (!checked.ok) continue;
+      const { id } = checked.preset;
+      if (!customById.has(id)) customOrder.push(id);
+      customById.set(id, checked.preset);
+    }
+  }
+  const builtinIds = new Set(BUILTIN_PRESETS.map((preset) => preset.id));
+  const out = [];
+  for (const builtin of BUILTIN_PRESETS) {
+    if (customById.has(builtin.id)) {
+      out.push(clonePreset(customById.get(builtin.id), false));
+    } else {
+      out.push(clonePreset(builtin, true));
+    }
+  }
+  for (const id of customOrder) {
+    if (builtinIds.has(id)) continue;
+    out.push(clonePreset(customById.get(id), false));
+  }
+  return out;
+}
+function findPreset(presets, id) {
+  const list = Array.isArray(presets) ? presets : [];
+  const target = typeof id === "string" ? id.trim() : "";
+  if (target) {
+    const hit = list.find((preset) => preset?.id === target);
+    if (hit) return hit;
+  }
+  const firstBuiltin = list.find((preset) => preset?.id === BUILTIN_PRESETS[0].id) ?? list[0];
+  return firstBuiltin ?? clonePreset(BUILTIN_PRESETS[0], true);
+}
+function attributeValues(fact, attributeName) {
+  const target = typeof attributeName === "string" ? attributeName.trim().toLowerCase() : "";
+  const attrs = fact?.attributes;
+  if (!target || !attrs || typeof attrs !== "object") return [];
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  const pushAll = (arr) => {
+    if (!Array.isArray(arr)) return;
+    for (const raw of arr) {
+      if (typeof raw !== "string") continue;
+      const trimmed = raw.trim();
+      if (!trimmed || seen.has(trimmed)) continue;
+      seen.add(trimmed);
+      out.push(trimmed);
+    }
+  };
+  if (Array.isArray(attrs[target])) {
+    pushAll(attrs[target]);
+    return out;
+  }
+  for (const [key, values] of Object.entries(attrs)) {
+    if (key.trim().toLowerCase() === target) pushAll(values);
+  }
+  return out;
+}
+function valuesForFact(preset, fact) {
+  if (!preset || !fact || typeof fact !== "object") return [];
+  if (preset.source === "attribute") return attributeValues(fact, preset.attribute);
+  if (preset.source === "type") {
+    const val = typeof fact.type === "string" ? fact.type.trim() : "";
+    return val ? [val] : [];
+  }
+  if (preset.source === "role") {
+    const val = typeof fact.role === "string" ? fact.role.trim() : "";
+    return val ? [val] : [];
+  }
+  if (preset.source === "kind") {
+    const raw = fact.group !== void 0 ? fact.group : fact.kind;
+    const val = typeof raw === "string" ? raw.trim() : "";
+    return val ? [val] : [];
+  }
+  return [];
+}
+function compareAutoValues(a, b, counts) {
+  const diff = (counts.get(b) ?? 0) - (counts.get(a) ?? 0);
+  if (diff !== 0) return diff;
+  const al = a.toLowerCase();
+  const bl = b.toLowerCase();
+  if (al !== bl) return al < bl ? -1 : 1;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+function uniqueCategoryId(base, usedIds) {
+  let candidate = base;
+  let suffix = 2;
+  while (!candidate || RESERVED_CATEGORY_IDS.has(candidate) || usedIds.has(candidate)) {
+    candidate = `${base || "cat"}-${suffix}`;
+    suffix += 1;
+  }
+  usedIds.add(candidate);
+  return candidate;
+}
+function resolveCategories(preset, facts) {
+  if (preset?.categories === "auto") {
+    const counts = /* @__PURE__ */ new Map();
+    for (const fact of facts) {
+      const vals = valuesForFact(preset, fact);
+      for (const val of vals) {
+        counts.set(val, (counts.get(val) ?? 0) + 1);
+      }
+    }
+    const distinct = [...counts.keys()].sort((a, b) => compareAutoValues(a, b, counts));
+    const usedIds = /* @__PURE__ */ new Set();
+    if (distinct.length <= 7) {
+      return distinct.map((val, index) => ({
+        id: uniqueCategoryId(slugify(val, `cat-${index + 1}`), usedIds),
+        label: val,
+        color: FACET_PALETTE[index % FACET_PALETTE.length],
+        values: [val]
+      }));
+    }
+    const top = distinct.slice(0, 6).map((val, index) => ({
+      id: uniqueCategoryId(slugify(val, `cat-${index + 1}`), usedIds),
+      label: val,
+      color: FACET_PALETTE[index % FACET_PALETTE.length],
+      values: [val]
+    }));
+    top.push({
+      id: uniqueCategoryId("other", usedIds),
+      label: "Other",
+      color: FACET_PALETTE[6],
+      values: distinct.slice(6)
+    });
+    return top;
+  }
+  if (!Array.isArray(preset?.categories)) return [];
+  return preset.categories.map((cat, index) => ({
+    id: typeof cat?.id === "string" && cat.id.trim() ? cat.id.trim() : `category-${index + 1}`,
+    label: typeof cat?.label === "string" && cat.label.trim() ? cat.label.trim() : `Category ${index + 1}`,
+    color: typeof cat?.color === "string" && cat.color.trim() ? cat.color.trim() : FACET_PALETTE[index % FACET_PALETTE.length],
+    ...preset.source === "rule" ? { match: cat?.match } : { values: (cat?.values ?? []).map((v) => String(v).trim()).filter(Boolean) }
+  }));
+}
+function categoryMatchesFact(preset, category, fact, cachedValues = null) {
+  if (!preset || !category || !fact) return false;
+  if (preset.source === "rule") {
+    return matchConditions(category.match, fact);
+  }
+  const values = cachedValues ?? valuesForFact(preset, fact);
+  if (!values.length || !Array.isArray(category.values)) return false;
+  return category.values.some((target) => values.includes(target.trim()));
+}
+function classify(preset, facts = []) {
+  const list = Array.isArray(facts) ? facts.filter((fact) => typeof fact?.uid === "string" && fact.uid) : [];
+  const resolved = resolveCategories(preset, list);
+  const categories = resolved.map((cat) => ({
+    id: cat.id,
+    label: cat.label,
+    color: cat.color,
+    uids: []
+  }));
+  const unassigned = [];
+  const conflicting = [];
+  const matches2 = {};
+  for (const fact of list) {
+    const vals = preset?.source === "rule" ? null : valuesForFact(preset, fact);
+    const matchedIndices = [];
+    for (let i = 0; i < resolved.length; i += 1) {
+      if (categoryMatchesFact(preset, resolved[i], fact, vals)) matchedIndices.push(i);
+    }
+    if (matchedIndices.length === 0) {
+      unassigned.push(fact.uid);
+    } else if (matchedIndices.length === 1) {
+      categories[matchedIndices[0]].uids.push(fact.uid);
+    } else {
+      conflicting.push(fact.uid);
+      matches2[fact.uid] = matchedIndices.map((idx) => categories[idx].id);
+    }
+  }
+  return {
+    preset,
+    categories,
+    unassigned,
+    conflicting,
+    matches: matches2
+  };
+}
+function centerCategory(preset, fact, resolvedCategories = null) {
+  if (!preset || !fact || typeof fact !== "object") return null;
+  if (preset.categories === "auto") {
+    if (!Array.isArray(resolvedCategories) || !resolvedCategories.length) return null;
+    const vals2 = valuesForFact(preset, fact);
+    if (!vals2.length) return null;
+    const otherCat = resolvedCategories.length === 7 && resolvedCategories[6]?.label === "Other" && !Array.isArray(resolvedCategories[6]?.values) ? resolvedCategories[6] : null;
+    const hits2 = /* @__PURE__ */ new Set();
+    for (const val of vals2) {
+      const direct = resolvedCategories.find((cat) => Array.isArray(cat?.values) ? cat.values.includes(val) : cat !== otherCat && cat?.label === val);
+      if (direct?.id) hits2.add(direct.id);
+      else if (otherCat?.id) hits2.add(otherCat.id);
+    }
+    return hits2.size === 1 ? [...hits2][0] : null;
+  }
+  if (!Array.isArray(preset.categories)) return null;
+  const categories = resolveCategories(preset, []);
+  if (!categories.length) return null;
+  const vals = preset.source === "rule" ? null : valuesForFact(preset, fact);
+  const hits = [];
+  for (const cat of categories) {
+    if (categoryMatchesFact(preset, cat, fact, vals)) hits.push(cat.id);
+  }
+  return hits.length === 1 ? hits[0] : null;
+}
+var REGION_PAD_X = 14;
+var REGION_HEADER_H = 32;
+var REGION_PAD_BOTTOM = 14;
+var EMPTY_INNER_H = 20;
+function columnsForCount(count2) {
+  if (count2 <= 4) return 1;
+  if (count2 <= 10) return 2;
+  return 3;
+}
+function prepareBoxSpec(spec, { card, center, gap, maxRows, expandedRegions, focusCategory }) {
+  const uids = Array.isArray(spec.uids) ? spec.uids : [];
+  const count2 = uids.length;
+  const cols = columnsForCount(count2);
+  const colGap = Math.max(8, gap);
+  const rowGap = Math.max(8, Math.round(gap * 0.75));
+  const isExpanded = expandedRegions instanceof Set && expandedRegions.has(spec.id);
+  const rowCap = isExpanded || !Number.isFinite(maxRows) ? Infinity : Math.max(1, Math.trunc(maxRows));
+  const slotCap = Number.isFinite(rowCap) ? cols * rowCap : count2;
+  const hasMore = count2 > slotCap;
+  const shownCount = hasMore ? Math.max(0, slotCap - 1) : count2;
+  const hidden = count2 - shownCount;
+  const totalSlots = shownCount + (hasMore ? 1 : 0);
+  const gridRows = totalSlots > 0 ? Math.ceil(totalSlots / cols) : 0;
+  const gridW = totalSlots > 0 ? cols * card.w + (cols - 1) * colGap : card.w;
+  const gridH = gridRows > 0 ? gridRows * card.h + (gridRows - 1) * rowGap : focusCategory === spec.id ? 0 : EMPTY_INNER_H;
+  const isFocused = focusCategory === spec.id;
+  const focusW = isFocused ? Math.max(card.w, center.w) : 0;
+  const focusH = isFocused ? card.h * 2 : 0;
+  const innerW = isFocused ? Math.max(gridW, focusW) : gridW;
+  const innerH = isFocused ? focusH + (gridRows > 0 ? rowGap + gridH : 0) : gridH;
+  return {
+    ...spec,
+    uids,
+    count: count2,
+    hidden,
+    hasMore,
+    shownCount,
+    totalSlots,
+    cols,
+    gridRows,
+    colGap,
+    rowGap,
+    gridW,
+    gridH,
+    isFocused,
+    focusW,
+    focusH,
+    w: innerW + REGION_PAD_X * 2,
+    h: REGION_HEADER_H + innerH + REGION_PAD_BOTTOM
+  };
+}
+function materializeBoxRegion(prepared, rx, ry, card) {
+  const region = {
+    id: prepared.id,
+    label: prepared.label,
+    color: prepared.color,
+    x: rx,
+    y: ry,
+    w: prepared.w,
+    h: prepared.h,
+    count: prepared.count,
+    hidden: prepared.hidden,
+    status: prepared.status ?? null
+  };
+  let focusBox = null;
+  let cardsTop = ry - prepared.h / 2 + REGION_HEADER_H;
+  if (prepared.isFocused) {
+    focusBox = {
+      x: rx,
+      y: cardsTop + prepared.focusH / 2,
+      w: prepared.focusW,
+      h: prepared.focusH
+    };
+    cardsTop += prepared.focusH + prepared.rowGap;
+  }
+  const items = [];
+  const more = [];
+  const gridLeft = rx - prepared.gridW / 2;
+  for (let s = 0; s < prepared.totalSlots; s += 1) {
+    const row = Math.floor(s / prepared.cols);
+    const col = s % prepared.cols;
+    const x = gridLeft + col * (card.w + prepared.colGap) + card.w / 2;
+    const y = cardsTop + row * (card.h + prepared.rowGap) + card.h / 2;
+    if (s < prepared.shownCount) {
+      const uid = prepared.uids[s];
+      items.push({
+        key: `${prepared.id}:${uid}`,
+        uid,
+        zone: prepared.id,
+        x,
+        y,
+        w: card.w,
+        h: card.h
+      });
+    } else {
+      more.push({
+        regionId: prepared.id,
+        count: prepared.hidden,
+        x,
+        y,
+        w: card.w,
+        h: card.h
+      });
+    }
+  }
+  return { region, items, more, focusBox };
+}
+function pairRadius(a, angleA, b, angleB, clearance) {
+  const dxFactor = Math.abs(Math.cos(angleA) - Math.cos(angleB));
+  const dyFactor = Math.abs(Math.sin(angleA) - Math.sin(angleB));
+  const rx = dxFactor > 1e-6 ? ((a.w + b.w) / 2 + clearance) / dxFactor : Infinity;
+  const ry = dyFactor > 1e-6 ? ((a.h + b.h) / 2 + clearance) / dyFactor : Infinity;
+  return Math.min(rx, ry);
+}
+function centerClearRadius(reg, angle, centerBox, clearance) {
+  const cx = Math.abs(Math.cos(angle));
+  const cy = Math.abs(Math.sin(angle));
+  const rx = cx > 1e-6 ? ((reg.w + centerBox.w) / 2 + clearance) / cx : Infinity;
+  const ry = cy > 1e-6 ? ((reg.h + centerBox.h) / 2 + clearance) / cy : Infinity;
+  return Math.min(rx, ry);
+}
+function placeCircular(specs, centerBox, gap) {
+  const count2 = specs.length;
+  if (!count2) return [];
+  if (count2 === 1 && !centerBox) {
+    return [{ x: 0, y: 0 }];
+  }
+  const clearance = gap * 2;
+  const angles = specs.map((_, idx) => -Math.PI / 2 + 2 * Math.PI * idx / count2);
+  let radius = 0;
+  if (centerBox) {
+    for (let i = 0; i < count2; i += 1) {
+      radius = Math.max(radius, centerClearRadius(specs[i], angles[i], centerBox, clearance));
+    }
+  }
+  for (let i = 0; i < count2; i += 1) {
+    for (let j = i + 1; j < count2; j += 1) {
+      radius = Math.max(radius, pairRadius(specs[i], angles[i], specs[j], angles[j], clearance));
+    }
+  }
+  radius = Math.ceil(radius);
+  return angles.map((angle) => ({
+    x: Math.round(radius * Math.cos(angle)),
+    y: Math.round(radius * Math.sin(angle))
+  }));
+}
+function boxesClear(ax, ay, aw, ah, bx, by, bw, bh, clearance) {
+  const sepX = Math.abs(ax - bx) - (aw + bw) / 2;
+  const sepY = Math.abs(ay - by) - (ah + bh) / 2;
+  return sepX >= clearance - 1e-6 || sepY >= clearance - 1e-6;
+}
+function placeCircularExact(specs, centerBox, gap) {
+  const count2 = specs.length;
+  if (!count2) return [];
+  if (count2 === 1 && !centerBox) return [{ x: 0, y: 0 }];
+  const clearance = gap * 2;
+  const angles = specs.map((_, idx) => -Math.PI / 2 + 2 * Math.PI * idx / count2);
+  let base = placeCircular(specs, centerBox, gap);
+  let radius = Math.hypot(base[0].x, base[0].y);
+  for (let step2 = 0; step2 < 10; step2 += 1) {
+    let ok = true;
+    if (centerBox) {
+      for (let i = 0; i < count2; i += 1) {
+        if (!boxesClear(base[i].x, base[i].y, specs[i].w, specs[i].h, centerBox.x, centerBox.y, centerBox.w, centerBox.h, clearance)) {
+          ok = false;
+          break;
+        }
+      }
+    }
+    if (ok) {
+      for (let i = 0; i < count2 && ok; i += 1) {
+        for (let j = i + 1; j < count2; j += 1) {
+          if (!boxesClear(base[i].x, base[i].y, specs[i].w, specs[i].h, base[j].x, base[j].y, specs[j].w, specs[j].h, clearance)) {
+            ok = false;
+            break;
+          }
+        }
+      }
+    }
+    if (ok) break;
+    radius += 4;
+    base = angles.map((angle) => ({
+      x: Math.round(radius * Math.cos(angle)),
+      y: Math.round(radius * Math.sin(angle))
+    }));
+  }
+  return base;
+}
+function placeHorizontal(specs, centerBox, gap) {
+  if (!specs.length) return [];
+  const regionGap = gap * 2;
+  const totalW = specs.reduce((sum, item) => sum + item.w, 0) + Math.max(0, specs.length - 1) * regionGap;
+  const maxH = Math.max(...specs.map((item) => item.h));
+  const rowTop = centerBox ? centerBox.y + centerBox.h / 2 + gap * 3 : -Math.round(maxH / 2);
+  let curX = -Math.round(totalW / 2);
+  return specs.map((spec) => {
+    const pos = { x: curX + spec.w / 2, y: rowTop + spec.h / 2 };
+    curX += spec.w + regionGap;
+    return pos;
+  });
+}
+function placeVertical(specs, centerBox, gap) {
+  if (!specs.length) return [];
+  const regionGap = gap * 2;
+  const totalH = specs.reduce((sum, item) => sum + item.h, 0) + Math.max(0, specs.length - 1) * regionGap;
+  const maxW = Math.max(...specs.map((item) => item.w));
+  const colLeft = centerBox ? centerBox.x + centerBox.w / 2 + gap * 3 : -Math.round(maxW / 2);
+  let curY = -Math.round(totalH / 2);
+  return specs.map((spec) => {
+    const pos = { x: colLeft + spec.w / 2, y: curY + spec.h / 2 };
+    curY += spec.h + regionGap;
+    return pos;
+  });
+}
+function placeQuadrants(specs, centerBox, gap) {
+  const [tl, tr, bl, br] = specs;
+  const innerX = gap * 2;
+  const clearY = centerBox ? centerBox.h / 2 + gap * 2 : gap;
+  return [
+    { x: -(innerX + tl.w / 2), y: -(clearY + tl.h / 2) },
+    { x: innerX + tr.w / 2, y: -(clearY + tr.h / 2) },
+    { x: -(innerX + bl.w / 2), y: clearY + bl.h / 2 },
+    { x: innerX + br.w / 2, y: clearY + br.h / 2 }
+  ];
+}
+function layoutConcentricRings(rawSpecs, { card, center, gap, maxRows, expandedRegions, focusCategory }) {
+  const regions = [];
+  const items = [];
+  const more = [];
+  let focusBox = null;
+  const hasFocus = rawSpecs.some((spec) => spec.id === focusCategory);
+  let prevOuterW = hasFocus ? gap * 2 : center.w;
+  let prevOuterH = hasFocus ? gap * 2 : center.h;
+  const colGap = Math.max(8, gap);
+  const rowGap = Math.max(8, Math.round(gap * 0.75));
+  const bandInnerPad = Math.max(8, Math.round(gap * 0.75));
+  for (const spec of rawSpecs) {
+    const innerW = prevOuterW + gap * 4;
+    const innerH = prevOuterH + gap * 4;
+    const uids = Array.isArray(spec.uids) ? spec.uids : [];
+    const count2 = uids.length;
+    const isFocused = focusCategory === spec.id;
+    const isExpanded = expandedRegions instanceof Set && expandedRegions.has(spec.id);
+    const minCols = Math.max(2, Math.floor((innerW + colGap) / (card.w + colGap)));
+    const cols = Math.max(minCols, Math.min(6, Math.max(2, Math.ceil(count2 / 2))));
+    const rowCap = isExpanded || !Number.isFinite(maxRows) ? Infinity : Math.max(1, Math.trunc(maxRows));
+    const slotCap = Number.isFinite(rowCap) ? cols * rowCap : count2;
+    const hasMore = count2 > slotCap;
+    const shownCount = hasMore ? Math.max(0, slotCap - 1) : count2;
+    const hidden = count2 - shownCount;
+    const totalSlots = shownCount + (hasMore ? 1 : 0);
+    const topMaxRows = Number.isFinite(rowCap) ? Math.ceil(rowCap / 2) : Infinity;
+    const botMaxRows = Number.isFinite(rowCap) ? Math.floor(rowCap / 2) : Infinity;
+    const topCount = Number.isFinite(rowCap) ? Math.min(cols * topMaxRows, Math.max(totalSlots - cols * botMaxRows, Math.ceil(totalSlots / 2))) : Math.ceil(totalSlots / 2);
+    const botCount = totalSlots - topCount;
+    const topRows = topCount > 0 ? Math.ceil(topCount / cols) : 0;
+    const botRows = botCount > 0 ? Math.ceil(botCount / cols) : 0;
+    const focusW = isFocused ? Math.max(card.w, center.w) : 0;
+    const focusH = isFocused ? card.h * 2 : 0;
+    const topGridH = topRows > 0 ? topRows * card.h + (topRows - 1) * rowGap : 0;
+    const botGridH = botRows > 0 ? botRows * card.h + (botRows - 1) * rowGap : 0;
+    const topBandNeeded = REGION_HEADER_H + (isFocused ? focusH + (topRows > 0 ? rowGap : 0) : 0) + topGridH + bandInnerPad;
+    const botBandNeeded = bandInnerPad + botGridH + REGION_PAD_BOTTOM;
+    const bandH = Math.max(topBandNeeded, botBandNeeded, REGION_HEADER_H + bandInnerPad);
+    const maxRowCols = Math.max(Math.min(topCount, cols), Math.min(botCount, cols), 1);
+    const rowGridW = maxRowCols * card.w + (maxRowCols - 1) * colGap;
+    const outerW = Math.max(
+      innerW + gap * 4,
+      rowGridW + REGION_PAD_X * 2,
+      isFocused ? focusW + REGION_PAD_X * 2 : 0
+    );
+    const outerH = innerH + bandH * 2;
+    regions.push({
+      id: spec.id,
+      label: spec.label,
+      color: spec.color,
+      x: 0,
+      y: 0,
+      w: outerW,
+      h: outerH,
+      count: count2,
+      hidden,
+      status: null
+    });
+    let topCursorY = -outerH / 2 + REGION_HEADER_H;
+    if (isFocused) {
+      focusBox = {
+        x: 0,
+        y: topCursorY + focusH / 2,
+        w: focusW,
+        h: focusH
+      };
+      topCursorY += focusH + rowGap;
+    }
+    for (let s = 0; s < topCount; s += 1) {
+      const row = Math.floor(s / cols);
+      const col = s % cols;
+      const inRow = row === topRows - 1 ? topCount - row * cols : cols;
+      const usedW = inRow * card.w + (inRow - 1) * colGap;
+      const x = -usedW / 2 + col * (card.w + colGap) + card.w / 2;
+      const y = topCursorY + row * (card.h + rowGap) + card.h / 2;
+      if (s < shownCount) {
+        const uid = uids[s];
+        items.push({ key: `${spec.id}:${uid}`, uid, zone: spec.id, x, y, w: card.w, h: card.h });
+      } else {
+        more.push({ regionId: spec.id, count: hidden, x, y, w: card.w, h: card.h });
+      }
+    }
+    const botStartY = innerH / 2 + bandInnerPad;
+    for (let b = 0; b < botCount; b += 1) {
+      const slotIndex = topCount + b;
+      const row = Math.floor(b / cols);
+      const col = b % cols;
+      const inRow = row === botRows - 1 ? botCount - row * cols : cols;
+      const usedW = inRow * card.w + (inRow - 1) * colGap;
+      const x = -usedW / 2 + col * (card.w + colGap) + card.w / 2;
+      const y = botStartY + row * (card.h + rowGap) + card.h / 2;
+      if (slotIndex < shownCount) {
+        const uid = uids[slotIndex];
+        items.push({ key: `${spec.id}:${uid}`, uid, zone: spec.id, x, y, w: card.w, h: card.h });
+      } else {
+        more.push({ regionId: spec.id, count: hidden, x, y, w: card.w, h: card.h });
+      }
+    }
+    prevOuterW = outerW;
+    prevOuterH = outerH;
+  }
+  const centerBox = focusBox ?? { x: 0, y: 0, w: center.w, h: center.h };
+  return { centerBox, regions, items, more };
+}
+function layoutFacets(classified, options = {}) {
+  const card = { w: options?.card?.w ?? 168, h: options?.card?.h ?? 32 };
+  const center = { w: options?.center?.w ?? 240, h: options?.center?.h ?? 56 };
+  const gap = Number.isFinite(options?.gap) && options.gap > 0 ? options.gap : 12;
+  const maxRows = options?.maxRows !== void 0 ? options.maxRows : 6;
+  const expandedRegions = options?.expandedRegions instanceof Set ? options.expandedRegions : null;
+  const rawCategories = Array.isArray(classified?.categories) ? classified.categories : [];
+  const rawFocus = typeof options?.focusCategory === "string" && options.focusCategory ? options.focusCategory : null;
+  const focusCategory = rawFocus && rawCategories.some((cat) => cat.id === rawFocus) ? rawFocus : null;
+  const requestedLayout = classified?.preset?.layout || "circular";
+  let effectiveLayout = requestedLayout;
+  let fallback = null;
+  if (requestedLayout === "quadrants" && rawCategories.length !== 4) {
+    effectiveLayout = "circular";
+    fallback = "circular";
+  }
+  let centerBox = focusCategory ? null : { x: 0, y: 0, w: center.w, h: center.h };
+  const regions = [];
+  const items = [];
+  const more = [];
+  if (effectiveLayout === "concentric") {
+    const built = layoutConcentricRings(rawCategories, {
+      card,
+      center,
+      gap,
+      maxRows,
+      expandedRegions,
+      focusCategory
+    });
+    centerBox = built.centerBox;
+    regions.push(...built.regions);
+    items.push(...built.items);
+    more.push(...built.more);
+  } else {
+    const prepared = rawCategories.map((cat) => prepareBoxSpec({ ...cat, status: null }, { card, center, gap, maxRows, expandedRegions, focusCategory }));
+    let positions = [];
+    if (effectiveLayout === "horizontal") positions = placeHorizontal(prepared, centerBox, gap);
+    else if (effectiveLayout === "vertical") positions = placeVertical(prepared, centerBox, gap);
+    else if (effectiveLayout === "quadrants") positions = placeQuadrants(prepared, centerBox, gap);
+    else positions = placeCircularExact(prepared, centerBox, gap);
+    for (let i = 0; i < prepared.length; i += 1) {
+      const mat = materializeBoxRegion(prepared[i], positions[i].x, positions[i].y, card);
+      regions.push(mat.region);
+      items.push(...mat.items);
+      more.push(...mat.more);
+      if (mat.focusBox) centerBox = mat.focusBox;
+    }
+  }
+  if (!centerBox) {
+    centerBox = { x: 0, y: 0, w: center.w, h: center.h };
+  }
+  const hideEmpty = classified?.preset?.hideEmptyStatus !== false;
+  const unassignedUids = Array.isArray(classified?.unassigned) ? classified.unassigned : [];
+  const conflictingUids = Array.isArray(classified?.conflicting) ? classified.conflicting : [];
+  const statusSpecs = [];
+  if (unassignedUids.length > 0 || !hideEmpty) {
+    statusSpecs.push({
+      id: "unassigned",
+      label: "Unassigned",
+      color: STATUS_NEUTRAL_COLOR,
+      uids: unassignedUids,
+      status: "unassigned"
+    });
+  }
+  if (conflictingUids.length > 0 || !hideEmpty) {
+    statusSpecs.push({
+      id: "conflicting",
+      label: "Conflicting",
+      color: STATUS_NEUTRAL_COLOR,
+      uids: conflictingUids,
+      status: "conflicting"
+    });
+  }
+  if (statusSpecs.length > 0) {
+    let mainMinX = centerBox.x - centerBox.w / 2;
+    let mainMaxX = centerBox.x + centerBox.w / 2;
+    let mainMaxY = centerBox.y + centerBox.h / 2;
+    for (const reg of regions) {
+      mainMinX = Math.min(mainMinX, reg.x - reg.w / 2);
+      mainMaxX = Math.max(mainMaxX, reg.x + reg.w / 2);
+      mainMaxY = Math.max(mainMaxY, reg.y + reg.h / 2);
+    }
+    const preparedStatus = statusSpecs.map((spec) => prepareBoxSpec(spec, { card, center, gap, maxRows, expandedRegions, focusCategory: null }));
+    const statusGap = gap * 2;
+    const totalStatusW = preparedStatus.reduce((sum, s) => sum + s.w, 0) + (preparedStatus.length - 1) * statusGap;
+    const dockCenterX = Math.round((mainMinX + mainMaxX) / 2);
+    const dockTop = mainMaxY + gap * 3;
+    let curX = dockCenterX - Math.round(totalStatusW / 2);
+    for (const prep of preparedStatus) {
+      const rx = curX + prep.w / 2;
+      const ry = dockTop + prep.h / 2;
+      const mat = materializeBoxRegion(prep, rx, ry, card);
+      regions.push(mat.region);
+      items.push(...mat.items);
+      more.push(...mat.more);
+      curX += prep.w + statusGap;
+    }
+  }
+  let minX = centerBox.x - centerBox.w / 2;
+  let maxX = centerBox.x + centerBox.w / 2;
+  let minY = centerBox.y - centerBox.h / 2;
+  let maxY = centerBox.y + centerBox.h / 2;
+  for (const reg of regions) {
+    minX = Math.min(minX, reg.x - reg.w / 2);
+    maxX = Math.max(maxX, reg.x + reg.w / 2);
+    minY = Math.min(minY, reg.y - reg.h / 2);
+    maxY = Math.max(maxY, reg.y + reg.h / 2);
+  }
+  return {
+    center: centerBox,
+    regions,
+    items,
+    more,
+    bounds: { minX, minY, maxX, maxY },
+    fallback
+  };
+}
+function clampNum(value, low, high) {
+  if (low > high) return (low + high) / 2;
+  return Math.max(low, Math.min(high, value));
+}
+function pointInsideBox(px, py, box, margin = 0) {
+  return px >= box.x - box.w / 2 - margin - 1e-6 && px <= box.x + box.w / 2 + margin + 1e-6 && py >= box.y - box.h / 2 - margin - 1e-6 && py <= box.y + box.h / 2 + margin + 1e-6;
+}
+function boxEncloses(outer, inner) {
+  return outer.x - outer.w / 2 <= inner.x - inner.w / 2 + 1e-6 && outer.x + outer.w / 2 >= inner.x + inner.w / 2 - 1e-6 && outer.y - outer.h / 2 <= inner.y - inner.h / 2 + 1e-6 && outer.y + outer.h / 2 >= inner.y + inner.h / 2 - 1e-6;
+}
+function segmentHitsRect(x1, y1, x2, y2, minX, minY, maxX, maxY) {
+  if (minX >= maxX || minY >= maxY) return false;
+  let t0 = 0;
+  let t1 = 1;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const p = [-dx, dx, -dy, dy];
+  const q = [x1 - minX, maxX - x1, y1 - minY, maxY - y1];
+  for (let i = 0; i < 4; i += 1) {
+    if (Math.abs(p[i]) < 1e-9) {
+      if (q[i] < 0) return false;
+    } else {
+      const r = q[i] / p[i];
+      if (p[i] < 0) {
+        if (r > t1) return false;
+        if (r > t0) t0 = r;
+      } else {
+        if (r < t0) return false;
+        if (r < t1) t1 = r;
+      }
+    }
+  }
+  return t0 <= t1;
+}
+function bezierAt(p0, p1, p2, p3, t) {
+  const u = 1 - t;
+  return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
+}
+function curveClearOfObstacles(cand, centerBox, targetReg, obstacles) {
+  const { sx, sy, c1x, c1y, c2x, c2y, ex, ey } = cand;
+  const steps = 64;
+  const cMinX = centerBox.x - centerBox.w / 2 + 0.5;
+  const cMaxX = centerBox.x + centerBox.w / 2 - 0.5;
+  const cMinY = centerBox.y - centerBox.h / 2 + 0.5;
+  const cMaxY = centerBox.y + centerBox.h / 2 - 0.5;
+  const tMinX = targetReg.x - targetReg.w / 2 + 0.5;
+  const tMaxX = targetReg.x + targetReg.w / 2 - 0.5;
+  const tMinY = targetReg.y - targetReg.h / 2 + 0.5;
+  const tMaxY = targetReg.y + targetReg.h / 2 - 0.5;
+  let prevX = sx;
+  let prevY = sy;
+  for (let s = 1; s <= steps; s += 1) {
+    const t = s / steps;
+    const curX = bezierAt(sx, c1x, c2x, ex, t);
+    const curY = bezierAt(sy, c1y, c2y, ey, t);
+    if (segmentHitsRect(prevX, prevY, curX, curY, cMinX, cMinY, cMaxX, cMaxY)) return false;
+    if (segmentHitsRect(prevX, prevY, curX, curY, tMinX, tMinY, tMaxX, tMaxY)) return false;
+    for (let i = 0; i < obstacles.length; i += 1) {
+      const ob = obstacles[i];
+      if (segmentHitsRect(prevX, prevY, curX, curY, ob.minX, ob.minY, ob.maxX, ob.maxY)) return false;
+    }
+    prevX = curX;
+    prevY = curY;
+  }
+  return true;
+}
+function candidateCurvesForRegion(centerBox, reg) {
+  const cLeft = centerBox.x - centerBox.w / 2;
+  const cRight = centerBox.x + centerBox.w / 2;
+  const cTop = centerBox.y - centerBox.h / 2;
+  const cBottom = centerBox.y + centerBox.h / 2;
+  const padX = Math.min(18, centerBox.w / 4);
+  const padY = Math.min(12, centerBox.h / 4);
+  const rLeft = reg.x - reg.w / 2;
+  const rRight = reg.x + reg.w / 2;
+  const rTop = reg.y - reg.h / 2;
+  const rBottom = reg.y + reg.h / 2;
+  const facing = [];
+  if (cBottom <= rTop + 1e-6) {
+    facing.push({ side: "top", sep: rTop - cBottom, ex: reg.x, ey: rTop, vertical: true });
+  }
+  if (cTop >= rBottom - 1e-6) {
+    facing.push({ side: "bottom", sep: cTop - rBottom, ex: reg.x, ey: rBottom, vertical: true });
+  }
+  if (cRight <= rLeft + 1e-6) {
+    facing.push({ side: "left", sep: rLeft - cRight, ex: rLeft, ey: reg.y, vertical: false });
+  }
+  if (cLeft >= rRight - 1e-6) {
+    facing.push({ side: "right", sep: cLeft - rRight, ex: rRight, ey: reg.y, vertical: false });
+  }
+  facing.sort((a, b) => b.sep - a.sep);
+  const primary = [];
+  const detours = [];
+  const detourRatios = [
+    [0.8, 0.9],
+    [0.15, 0.25]
+  ];
+  for (const face of facing) {
+    const { side, ex, ey, vertical } = face;
+    if (vertical) {
+      const fanSx = Math.round(clampNum(centerBox.x + (ex - centerBox.x) * 0.28, cLeft + padX, cRight - padX));
+      const directSx = Math.round(clampNum(ex, cLeft + padX, cRight - padX));
+      const sy = side === "top" ? cBottom : cTop;
+      const startXs = fanSx === directSx ? [fanSx] : [fanSx, directSx];
+      for (const sx of startXs) {
+        const midY = Math.round((sy + (ey - sy) * 0.5) * 10) / 10;
+        primary.push({ side, sx, sy, c1x: sx, c1y: midY, c2x: ex, c2y: midY, ex, ey });
+        for (const [r1, r2] of detourRatios) {
+          const c1y = Math.round((sy + (ey - sy) * r1) * 10) / 10;
+          const c2y = Math.round((sy + (ey - sy) * r2) * 10) / 10;
+          detours.push({ side, sx, sy, c1x: sx, c1y, c2x: ex, c2y, ex, ey });
+        }
+      }
+      if (cRight <= ex - 4) {
+        const lsx = cRight;
+        const lsy = centerBox.y;
+        const c1x = Math.round((lsx + (ex - lsx) * 0.65) * 10) / 10;
+        const c2y = Math.round((lsy + (ey - lsy) * 0.35) * 10) / 10;
+        detours.push({ side, sx: lsx, sy: lsy, c1x, c1y: lsy, c2x: ex, c2y, ex, ey });
+      } else if (cLeft >= ex + 4) {
+        const lsx = cLeft;
+        const lsy = centerBox.y;
+        const c1x = Math.round((lsx + (ex - lsx) * 0.65) * 10) / 10;
+        const c2y = Math.round((lsy + (ey - lsy) * 0.35) * 10) / 10;
+        detours.push({ side, sx: lsx, sy: lsy, c1x, c1y: lsy, c2x: ex, c2y, ex, ey });
+      }
+    } else {
+      const sx = side === "left" ? cRight : cLeft;
+      const fanSy = Math.round(clampNum(centerBox.y + (ey - centerBox.y) * 0.08, cTop + padY, cBottom - padY));
+      const directSy = Math.round(clampNum(ey, cTop + padY, cBottom - padY));
+      const startYs = fanSy === directSy ? [fanSy] : [fanSy, directSy];
+      for (const sy of startYs) {
+        const midX = Math.round((sx + (ex - sx) * 0.5) * 10) / 10;
+        primary.push({ side, sx, sy, c1x: midX, c1y: sy, c2x: midX, c2y: ey, ex, ey });
+        for (const [r1, r2] of detourRatios) {
+          const c1x = Math.round((sx + (ex - sx) * r1) * 10) / 10;
+          const c2x = Math.round((sx + (ex - sx) * r2) * 10) / 10;
+          detours.push({ side, sx, sy, c1x, c1y: sy, c2x, c2y: ey, ex, ey });
+        }
+      }
+      if (cBottom <= ey - 4) {
+        const lsx = centerBox.x;
+        const lsy = cBottom;
+        const c1y = Math.round((lsy + (ey - lsy) * 0.65) * 10) / 10;
+        const c2x = Math.round((lsx + (ex - lsx) * 0.35) * 10) / 10;
+        detours.push({ side, sx: lsx, sy: lsy, c1x: lsx, c1y, c2x, c2y: ey, ex, ey });
+      } else if (cTop >= ey + 4) {
+        const lsx = centerBox.x;
+        const lsy = cTop;
+        const c1y = Math.round((lsy + (ey - lsy) * 0.65) * 10) / 10;
+        const c2x = Math.round((lsx + (ex - lsx) * 0.35) * 10) / 10;
+        detours.push({ side, sx: lsx, sy: lsy, c1x: lsx, c1y, c2x, c2y: ey, ex, ey });
+      }
+    }
+  }
+  return [...primary, ...detours];
+}
+function facetEdges(geo) {
+  const centerBox = geo?.center;
+  const regions = Array.isArray(geo?.regions) ? geo.regions : [];
+  if (!centerBox || !regions.length) return [];
+  const enclosingCenter = regions.filter((reg) => boxEncloses(reg, centerBox));
+  if (enclosingCenter.length > 1) return [];
+  const holderId = enclosingCenter.length === 1 ? enclosingCenter[0].id : null;
+  const cardBoxes = [
+    ...Array.isArray(geo?.items) ? geo.items : [],
+    ...Array.isArray(geo?.more) ? geo.more : []
+  ];
+  const out = [];
+  for (const reg of regions) {
+    if (reg.status !== null && reg.status !== void 0) continue;
+    if (reg.id === holderId) continue;
+    if (boxEncloses(reg, centerBox)) continue;
+    if (regions.some((other) => other.id !== reg.id && boxEncloses(other, reg))) continue;
+    const obstacles = [];
+    for (const other of regions) {
+      if (other.id === reg.id) continue;
+      if (other.id === holderId) {
+        const hTop = other.y - other.h / 2;
+        obstacles.push({
+          minX: other.x - other.w / 2 + 2,
+          maxX: other.x + other.w / 2 - 2,
+          minY: hTop,
+          maxY: hTop + REGION_HEADER_H - 4
+        });
+        continue;
+      }
+      obstacles.push({
+        minX: other.x - other.w / 2 - 1.5,
+        maxX: other.x + other.w / 2 + 1.5,
+        minY: other.y - other.h / 2 - 1.5,
+        maxY: other.y + other.h / 2 + 1.5
+      });
+    }
+    for (const card of cardBoxes) {
+      obstacles.push({
+        minX: card.x - card.w / 2 - 1.5,
+        maxX: card.x + card.w / 2 + 1.5,
+        minY: card.y - card.h / 2 - 1.5,
+        maxY: card.y + card.h / 2 + 1.5
+      });
+    }
+    const candidates = candidateCurvesForRegion(centerBox, reg);
+    let chosen = null;
+    for (const cand of candidates) {
+      const startInsideOther = regions.some(
+        (other) => other.id !== reg.id && other.id !== holderId && pointInsideBox(cand.sx, cand.sy, other, 0.5)
+      );
+      if (startInsideOther) continue;
+      const endInsideOther = regions.some(
+        (other) => other.id !== reg.id && pointInsideBox(cand.ex, cand.ey, other, 0.5)
+      );
+      if (endInsideOther) continue;
+      if (curveClearOfObstacles(cand, centerBox, reg, obstacles)) {
+        chosen = cand;
+        break;
+      }
+    }
+    if (chosen) {
+      out.push({
+        regionId: reg.id,
+        side: chosen.side,
+        sx: chosen.sx,
+        sy: chosen.sy,
+        ex: chosen.ex,
+        ey: chosen.ey,
+        c1x: chosen.c1x,
+        c1y: chosen.c1y,
+        c2x: chosen.c2x,
+        c2y: chosen.c2y,
+        d: `M${chosen.sx},${chosen.sy} C${chosen.c1x},${chosen.c1y} ${chosen.c2x},${chosen.c2y} ${chosen.ex},${chosen.ey}`
+      });
+    }
+  }
+  return out;
+}
+
 // src/view/features/facets.js
-function createFacets() {
-  return { name: "facets" };
+var FOCUSABLE_SELECTOR = 'button:not(:disabled), textarea:not(:disabled), input:not(:disabled), [tabindex="0"]';
+function stripBuiltin(preset) {
+  const copy = {
+    id: preset.id,
+    name: preset.name,
+    ...preset.help ? { help: preset.help } : {},
+    source: preset.source,
+    ...preset.source === "attribute" ? { attribute: preset.attribute } : {},
+    categories: Array.isArray(preset.categories) ? preset.categories.map((cat) => ({
+      id: cat.id,
+      label: cat.label,
+      ...cat.color ? { color: cat.color } : {},
+      ...cat.match ? { match: cat.match } : { values: [...cat.values ?? []] }
+    })) : preset.categories,
+    layout: preset.layout,
+    edges: preset.edges,
+    focusInCategory: preset.focusInCategory,
+    hideEmptyStatus: preset.hideEmptyStatus
+  };
+  return copy;
+}
+function uniqueCopyPreset(source, existingPresets) {
+  const taken = new Set(existingPresets.map((item) => item.id));
+  const baseId = `${source.id}-copy`.replace(/[^a-z0-9-]+/g, "-");
+  let nextId = baseId;
+  let counter = 2;
+  while (taken.has(nextId)) {
+    nextId = `${baseId}-${counter}`;
+    counter += 1;
+  }
+  const clean = stripBuiltin(source);
+  return {
+    ...clean,
+    id: nextId,
+    name: `${source.name} copy`
+  };
+}
+function placeBox(element, box) {
+  element.style.width = `${box.w}px`;
+  element.style.height = `${box.h}px`;
+  element.style.transform = `translate(${box.x - box.w / 2}px, ${box.y - box.h / 2}px)`;
+}
+function createGearIcon(svgHelper) {
+  const icon = svgHelper("svg", "compass-facets-gear-icon");
+  icon.setAttribute("viewBox", "0 0 16 16");
+  icon.setAttribute("width", "14");
+  icon.setAttribute("height", "14");
+  icon.setAttribute("aria-hidden", "true");
+  const outer = svgHelper("path");
+  outer.setAttribute(
+    "d",
+    "M6.8 1.5h2.4l.4 1.7a5 5 0 0 1 1.2.7l1.6-.6 1.2 2.1-1.3 1.1a5 5 0 0 1 0 1.4l1.3 1.1-1.2 2.1-1.6-.6a5 5 0 0 1-1.2.7l-.4 1.7H6.8l-.4-1.7a5 5 0 0 1-1.2-.7l-1.6.6-1.2-2.1 1.3-1.1a5 5 0 0 1 0-1.4L2.4 5.4l1.2-2.1 1.6.6a5 5 0 0 1 1.2-.7l.4-1.7z"
+  );
+  outer.setAttribute("fill", "none");
+  outer.setAttribute("stroke", "currentColor");
+  outer.setAttribute("stroke-width", "1.3");
+  outer.setAttribute("stroke-linejoin", "round");
+  const inner = svgHelper("circle");
+  inner.setAttribute("cx", "8");
+  inner.setAttribute("cy", "7.2");
+  inner.setAttribute("r", "2");
+  inner.setAttribute("fill", "none");
+  inner.setAttribute("stroke", "currentColor");
+  inner.setAttribute("stroke-width", "1.3");
+  icon.append(outer, inner);
+  return icon;
+}
+function createFacets(ctx) {
+  let lastClassified = null;
+  let helpOpen = false;
+  let currentGearBtn = null;
+  let editorOpen = false;
+  let returnFocusEl = null;
+  const expandedByCenter = /* @__PURE__ */ new Map();
+  const warnedFallbacks = /* @__PURE__ */ new Set();
+  const hasDom = Boolean(ctx?.dom?.world && ctx?.dom?.root && typeof ctx?.el === "function");
+  const layer = hasDom ? ctx.el("div", "compass-facets") : null;
+  if (layer && ctx.lifecycle?.node) {
+    ctx.lifecycle.node(layer, ctx.dom.world);
+  } else if (layer) {
+    ctx.dom.world.append(layer);
+  }
+  function updateRegionEdgeHover(activeNode) {
+    if (!layer || typeof layer.querySelectorAll !== "function") return;
+    const edgeGroups = layer.querySelectorAll(".compass-facet-edge");
+    if (!edgeGroups.length) return;
+    if (!activeNode) {
+      for (const grp of edgeGroups) {
+        grp.classList.toggle("is-hot", false);
+        grp.classList.toggle("is-dim", false);
+      }
+      return;
+    }
+    const isCenter = activeNode.classList?.contains?.("compass-node-center");
+    const hoveredRegion = activeNode.dataset?.region || "";
+    for (const grp of edgeGroups) {
+      const hot = Boolean(isCenter || hoveredRegion && grp.dataset?.region === hoveredRegion);
+      grp.classList.toggle("is-hot", hot);
+      grp.classList.toggle("is-dim", !hot);
+    }
+  }
+  if (layer && typeof layer.addEventListener === "function") {
+    const onOver = (event) => {
+      const node = event.target?.closest?.(".compass-node") ?? null;
+      updateRegionEdgeHover(node);
+    };
+    const onOut = (event) => {
+      const next = event.relatedTarget?.closest?.(".compass-node") ?? null;
+      if (!next || !layer.contains?.(next)) updateRegionEdgeHover(null);
+    };
+    if (ctx.lifecycle?.event) {
+      ctx.lifecycle.event(layer, "pointerover", onOver);
+      ctx.lifecycle.event(layer, "pointerout", onOut);
+    } else {
+      layer.addEventListener("pointerover", onOver);
+      layer.addEventListener("pointerout", onOut);
+    }
+  }
+  let backdrop = null;
+  let dialogEl = null;
+  let listEl = null;
+  let jsonArea = null;
+  let errorsEl = null;
+  let loadedJsonSnapshot = "";
+  function readCustomList(settingsOverride = null) {
+    const settings = settingsOverride ?? ctx?.state?.settings;
+    if (Array.isArray(settings?.facetsPresets)) return settings.facetsPresets;
+    const raw = ctx?.extensionAPI?.settings?.get?.(SETTING_IDS.facetsPresets);
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === "string") {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  }
+  function viewSelection(settingsOverride = null) {
+    const views = ctx?.features?.get?.("views");
+    if (typeof views?.current === "function") {
+      const cur = views.current();
+      if (cur && typeof cur.view === "string") {
+        return {
+          view: cur.view,
+          preset: cur.preset || settingsOverride?.facetsPreset || ctx?.state?.settings?.facetsPreset || "roles"
+        };
+      }
+    }
+    const settings = settingsOverride ?? ctx?.state?.settings;
+    return {
+      view: settings?.view || "compass",
+      preset: settings?.facetsPreset || "roles"
+    };
+  }
+  async function selectPreset(id) {
+    const views = ctx?.features?.get?.("views");
+    if (typeof views?.set === "function") {
+      await views.set("facets", id);
+      return;
+    }
+    await ctx?.saveSetting?.(SETTING_IDS.view, "facets");
+    await ctx?.saveSetting?.(SETTING_IDS.facetsPreset, id);
+    ctx?.rebuild?.();
+    ctx?.render?.();
+    ctx?.fit?.(true);
+  }
+  function expandedSetFor(centerUid, presetId = "") {
+    if (!centerUid) return null;
+    const key = `${centerUid}\0${presetId}`;
+    if (!expandedByCenter.has(key)) expandedByCenter.set(key, /* @__PURE__ */ new Set());
+    return expandedByCenter.get(key);
+  }
+  function presets() {
+    return allPresets(readCustomList()).map(({ id, name, builtin }) => ({ id, name, builtin }));
+  }
+  function classified() {
+    if (viewSelection().view !== "facets") return null;
+    return lastClassified;
+  }
+  function clearView() {
+    lastClassified = null;
+    currentGearBtn = null;
+    if (layer) layer.replaceChildren();
+  }
+  function renderErrors(messages) {
+    if (!errorsEl) return;
+    errorsEl.replaceChildren();
+    if (!messages?.length) {
+      errorsEl.hidden = true;
+      return;
+    }
+    for (const msg of messages) {
+      errorsEl.append(ctx.el("li", "compass-facets-error", msg));
+    }
+    errorsEl.hidden = false;
+  }
+  function setEditorJson(presetObj) {
+    if (!jsonArea) return;
+    const formatted = JSON.stringify(presetObj, null, 2);
+    jsonArea.value = formatted;
+    loadedJsonSnapshot = formatted;
+    renderErrors([]);
+  }
+  function refreshEditorList(selectedId = null) {
+    if (!listEl) return;
+    listEl.replaceChildren();
+    const list = allPresets(readCustomList());
+    const activeId = selectedId ?? findPreset(list, viewSelection().preset).id;
+    for (const item of list) {
+      const row = ctx.el(
+        "div",
+        `compass-facets-preset-row${item.id === activeId ? " is-selected" : ""}`
+      );
+      row.dataset.presetId = item.id;
+      const info = ctx.el("div", "compass-facets-preset-info");
+      const titleBtn = ctx.button("compass-facets-preset-select", item.name, `Use ${item.name}`);
+      titleBtn.addEventListener("click", () => {
+        ctx.guard(async () => {
+          await selectPreset(item.id);
+          refreshEditorList(item.id);
+        })();
+      });
+      const badge = ctx.el("span", "compass-facets-preset-badge", item.builtin ? "Built-in" : "Custom");
+      info.append(titleBtn, badge);
+      const actions = ctx.el("div", "compass-facets-preset-actions");
+      if (!item.builtin) {
+        const editBtn = ctx.button("compass-facets-action-edit", "Edit", `Edit ${item.name}`);
+        editBtn.addEventListener("click", () => {
+          setEditorJson(stripBuiltin(item));
+          jsonArea?.focus();
+        });
+        actions.append(editBtn);
+      }
+      const dupBtn = ctx.button("compass-facets-action-duplicate", "Duplicate", `Duplicate ${item.name}`);
+      dupBtn.addEventListener("click", () => {
+        const copy = uniqueCopyPreset(item, list);
+        setEditorJson(copy);
+        jsonArea?.focus();
+      });
+      actions.append(dupBtn);
+      if (!item.builtin) {
+        const delBtn = ctx.button("compass-facets-action-delete", "Delete", `Delete ${item.name}`);
+        delBtn.addEventListener("click", () => {
+          ctx.guard(async () => {
+            const rawList = readCustomList();
+            const nextList = rawList.filter((entry) => {
+              const checked = validatePreset(entry);
+              const entryId = checked.ok ? checked.preset.id : entry?.id;
+              return entryId !== item.id;
+            });
+            await ctx?.saveSetting?.(SETTING_IDS.facetsPresets, nextList);
+            const wasSelected = viewSelection().preset === item.id;
+            if (wasSelected) {
+              await selectPreset(BUILTIN_PRESETS[0].id);
+            } else {
+              ctx?.render?.();
+            }
+            const updatedAll = allPresets(nextList);
+            const fallbackActive = findPreset(updatedAll, wasSelected ? BUILTIN_PRESETS[0].id : viewSelection().preset);
+            setEditorJson(fallbackActive.builtin ? uniqueCopyPreset(fallbackActive, updatedAll) : stripBuiltin(fallbackActive));
+            refreshEditorList(fallbackActive.id);
+          })();
+        });
+        actions.append(delBtn);
+      }
+      row.append(info, actions);
+      listEl.append(row);
+    }
+  }
+  async function handleSavePreset() {
+    if (!jsonArea) return;
+    const rawText = jsonArea.value.trim();
+    if (!rawText) {
+      renderErrors(["Paste or write a preset JSON object before saving."]);
+      return;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      renderErrors(["Invalid JSON. Check quotes, commas, and brackets."]);
+      return;
+    }
+    const checked = validatePreset(parsed);
+    if (!checked.ok) {
+      renderErrors(checked.errors);
+      return;
+    }
+    renderErrors([]);
+    const saved = checked.preset;
+    const existingValid = [];
+    for (const item of readCustomList()) {
+      const res = validatePreset(item);
+      if (res.ok) existingValid.push(res.preset);
+    }
+    const idx = existingValid.findIndex((item) => item.id === saved.id);
+    if (idx >= 0) existingValid[idx] = saved;
+    else existingValid.push(saved);
+    await ctx?.saveSetting?.(SETTING_IDS.facetsPresets, existingValid);
+    await selectPreset(saved.id);
+    setEditorJson(stripBuiltin(saved));
+    refreshEditorList(saved.id);
+    ctx?.setStatus?.(`Saved preset "${saved.name}".`);
+  }
+  function closePresetEditor({ restoreFocus = true } = {}) {
+    if (!editorOpen || !backdrop) return;
+    editorOpen = false;
+    backdrop.hidden = true;
+    renderErrors([]);
+    if (!restoreFocus) return;
+    const target = currentGearBtn?.isConnected ? currentGearBtn : returnFocusEl;
+    if (target && typeof target.focus === "function") {
+      target.focus({ preventScroll: true });
+    }
+  }
+  function ensureDialog() {
+    if (backdrop || !hasDom) return;
+    backdrop = ctx.el("div", "compass-facets-backdrop");
+    backdrop.hidden = true;
+    backdrop.setAttribute("role", "dialog");
+    backdrop.setAttribute("aria-modal", "true");
+    backdrop.setAttribute("aria-label", "Facets presets");
+    dialogEl = ctx.el("div", "compass-facets-dialog");
+    const head = ctx.el("div", "compass-facets-dialog-head");
+    const title = ctx.el("h2", "compass-facets-dialog-title", "Facets presets");
+    const closeBtn = ctx.button("compass-facets-dialog-close", "×", "Close preset editor");
+    head.append(title, closeBtn);
+    const body = ctx.el("div", "compass-facets-dialog-body");
+    const sidebar = ctx.el("div", "compass-facets-dialog-sidebar");
+    const sidebarLabel = ctx.el("div", "compass-facets-section-label", "Presets");
+    listEl = ctx.el("div", "compass-facets-preset-list");
+    sidebar.append(sidebarLabel, listEl);
+    const editorPane = ctx.el("div", "compass-facets-dialog-editor");
+    const editorLabel = ctx.el("div", "compass-facets-section-label", "Preset JSON");
+    jsonArea = ctx.el("textarea", "compass-facets-json");
+    jsonArea.rows = 14;
+    jsonArea.spellcheck = false;
+    jsonArea.setAttribute("aria-label", "Preset JSON");
+    errorsEl = ctx.el("ul", "compass-facets-errors");
+    errorsEl.hidden = true;
+    const actionRow = ctx.el("div", "compass-facets-editor-actions");
+    const saveBtn = ctx.button("compass-facets-save", "Save");
+    const cancelBtn = ctx.button("compass-facets-cancel", "Cancel");
+    const copyBtn = ctx.button("compass-facets-copy", "Copy JSON");
+    const importBtn = ctx.button("compass-facets-import", "Import");
+    actionRow.append(saveBtn, cancelBtn, copyBtn, importBtn);
+    editorPane.append(editorLabel, jsonArea, errorsEl, actionRow);
+    body.append(sidebar, editorPane);
+    dialogEl.append(head, body);
+    backdrop.append(dialogEl);
+    if (ctx.lifecycle?.node) ctx.lifecycle.node(backdrop, ctx.dom.root);
+    else ctx.dom.root.append(backdrop);
+    const register = (target, event, handler) => {
+      if (ctx.lifecycle?.event) ctx.lifecycle.event(target, event, handler);
+      else target.addEventListener(event, handler);
+    };
+    register(backdrop, "pointerdown", (event) => {
+      event.stopPropagation();
+    });
+    register(backdrop, "click", (event) => {
+      if (event.target === backdrop) closePresetEditor();
+    });
+    register(closeBtn, "click", () => closePresetEditor());
+    register(cancelBtn, "click", () => closePresetEditor());
+    register(saveBtn, "click", ctx.guard(() => handleSavePreset()));
+    register(copyBtn, "click", ctx.guard(async () => {
+      const ok = await copyText(jsonArea.value);
+      ctx?.setStatus?.(ok ? "Copied preset JSON." : "Could not copy JSON.");
+    }));
+    register(importBtn, "click", ctx.guard(async () => {
+      let clip = "";
+      if (typeof globalThis.navigator?.clipboard?.readText === "function") {
+        try {
+          clip = await globalThis.navigator.clipboard.readText() ?? "";
+        } catch {
+          clip = "";
+        }
+      }
+      if (clip.trim() && clip.trim() !== jsonArea.value.trim()) {
+        jsonArea.value = clip;
+        loadedJsonSnapshot = "";
+        renderErrors([]);
+        jsonArea.focus();
+        ctx?.setStatus?.("Imported JSON from clipboard. Review and press Save.");
+      } else if (jsonArea.value.trim() && jsonArea.value !== loadedJsonSnapshot) {
+        await handleSavePreset();
+      } else {
+        jsonArea.value = "";
+        loadedJsonSnapshot = "";
+        jsonArea.placeholder = "Paste preset JSON here, then press Save.";
+        renderErrors([]);
+        jsonArea.focus();
+      }
+    }));
+    register(backdrop, "keydown", (event) => {
+      if (!editorOpen) return;
+      if (event.key === "Escape") return;
+      if (event.key === "Tab") {
+        const focusable = [...dialogEl.querySelectorAll(FOCUSABLE_SELECTOR)].filter((item) => !item.hidden && item.offsetParent !== null);
+        if (focusable.length) {
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          const active = globalThis.document?.activeElement;
+          if (event.shiftKey) {
+            if (active === first || !dialogEl.contains(active)) {
+              event.preventDefault();
+              last.focus();
+            }
+          } else if (active === last || !dialogEl.contains(active)) {
+            event.preventDefault();
+            first.focus();
+          }
+        }
+        event.stopPropagation();
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+        event.stopPropagation();
+        return;
+      }
+      if (event.target !== jsonArea && event.key !== "Enter" && event.key !== " ") {
+        event.stopPropagation();
+      }
+    });
+  }
+  function openPresetEditor() {
+    ensureDialog();
+    if (!backdrop) return;
+    returnFocusEl = globalThis.document?.activeElement ?? null;
+    const list = allPresets(readCustomList());
+    const active = findPreset(list, viewSelection().preset);
+    setEditorJson(active.builtin ? uniqueCopyPreset(active, list) : stripBuiltin(active));
+    refreshEditorList(active.id);
+    backdrop.hidden = false;
+    editorOpen = true;
+    jsonArea?.focus({ preventScroll: true });
+  }
+  function buildCenterCard(hood, box) {
+    const element = ctx.el("div", "compass-node compass-node-center");
+    element.dataset.uid = hood.center.uid;
+    element.dataset.key = `center:${hood.center.uid}`;
+    element.dataset.zone = "center";
+    element.dataset.style = "center";
+    element.dataset.kind = hood.center.kind;
+    element.tabIndex = 0;
+    element.setAttribute("role", "button");
+    element.setAttribute("aria-label", `Center: ${hood.center.title}`);
+    element.title = hood.center.title;
+    const head = ctx.el("div", "compass-center-head");
+    const kind = ctx.el("span", "compass-kind", hood.center.kind === "block" ? "Block" : "Page");
+    const title = ctx.el("span", "compass-node-title", hood.center.title);
+    head.append(kind, title);
+    element.append(head);
+    placeBox(element, box);
+    return element;
+  }
+  function buildHeader(preset, contentBounds) {
+    const header = ctx.el("div", "compass-facets-header");
+    const row = ctx.el("div", "compass-facets-header-row");
+    const title = ctx.el("span", "compass-facets-title", preset.name);
+    const helpBtn = ctx.button("compass-facets-help-toggle", "?", "Toggle preset help");
+    helpBtn.setAttribute("aria-pressed", helpOpen ? "true" : "false");
+    helpBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      helpOpen = !helpOpen;
+      ctx?.render?.();
+    });
+    const gearBtn = ctx.button("compass-facets-gear", "", "Edit presets");
+    gearBtn.append(createGearIcon(ctx.svg));
+    gearBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openPresetEditor();
+    });
+    currentGearBtn = gearBtn;
+    row.append(title, helpBtn, gearBtn);
+    header.append(row);
+    const helpText = preset.help || "Custom facets preset.";
+    if (helpOpen) {
+      header.append(ctx.el("p", "compass-facets-help", helpText));
+    }
+    header.addEventListener("pointerdown", (event) => {
+      event.stopPropagation();
+    });
+    const reserveH = helpOpen ? 76 : 44;
+    const headerX = contentBounds.minX;
+    const headerY = contentBounds.minY - reserveH;
+    header.style.transform = `translate(${headerX}px, ${headerY}px)`;
+    return {
+      element: header,
+      bounds: {
+        minX: Math.min(contentBounds.minX, headerX),
+        minY: headerY,
+        maxX: Math.max(contentBounds.maxX, headerX + 280),
+        maxY: contentBounds.maxY
+      }
+    };
+  }
+  function renderView({ hood, settings }) {
+    const state = viewSelection(settings);
+    if (state.view !== "facets") {
+      clearView();
+      return null;
+    }
+    if (!hood || !layer) return null;
+    const list = allPresets(readCustomList(settings));
+    const preset = findPreset(list, state.preset);
+    const neighbors = (hood.nodes ?? []).filter((node) => node && node.kind !== "group");
+    layer.replaceChildren();
+    if (neighbors.length === 0) {
+      lastClassified = classify(preset, []);
+      const centerBox = { x: 0, y: 0, w: 240, h: 56 };
+      const emptyEl = ctx.el("p", "compass-facets-empty", "Nothing is connected here yet.");
+      emptyEl.style.transform = `translate(-160px, ${centerBox.h / 2 + 28}px)`;
+      const rawBounds = { minX: -160, minY: -centerBox.h / 2, maxX: 160, maxY: centerBox.h / 2 + 64 };
+      const header2 = buildHeader(preset, rawBounds);
+      layer.append(header2.element, buildCenterCard(hood, centerBox), emptyEl);
+      return {
+        view: "facets",
+        geometry: {
+          center: centerBox,
+          items: [],
+          rows: [],
+          chips: [],
+          more: false,
+          bounds: header2.bounds,
+          nodes: []
+        }
+      };
+    }
+    const queryNodes = hood.center?.uid ? [hood.center, ...neighbors] : neighbors;
+    const factsMap = ctx.facts(queryNodes);
+    const neighborFacts = neighbors.map((node) => factsMap.get(node.uid)).filter(Boolean);
+    const result = classify(preset, neighborFacts);
+    lastClassified = result;
+    let focusCategory = null;
+    if (preset.focusInCategory && hood.center?.uid) {
+      const centerFact = factsMap.get(hood.center.uid);
+      focusCategory = centerCategory(preset, centerFact, result.categories);
+    }
+    const expandedRegions = expandedSetFor(hood.center?.uid, preset.id);
+    const geo = layoutFacets(result, { focusCategory, expandedRegions });
+    if (geo.fallback === "circular" && !warnedFallbacks.has(preset.id)) {
+      warnedFallbacks.add(preset.id);
+      ctx?.setStatus?.("Quadrants needs four categories. Showing a circle instead.");
+    }
+    const isConcentric = preset.layout === "concentric" && !geo.fallback;
+    const orderedRegions = isConcentric ? [
+      ...[...geo.regions.filter((reg) => reg.status === null)].reverse(),
+      ...geo.regions.filter((reg) => reg.status !== null)
+    ] : geo.regions;
+    const regionContainer = ctx.el("div", "compass-facets-regions");
+    for (const reg of orderedRegions) {
+      const classes = ["compass-facet-region"];
+      if (reg.status) classes.push("compass-facet-region-status");
+      if (isConcentric && !reg.status) classes.push("compass-facet-region-ring");
+      const regEl = ctx.el("div", classes.join(" "));
+      regEl.dataset.paint = "region";
+      regEl.dataset.region = reg.id;
+      if (reg.status) regEl.dataset.status = reg.status;
+      else if (reg.color) regEl.style.setProperty("--compass-facet-color", reg.color);
+      const labelEl = ctx.el("div", "compass-region-label");
+      const nameSpan = ctx.el("span", "compass-region-name", reg.label);
+      const countSpan = ctx.el("span", "compass-region-count", String(reg.count));
+      labelEl.append(nameSpan, " ", countSpan);
+      regEl.append(labelEl);
+      placeBox(regEl, reg);
+      regionContainer.append(regEl);
+    }
+    layer.append(regionContainer);
+    const regionCurves = preset.edges !== false ? facetEdges(geo) : [];
+    if (regionCurves.length > 0) {
+      const edgeSvg = ctx.svg("svg", "compass-edges compass-facets-edges");
+      edgeSvg.setAttribute("width", "1");
+      edgeSvg.setAttribute("height", "1");
+      for (const edge of regionCurves) {
+        const group = ctx.svg("g", "compass-facet-edge");
+        group.dataset.region = edge.regionId;
+        const line = ctx.svg("path", "compass-edge-line");
+        line.setAttribute("d", edge.d);
+        group.append(line);
+        edgeSvg.append(group);
+      }
+      layer.append(edgeSvg);
+    }
+    const nodeByUid = new Map(neighbors.map((node) => [node.uid, node]));
+    const catLabelById = new Map(result.categories.map((cat) => [cat.id, cat.label]));
+    const hiddenByLenses = ctx?.features?.get?.("lenses")?.hiddenFor?.(neighbors);
+    const drawnNodes = [];
+    layer.append(buildCenterCard(hood, geo.center));
+    for (const item of geo.items) {
+      const node = nodeByUid.get(item.uid);
+      if (!node) continue;
+      drawnNodes.push(node);
+      const cardEl = ctx.el("div", "compass-node compass-facet-card");
+      cardEl.dataset.uid = node.uid;
+      cardEl.dataset.key = item.key;
+      cardEl.dataset.zone = node.zone;
+      cardEl.dataset.region = item.zone;
+      cardEl.dataset.style = node.style;
+      cardEl.dataset.kind = node.kind;
+      cardEl.tabIndex = 0;
+      cardEl.setAttribute("role", "button");
+      if (hiddenByLenses instanceof Set && hiddenByLenses.has(node.uid)) {
+        cardEl.classList.add("compass-fade");
+      }
+      const visibleTitle = typeof node.alias === "string" && node.alias ? node.alias : node.title;
+      cardEl.append(ctx.el("span", "compass-node-title", visibleTitle));
+      const matchedIds = result.matches?.[node.uid];
+      if (Array.isArray(matchedIds) && matchedIds.length > 1) {
+        const matchedLabels = matchedIds.map((id) => catLabelById.get(id) || id).join(", ");
+        cardEl.title = `${node.title} — Matches: ${matchedLabels}`;
+        cardEl.setAttribute("aria-label", `${node.title}, Conflicting (${matchedLabels})`);
+      } else {
+        const why = node.label ? ` — ${node.label}` : "";
+        cardEl.title = `${node.title}${why}`;
+        cardEl.setAttribute("aria-label", `${node.title}${why}`);
+      }
+      placeBox(cardEl, item);
+      layer.append(cardEl);
+    }
+    for (const slot of geo.more) {
+      const moreBtn = ctx.button("compass-facet-more", `+${slot.count} more`, `Show ${slot.count} more`);
+      moreBtn.dataset.region = slot.regionId;
+      moreBtn.addEventListener("pointerdown", (event) => {
+        event.stopPropagation();
+      });
+      moreBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const set = expandedSetFor(hood.center?.uid, preset.id);
+        if (set) set.add(slot.regionId);
+        ctx?.render?.();
+        ctx?.fit?.(true);
+      });
+      placeBox(moreBtn, slot);
+      layer.append(moreBtn);
+    }
+    const header = buildHeader(preset, geo.bounds);
+    layer.prepend(header.element);
+    return {
+      view: "facets",
+      geometry: {
+        center: geo.center,
+        items: geo.items,
+        rows: [],
+        chips: [],
+        more: false,
+        bounds: header.bounds,
+        nodes: drawnNodes
+      }
+    };
+  }
+  function commands() {
+    const list = allPresets(readCustomList());
+    return [
+      {
+        id: "facets-edit",
+        title: "Facets: edit presets",
+        hint: "",
+        run: () => openPresetEditor()
+      },
+      ...list.map((preset) => ({
+        id: `facets-preset-${preset.id}`,
+        title: `Facets: ${preset.name}`,
+        hint: "",
+        run: () => selectPreset(preset.id)
+      }))
+    ];
+  }
+  function stageMenu() {
+    const state = viewSelection();
+    if (state.view !== "facets") return [];
+    const list = allPresets(readCustomList());
+    const active = findPreset(list, state.preset);
+    return [
+      ...list.map((preset) => {
+        const base = `Facets preset: ${preset.name}`;
+        return {
+          title: preset.id === active.id ? `✓ ${base}` : base,
+          run: () => selectPreset(preset.id)
+        };
+      }),
+      {
+        title: "Edit presets…",
+        run: () => openPresetEditor()
+      }
+    ];
+  }
+  function onEscape() {
+    if (!editorOpen) return false;
+    closePresetEditor({ restoreFocus: true });
+    return true;
+  }
+  function onClose() {
+    closePresetEditor({ restoreFocus: false });
+    helpOpen = false;
+    clearView();
+  }
+  function onSettings(settings) {
+    if (editorOpen) {
+      const list = allPresets(readCustomList(settings));
+      const active = findPreset(list, viewSelection(settings).preset);
+      refreshEditorList(active.id);
+    }
+  }
+  return {
+    name: "facets",
+    presets,
+    classified,
+    openPresetEditor,
+    renderView,
+    clearView,
+    commands,
+    stageMenu,
+    onEscape,
+    onClose,
+    onSettings
+  };
 }
 
 // src/model/lens.js
@@ -5631,7 +7548,7 @@ var OPERATOR_BY_OP = new Map(OPERATORS.map((item) => [item.op, item]));
 var COLOR_CHARS = /^[A-Za-z0-9#(),.% ]+$/;
 var HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 var FUNC_COLOR = /^(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\((?=.*[0-9])[A-Za-z0-9,%. ]+\)$/i;
-function isPlainObject(value) {
+function isPlainObject2(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 function slugLensId(name, existingIds = []) {
@@ -5648,7 +7565,7 @@ function isValidColor(value) {
   return HEX_COLOR.test(value) || FUNC_COLOR.test(value);
 }
 function normalizeCondition(raw, errors) {
-  if (!isPlainObject(raw)) {
+  if (!isPlainObject2(raw)) {
     errors.push("Each condition must be an object.");
     return null;
   }
@@ -5680,7 +7597,7 @@ function normalizeCondition(raw, errors) {
   return field ? { field, op: operator.op, value } : null;
 }
 function validateLens(raw) {
-  if (!isPlainObject(raw)) return { ok: false, errors: ["Lens must be an object."] };
+  if (!isPlainObject2(raw)) return { ok: false, errors: ["Lens must be an object."] };
   const errors = [];
   const name = typeof raw.name === "string" ? raw.name.trim() : "";
   if (!name) errors.push("Enter a name for the lens.");
@@ -5705,7 +7622,7 @@ function validateLens(raw) {
   const effect = typeof raw.effect === "string" ? raw.effect.trim() : "";
   if (!EFFECTS.has(effect)) errors.push("Effect must be show, hide, or style.");
   const match = {};
-  if (!isPlainObject(raw.match)) {
+  if (!isPlainObject2(raw.match)) {
     errors.push("Match rules are required.");
   } else {
     const hasAll = raw.match.all !== void 0;
@@ -5724,7 +7641,7 @@ function validateLens(raw) {
     }
   }
   const style = { fill: "", border: "", text: "" };
-  if (raw.style !== void 0 && !isPlainObject(raw.style)) {
+  if (raw.style !== void 0 && !isPlainObject2(raw.style)) {
     errors.push("Style must be an object.");
   } else if (raw.style) {
     for (const key of ["fill", "border", "text"]) {
