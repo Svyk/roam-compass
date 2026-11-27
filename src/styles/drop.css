@@ -1,0 +1,29 @@
+/* drop */
+.compass-root .compass-drop-hint {
+  position: absolute;
+  inset: 6px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--compass-accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--compass-accent) 8%, transparent);
+  pointer-events: none;
+}
+
+.compass-root .compass-drop-hint[hidden] {
+  display: none;
+}
+
+.compass-root .compass-drop-pill {
+  padding: 8px 16px;
+  border: 1px solid var(--compass-accent);
+  border-radius: 999px;
+  background: var(--compass-paper);
+  color: var(--compass-ink);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+}

@@ -13,6 +13,7 @@ import { createExport } from "./export.js";
 import { createEdit } from "./edit.js";
 import { createBoards } from "./boards.js";
 import { createDrawings } from "./drawings.js";
+import { createDrop } from "./drop.js";
 import { createMore } from "./more.js";
 
 export const FEATURES = Object.freeze([
@@ -31,5 +32,6 @@ export const FEATURES = Object.freeze([
   createEdit,
   createBoards,
   createDrawings,
+  createDrop,
   createMore,
 ]);
