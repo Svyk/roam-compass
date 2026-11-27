@@ -1,3 +1,4 @@
+import { createCompassExtensionTools, installCompassExtensionTools } from "./extension-tools.js";
 import { createLifecycle } from "./lifecycle.js";
 import { createHost } from "./host.js";
 import {
@@ -227,7 +228,16 @@ export async function onload({ extensionAPI, extension }) {
     stampVersion(version);
     const host = createHost({ lifecycle });
     const overlay = mountOverlay({ extensionAPI, lifecycle, host });
-    lifecycle.add(installRoamCompass(versionHost(), { overlay, host, extensionAPI, version }));
+    const win = versionHost();
+    lifecycle.add(installRoamCompass(win, { overlay, host, extensionAPI, version }));
+    if (win && win.RoamCompass) {
+      lifecycle.add(
+        installCompassExtensionTools(
+          win,
+          createCompassExtensionTools({ api: win.RoamCompass, version }),
+        ),
+      );
+    }
     await initializeSettings(extensionAPI);
     await lifecycle.settingsPanel(extensionAPI, createSettingsPanel({
       extensionAPI,
