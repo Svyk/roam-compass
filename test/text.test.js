@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { drawingTitle, labelParts, parseAttribute, plainText, removeToken, scanRefs, tailShape } from "../src/model/text.js";
+import { drawingTitle, labelParts, parseAttribute, plainText, removeToken, safeSlice, scanRefs, tailShape } from "../src/model/text.js";
 
 const titles = (text) => scanRefs(text).map((token) => (token.type === "block" ? `((${token.uid}))` : token.title));
 
@@ -177,4 +177,100 @@ test("regionOwner reads the d= token of a region block only", async () => {
   assert.equal(regionOwner("{{[[plexus-region]]: k=area ids=a}}"), null);
   assert.equal(regionOwner("{{[[excalidraw]]}} d=abc"), null);
   assert.equal(regionOwner(null), null);
+});
+
+const MAIN_PLAINTEXT_TABLE = [
+  [
+    'Schedule #TimeBlock [[Nautilus Log]] {{[[roam/render]]:((roam-render-Nautilus-Log-cljs)) 22 15 5 "" 21}}',
+    "Schedule #TimeBlock Nautilus Log roam/render",
+  ],
+  ["See [this note](((abc123def))) today", "See this note today"],
+  ["Claim#sup^^[(1)](((fn1aaaaaa)))^^ continues", "Claim#sup(1) continues"],
+  ["{{roam-grid-range: ((abc123def)) B2:D5}}", "roam-grid-range: (( )) B2:D5"],
+  ["{{[[plexus-region]]: d=abc123def r=1}} Region title", "plexus-region Region title"],
+  [
+    "{{[[TODO]]}} #[[task-status/Active]] Reply to [[Lori]] — recurring costs",
+    "TODO #task-status/Active Reply to Lori — recurring costs",
+  ],
+  ["{{[[DONE]]}} Call [[Jane]] **now** #[[Project X]]", "DONE Call Jane now #Project X"],
+  ["Read `((abc123def))` in code", "Read (( )) in code"],
+  ["[link](https://example.com) and ![img](https://example.com/a.png)", "link and img"],
+  // Intentional improvement over main's brace-matching bug ("query}}").
+  ["{{[[query]]: {and: [[TODO]] {not: [[DONE]]}}}}", "query"],
+  ["{{[[table]]}}", "table"],
+  ["{{[[pdf]]: https://example.com/a.pdf}}", "pdf"],
+  ["BT_attrDue:: [[November 22nd, 2026]]", "BT_attrDue:: November 22nd, 2026"],
+  ["plain text with ^^highlight^^ and ~~strike~~ and __italics__", "plain text with highlight and strike and italics"],
+];
+
+test("plainText matches main regression table without refs", () => {
+  for (const [input, expected] of MAIN_PLAINTEXT_TABLE) {
+    assert.equal(plainText(input), expected, `mismatch for ${input}`);
+  }
+});
+
+test("macros, aliases, and code stay atomic with refs supplied, while embeds resolve", () => {
+  const refs = {
+    "roam-render-Nautilus-Log-cljs": "(defn render [] :nope)",
+    abc123def: "Reply to Lori about costs",
+    fn1aaaaaa: "Footnote body",
+  };
+  assert.equal(
+    plainText(
+      'Schedule #TimeBlock [[Nautilus Log]] {{[[roam/render]]:((roam-render-Nautilus-Log-cljs)) 22 15 5 "" 21}}',
+      90,
+      { refs },
+    ),
+    "Schedule #TimeBlock Nautilus Log roam/render",
+  );
+  assert.equal(plainText("See [this note](((abc123def))) today", 90, { refs }), "See this note today");
+  assert.equal(plainText("Claim#sup^^[(1)](((fn1aaaaaa)))^^ continues", 90, { refs }), "Claim#sup(1) continues");
+  assert.equal(plainText("{{roam-grid-range: ((abc123def)) B2:D5}}", 90, { refs }), "roam-grid-range: (( )) B2:D5");
+  assert.equal(plainText("Read `((abc123def))` in code", 90, { refs }), "Read (( )) in code");
+  assert.equal(plainText("Read ```((abc123def))``` in code", 90, { refs }), "Read (( )) in code");
+
+  for (const variant of [
+    "{{[[embed]]: ((abc123def))}}",
+    "{{embed: ((abc123def))}}",
+    "{{[[embed-path]]: ((abc123def))}}",
+    "{{embed-path: ((abc123def))}}",
+    "{{[[embed-children]]: ((abc123def))}}",
+    "{{embed-children: ((abc123def))}}",
+  ]) {
+    const resolved = labelParts(variant, 90, { refs });
+    assert.equal(resolved.text, "Reply to Lori about costs", variant);
+    assert.deepEqual(resolved.parts, [{ text: "Reply to Lori about costs", ref: true }], variant);
+
+    const missing = labelParts(variant, 90);
+    assert.equal(missing.text, "(( ))", variant);
+    assert.deepEqual(missing.parts, [{ text: "(( ))" }], variant);
+  }
+});
+
+test("SmartBlock labels allow colons and strip Roam markup", () => {
+  const timed = labelParts("{{08:00:SmartBlock:Morning routine}} start");
+  assert.equal(timed.text, "08:00 start");
+  assert.deepEqual(timed.parts, [{ text: "08:00", button: true }, { text: " start" }]);
+
+  const linked = labelParts("{{[[Run]]:SmartBlock:Daily review}}");
+  assert.equal(linked.text, "Run Daily review");
+  assert.deepEqual(linked.parts, [{ text: "Run", button: true }, { text: " Daily review" }]);
+});
+
+test("plainText handles 25,000 spaces after {{ without backtracking", () => {
+  const input = `{{${" ".repeat(25000)}x`;
+  const start = performance.now();
+  const out = plainText(input, 90);
+  const elapsed = performance.now() - start;
+  assert.equal(out, "{{ x");
+  assert.ok(elapsed < 100, `expected < 100ms, got ${elapsed.toFixed(1)}ms`);
+});
+
+test("safeSlice cuts on grapheme boundaries for complex emoji", () => {
+  assert.equal(safeSlice("ab👨‍👩‍👧‍👦cd", 8), "ab");
+  assert.equal(safeSlice("ab👍🏽cd", 4), "ab");
+  assert.equal(safeSlice("ab🇺🇸cd", 4), "ab");
+  assert.equal(safeSlice("ab❤️cd", 3), "ab");
+  assert.equal(plainText("ab👨‍👩‍👧‍👦cd", 9), "ab…");
+  assert.equal(plainText("ab🇺🇸cd", 5), "ab…");
 });

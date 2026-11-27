@@ -549,9 +549,10 @@ function refMarkup(target) {
   if (target?.uid) return `((${target.uid}))`;
   return "";
 }
-var SMARTBLOCK_RE = /\{\{\s*([^:}][^:}]*?)\s*:(?:42)?SmartBlock:([^:}]+)(?::[^}]*)?\}\}/g;
 var BLOCK_REF_RE = /\(\(([\w-]+)\)\)/g;
 var MAX_REF_DEPTH = 2;
+var EMBED_NAMES = /* @__PURE__ */ new Set(["embed", "embed-path", "embed-children"]);
+var GRAPHEME_SEGMENTER = typeof Intl !== "undefined" && typeof Intl.Segmenter === "function" ? new Intl.Segmenter(void 0, { granularity: "grapheme" }) : null;
 function lookupRef(refs, uid) {
   if (!refs || !uid) return null;
   let value;
@@ -560,24 +561,177 @@ function lookupRef(refs, uid) {
   else if (typeof refs === "object" && Object.prototype.hasOwnProperty.call(refs, uid)) value = refs[uid];
   return typeof value === "string" ? value : null;
 }
+function closedCodeEnd(text, index) {
+  if (text.startsWith("```", index)) {
+    const end2 = text.indexOf("```", index + 3);
+    return end2 < 0 ? -1 : end2 + 3;
+  }
+  const end = text.indexOf("`", index + 1);
+  return end < 0 ? -1 : end + 1;
+}
+function matchBracePairs(text, ignoreCode) {
+  if (!text.includes("{{") || !text.includes("}}")) return null;
+  const pairs = /* @__PURE__ */ new Map();
+  const stack = [];
+  for (let i = 0; i < text.length; i += 1) {
+    if (ignoreCode && text[i] === "`") {
+      const end = closedCodeEnd(text, i);
+      if (end > i) {
+        i = end - 1;
+        continue;
+      }
+    }
+    const ch = text[i];
+    if (ch === "{") stack.push(i);
+    else if (ch === "}" && stack.length) pairs.set(stack.pop(), i);
+  }
+  return pairs;
+}
+function doubleBraceEnd(pairs, start) {
+  if (!pairs) return -1;
+  const outer = pairs.get(start);
+  const inner = pairs.get(start + 1);
+  if (outer === void 0 || inner === void 0) return -1;
+  return outer === inner + 1 ? outer + 1 : -1;
+}
+function matchLinkTarget(text, openParen) {
+  if (text[openParen] !== "(") return -1;
+  if (text.startsWith("((", openParen + 1)) {
+    const end2 = text.indexOf(")))", openParen + 3);
+    return end2 < 0 ? -1 : end2 + 3;
+  }
+  if (text.startsWith("[[", openParen + 1)) {
+    const end2 = matchBrackets(text, openParen + 1);
+    return end2 >= 0 && text[end2] === ")" ? end2 + 1 : -1;
+  }
+  const end = text.indexOf(")", openParen + 1);
+  return end < 0 ? -1 : end + 1;
+}
+function matchAliasOrImage(text, index, lastCloseBracket) {
+  if (index >= lastCloseBracket) return null;
+  const isImage = text[index] === "!" && text[index + 1] === "[";
+  if (!isImage && (text[index] !== "[" || text[index + 1] === "[")) return null;
+  const labelStart = isImage ? index + 2 : index + 1;
+  const closeBracket = text.indexOf("]", labelStart);
+  if (closeBracket < 0 || text[closeBracket + 1] !== "(") return null;
+  if (!isImage && closeBracket === labelStart) return null;
+  const end = matchLinkTarget(text, closeBracket + 1);
+  if (end < 0) return null;
+  return { isImage, label: text.slice(labelStart, closeBracket), end };
+}
+function parseSmartBlockBody(body) {
+  const idxA = body.indexOf(":SmartBlock:");
+  const idxB = body.indexOf(":42SmartBlock:");
+  let sepIndex = -1;
+  let sepLen = 0;
+  if (idxA >= 0 && (idxB < 0 || idxA < idxB)) {
+    sepIndex = idxA;
+    sepLen = ":SmartBlock:".length;
+  } else if (idxB >= 0) {
+    sepIndex = idxB;
+    sepLen = ":42SmartBlock:".length;
+  }
+  if (sepIndex < 0) return null;
+  const rawLabel = body.slice(0, sepIndex).trim();
+  if (!rawLabel) return null;
+  const afterSep = body.slice(sepIndex + sepLen);
+  const nextColon = afterSep.indexOf(":");
+  const rawWorkflow = (nextColon >= 0 ? afterSep.slice(0, nextColon) : afterSep).trim();
+  if (!rawWorkflow) return null;
+  const label = cleanMarkup(rawLabel).replace(/\s+/g, " ").trim();
+  const workflow = cleanMarkup(rawWorkflow).replace(/\s+/g, " ").trim();
+  if (!label) return null;
+  return { label, workflow };
+}
+function parseEmbedBody(body) {
+  const colon = body.indexOf(":");
+  if (colon < 0) return null;
+  let name = body.slice(0, colon).trim();
+  if (name.startsWith("[[") && name.endsWith("]]")) name = name.slice(2, -2);
+  if (!EMBED_NAMES.has(name)) return null;
+  const tail = body.slice(colon + 1).trim();
+  if (!tail.startsWith("((") || !tail.endsWith("))")) return null;
+  const uid = tail.slice(2, -2);
+  return UID_RE.test(uid) ? uid : null;
+}
+function renderOtherMacro(body) {
+  const trimmed = body.trimStart();
+  if (trimmed.startsWith("[[")) {
+    const end = matchBrackets(trimmed, 0);
+    if (end >= 0) return cleanMarkup(trimmed.slice(2, end - 2));
+  }
+  return cleanMarkup(body);
+}
+function stripMacrosLinear(text) {
+  const pairs = matchBracePairs(text, false);
+  if (!pairs) return text;
+  let out = "";
+  let cursor = 0;
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === "{" && text[i + 1] === "{") {
+      const end = doubleBraceEnd(pairs, i);
+      if (end > i) {
+        if (i > cursor) out += text.slice(cursor, i);
+        out += renderOtherMacro(text.slice(i + 2, end - 2));
+        i = end;
+        cursor = end;
+        continue;
+      }
+    }
+    i += 1;
+  }
+  if (cursor === 0) return text;
+  return out + text.slice(cursor);
+}
+function stripAliasesLinear(text) {
+  if (!text.includes("](")) return text;
+  const lastCloseBracket = text.lastIndexOf("]");
+  let out = "";
+  let cursor = 0;
+  let i = 0;
+  while (i < text.length) {
+    const hit = matchAliasOrImage(text, i, lastCloseBracket);
+    if (hit) {
+      if (i > cursor) out += text.slice(cursor, i);
+      out += hit.isImage ? hit.label || "image" : hit.label;
+      i = hit.end;
+      cursor = hit.end;
+      continue;
+    }
+    i += 1;
+  }
+  if (cursor === 0) return text;
+  return out + text.slice(cursor);
+}
 function cleanMarkup(raw) {
   let text = String(raw ?? "");
-  text = text.replace(/\{\{\s*\[\[(TODO|DONE)\]\]\s*\}\}/g, "$1");
-  text = text.replace(/\{\{\s*\[\[([^\]]+)\]\][^}]*\}\}/g, "$1");
-  text = text.replace(/\{\{([^}]*)\}\}/g, "$1");
-  text = text.replace(/!\[([^\]]*)\]\([^)]*\)/g, (_, alt) => alt || "image");
-  text = text.replace(/\[([^\]]+)\]\((?:\[\[[^\]]*\]\]|\(\([^)]*\)\)|[^)]*)\)/g, "$1");
-  text = text.replace(/#\[\[([^\]]+)\]\]/g, "#$1");
-  for (let pass = 0; pass < 3 && text.includes("[["); pass += 1) {
-    text = text.replace(/\[\[([^[\]]*)\]\]/g, "$1");
+  text = stripMacrosLinear(text);
+  text = stripAliasesLinear(text);
+  if (text.includes("[[")) {
+    text = text.replace(/#\[\[([^\]]+)\]\]/g, "#$1");
+    for (let pass = 0; pass < 3 && text.includes("[["); pass += 1) {
+      text = text.replace(/\[\[([^[\]]*)\]\]/g, "$1");
+    }
   }
-  text = text.replace(/\(\(([\w-]+)\)\)/g, "(( ))");
+  if (text.includes("((") && text.includes("))")) {
+    text = text.replace(/\(\(([\w-]+)\)\)/g, "(( ))");
+  }
   text = text.replace(/\*\*|__|\^\^|~~|`/g, "");
   return text;
 }
 function safeSlice(text, len) {
   if (len <= 0) return "";
   if (len >= text.length) return text;
+  if (GRAPHEME_SEGMENTER) {
+    let end2 = 0;
+    for (const { index, segment } of GRAPHEME_SEGMENTER.segment(text)) {
+      const next = index + segment.length;
+      if (next > len) break;
+      end2 = next;
+    }
+    return text.slice(0, end2);
+  }
   let end = len;
   const code = text.charCodeAt(end - 1);
   if (code >= 55296 && code <= 56319) end -= 1;
@@ -659,8 +813,22 @@ function truncateParts(parts, max) {
   }
   return { text: cut.map((part) => part.text).join(""), parts: cut };
 }
-function expandSegment(rawSegment, refs, depth, seen) {
+function resolveBlockRef(uid, refs, depth, seen) {
+  const target = depth < MAX_REF_DEPTH && !seen.has(uid) ? lookupRef(refs, uid) : null;
+  if (target != null) {
+    const nextSeen = new Set(seen);
+    nextSeen.add(uid);
+    const resolved = buildRawParts(target, refs, depth + 1, nextSeen).map((part) => part.text).join("").replace(/\s+/g, " ").trim();
+    if (resolved) return { text: resolved, ref: true };
+  }
+  return { text: "(( ))" };
+}
+function expandBareRefs(rawSegment, refs, depth, seen) {
   if (!rawSegment) return [];
+  if (!rawSegment.includes("((") || !rawSegment.includes("))")) {
+    const text = cleanMarkup(rawSegment);
+    return text ? [{ text }] : [];
+  }
   const pieces = [];
   const re = new RegExp(BLOCK_REF_RE.source, "g");
   let cursor = 0;
@@ -670,17 +838,7 @@ function expandSegment(rawSegment, refs, depth, seen) {
       const text = cleanMarkup(rawSegment.slice(cursor, match.index));
       if (text) pieces.push({ text });
     }
-    const uid = match[1];
-    const target = depth < MAX_REF_DEPTH && !seen.has(uid) ? lookupRef(refs, uid) : null;
-    if (target != null) {
-      const nextSeen = new Set(seen);
-      nextSeen.add(uid);
-      const resolved = buildRawParts(target, refs, depth + 1, nextSeen).map((part) => part.text).join("").replace(/\s+/g, " ").trim();
-      if (resolved) pieces.push({ text: resolved, ref: true });
-      else pieces.push({ text: "(( ))" });
-    } else {
-      pieces.push({ text: "(( ))" });
-    }
+    pieces.push(resolveBlockRef(match[1], refs, depth, seen));
     cursor = match.index + match[0].length;
   }
   if (cursor < rawSegment.length) {
@@ -689,31 +847,88 @@ function expandSegment(rawSegment, refs, depth, seen) {
   }
   return pieces;
 }
-function buildRawParts(raw, refs, depth, seen) {
+function tokenizeLabel(raw) {
   const tokens = [];
+  const pairs = matchBracePairs(raw, true);
+  const lastCloseBracket = raw.includes("](") ? raw.lastIndexOf("]") : -1;
   let cursor = 0;
-  const sbRe = new RegExp(SMARTBLOCK_RE.source, "g");
-  let match;
-  while (match = sbRe.exec(raw)) {
-    if (match.index > cursor) {
-      tokens.push({ button: false, pieces: expandSegment(raw.slice(cursor, match.index), refs, depth, seen) });
+  let i = 0;
+  const flushText = (end) => {
+    if (end > cursor) tokens.push({ kind: "text", raw: raw.slice(cursor, end) });
+  };
+  while (i < raw.length) {
+    const ch = raw[i];
+    if (ch === "`") {
+      const end = closedCodeEnd(raw, i);
+      if (end > i) {
+        flushText(i);
+        tokens.push({ kind: "code", raw: raw.slice(i, end) });
+        i = end;
+        cursor = end;
+        continue;
+      }
     }
-    tokens.push({
-      button: true,
-      label: match[1].trim(),
-      workflow: cleanMarkup(match[2]).replace(/\s+/g, " ").trim()
-    });
-    cursor = match.index + match[0].length;
+    if (ch === "{" && raw[i + 1] === "{") {
+      const end = doubleBraceEnd(pairs, i);
+      if (end > i) {
+        flushText(i);
+        const body = raw.slice(i + 2, end - 2);
+        const sb = parseSmartBlockBody(body);
+        if (sb) {
+          tokens.push({ kind: "smartblock", label: sb.label, workflow: sb.workflow });
+        } else {
+          const embedUid = parseEmbedBody(body);
+          if (embedUid) tokens.push({ kind: "embed", uid: embedUid });
+          else tokens.push({ kind: "macro", body });
+        }
+        i = end;
+        cursor = end;
+        continue;
+      }
+    }
+    if (lastCloseBracket >= 0 && (ch === "[" || ch === "!")) {
+      const hit = matchAliasOrImage(raw, i, lastCloseBracket);
+      if (hit) {
+        flushText(i);
+        tokens.push({ kind: "alias", isImage: hit.isImage, label: hit.label });
+        i = hit.end;
+        cursor = hit.end;
+        continue;
+      }
+    }
+    i += 1;
   }
-  if (cursor < raw.length) {
-    tokens.push({ button: false, pieces: expandSegment(raw.slice(cursor), refs, depth, seen) });
-  }
-  const hasOtherText = tokens.some(
-    (token) => !token.button && token.pieces.some((piece) => piece.text.trim() !== "")
+  flushText(raw.length);
+  return tokens;
+}
+function buildRawParts(raw, refs, depth, seen) {
+  const tokens = tokenizeLabel(raw);
+  const expanded = tokens.map((token) => {
+    if (token.kind === "smartblock") return token;
+    if (token.kind === "code") {
+      const text = cleanMarkup(token.raw);
+      return { kind: "pieces", pieces: text ? [{ text }] : [] };
+    }
+    if (token.kind === "embed") {
+      return { kind: "pieces", pieces: [resolveBlockRef(token.uid, refs, depth, seen)] };
+    }
+    if (token.kind === "macro") {
+      const text = renderOtherMacro(token.body);
+      return { kind: "pieces", pieces: text ? [{ text }] : [] };
+    }
+    if (token.kind === "alias") {
+      const cleaned = cleanMarkup(token.label);
+      const text = token.isImage ? cleaned || "image" : cleaned;
+      return { kind: "pieces", pieces: text ? [{ text }] : [] };
+    }
+    return { kind: "pieces", pieces: expandBareRefs(token.raw, refs, depth, seen) };
+  });
+  const hasOtherText = expanded.some(
+    (token) => token.kind !== "smartblock" && token.pieces.some((piece) => piece.text.trim() !== "")
   );
   const rawParts = [];
-  for (const token of tokens) {
-    if (!token.button) {
+  for (const token of expanded) {
+    if (token.kind !== "smartblock") {
       for (const piece of token.pieces) rawParts.push(piece);
       continue;
     }
@@ -899,7 +1114,7 @@ function blockLabel(uid, string, max, resolveRegion, refs) {
   if (resolveRegion && regionOwner(string) !== null) {
     const label = resolveRegion(uid, string);
     if (label) {
-      const text = label.length > max ? `${label.slice(0, Math.max(1, max - 1)).trimEnd()}…` : label;
+      const text = label.length > max ? `${safeSlice(label, Math.max(1, max - 1)).trimEnd()}…` : label;
       return { text, parts: null };
     }
   }

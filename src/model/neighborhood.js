@@ -1,5 +1,5 @@
 import { buildOntology, captionFor } from "./ontology.js";
-import { drawingTitle, labelParts, parseAttribute, regionOwner, scanRefs, splitNames, tailShape } from "./text.js";
+import { drawingTitle, labelParts, parseAttribute, regionOwner, safeSlice, scanRefs, splitNames, tailShape } from "./text.js";
 
 // One center, six relationship roles, four directions. Siblings sit in their own band.
 export const ROLES = ["parent", "child", "friend", "challenger", "previous", "next"];
@@ -166,7 +166,7 @@ function blockLabel(uid, string, max, resolveRegion, refs) {
   if (resolveRegion && regionOwner(string) !== null) {
     const label = resolveRegion(uid, string);
     if (label) {
-      const text = label.length > max ? `${label.slice(0, Math.max(1, max - 1)).trimEnd()}…` : label;
+      const text = label.length > max ? `${safeSlice(label, Math.max(1, max - 1)).trimEnd()}…` : label;
       return { text, parts: null };
     }
   }
