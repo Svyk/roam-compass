@@ -63,13 +63,20 @@ export function createKeys(ctx) {
   }
 
   function markGuideSeen() {
-    if (guideSeenLocal && isGuideSeen()) return;
+    if (guideSeenLocal) return;
     guideSeenLocal = true;
     if (typeof ctx?.saveSetting === "function") {
       void Promise.resolve(ctx.saveSetting(SETTING_IDS.guideSeen, true)).catch((error) => {
-        console.error("[compass] guide", error);
+        console.warn("[compass] guide", error);
       });
     }
+  }
+
+  function currentViewName(info) {
+    if (typeof info?.targetView === "string" && info.targetView) return info.targetView;
+    const raw = ctx?.extensionAPI?.settings?.get?.(SETTING_IDS.view);
+    if (typeof raw === "string" && raw) return raw;
+    return ctx?.state?.settings?.view || ctx?.features?.get?.("views")?.current?.()?.view || "compass";
   }
 
   if (ctx?.el && ctx?.button && ctx?.lifecycle && ctx?.dom?.stage && ctx?.dom?.root) {
@@ -330,7 +337,6 @@ export function createKeys(ctx) {
   function closeHelp(restore = true) {
     if (!helpOpen) return;
     helpOpen = false;
-    markGuideSeen();
     if (helpBackdrop) helpBackdrop.hidden = true;
     const target = savedFocus;
     savedFocus = null;
@@ -349,6 +355,10 @@ export function createKeys(ctx) {
 
     const centerEl = ctx?.dom?.world?.querySelector?.(".compass-node-center")
       ?? (ctx?.state?.current ? ctx?.state?.nodeEls?.get?.(ctx.state.current) : null);
+    const active = globalThis.document?.activeElement ?? null;
+    const opener = active && (!ctx?.dom?.root?.contains || ctx.dom.root.contains(active))
+      ? active
+      : (centerEl ?? ctx?.dom?.stage ?? null);
     const rect = centerEl?.getBoundingClientRect?.() ?? ctx?.dom?.stage?.getBoundingClientRect?.();
     let x = NaN;
     let y = NaN;
@@ -367,7 +377,7 @@ export function createKeys(ctx) {
         y = rect.top + rect.height / 2;
       }
     }
-    ctx?.openZonePop?.(zone, x, y);
+    ctx?.openZonePop?.(zone, x, y, opener);
   }
 
   function notifyWander(event) {
@@ -575,14 +585,18 @@ export function createKeys(ctx) {
     return false;
   }
 
-  function onOpen() {
+  function onOpen(info = {}) {
     syncGuideCopy();
-    if (helpBackdrop && !isGuideSeen()) help();
+    if (!helpBackdrop || isGuideSeen()) return;
+    if (info?.wander === true || ctx?.features?.get?.("wander")?.isActive?.()) return;
+    if (currentViewName(info) !== "compass") return;
+    markGuideSeen();
+    help();
   }
 
   function onSettings(settings) {
-    if (settings && typeof settings.guideSeen === "boolean") {
-      guideSeenLocal = settings.guideSeen;
+    if (settings?.guideSeen === true) {
+      guideSeenLocal = true;
     }
     syncGuideCopy();
   }
@@ -598,7 +612,7 @@ export function createKeys(ctx) {
 
   function commands() {
     return [
-      { id: "keys-help", title: "Keyboard help", hint: "Alt+?", run: () => help() },
+      { id: "keys-help", title: "How Compass works", hint: "Alt+?", run: () => help() },
       { id: "select-center", title: "Select the center", hint: "Alt+0", run: () => focusCenter() },
     ];
   }

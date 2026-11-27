@@ -138,9 +138,15 @@ function refused(reason) {
   return { ops: [], reason };
 }
 
+export function linkableTitle(title) {
+  if (typeof title !== "string") return false;
+  if (title.trim() === "") return false;
+  return !/[\[\]\r\n]/.test(title);
+}
+
 export function planAttributeWrite({ attribute, title, existing } = {}) {
   if (typeof attribute !== "string" || attribute.trim() === "") return refused("attribute");
-  if (typeof title !== "string" || title.includes("[") || title.includes("]")) return refused("title");
+  if (!linkableTitle(title)) return refused("title");
   const ref = `[[${title}]]`;
   if (existing == null) return { ops: [{ op: "create", string: `${attribute}:: ${ref}` }] };
   const current = typeof existing.string === "string" ? existing.string : String(existing.string ?? "");

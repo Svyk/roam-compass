@@ -85,6 +85,76 @@ export const SCENARIOS = {
     h.assert(h.q(".compass-zone-pop").hidden, "Escape closes add popup");
     h.equal(h.focused(), h.q(".compass-zone-add-south"), "Escape returns focus to the + button that opened it");
 
+    // Un-linkable title without Plexus: no Create rows, muted unselectable warning line.
+    h.click(".compass-zone-add-south");
+    await h.wait(50);
+    h.type(".compass-zone-input", "[Draft]");
+    await h.wait(50);
+    h.equal(h.count(".compass-zone-create-page"), 0, "no Create page row for [Draft]");
+    h.equal(h.count(".compass-zone-create-drawing"), 0, "no Create drawing row for [Draft]");
+    h.equal(
+      h.text(".compass-zone-results .compass-result-none"),
+      "A page title cannot contain [ or ].",
+      "muted notice explains why [Draft] cannot be linked",
+    );
+    h.key("Enter");
+    await h.wait(40);
+    h.assert(!h.q(".compass-zone-pop").hidden, "Enter on unselectable notice does not close popup");
+
+    // Ctrl+F with popup open closes popup before focusing search input.
+    h.key("f", { ctrlKey: true });
+    await h.wait(40);
+    h.assert(h.q(".compass-zone-pop").hidden, "Ctrl+F closes add popup");
+    h.equal(h.focused(), h.q(".compass-search"), "Ctrl+F moves focus to search input");
+
+    // With RoamPlexus stub: Create drawing row appears, is not default Enter pick, and is absent for bad titles.
+    const createdDrawings = [];
+    window.RoamPlexus = {
+      apiVersion: 2,
+      create(opts) {
+        createdDrawings.push(opts);
+        return Promise.resolve({ pageUid: "p-drawing-stub" });
+      },
+    };
+    try {
+      h.click(".compass-zone-add-south");
+      await h.wait(50);
+      h.type(".compass-zone-input", "Arch Diagram");
+      await h.wait(50);
+      const drawRow = h.q(".compass-zone-create-drawing");
+      h.assert(Boolean(drawRow), "Create drawing row appears when RoamPlexus is present");
+      h.equal(drawRow?.textContent?.trim(), 'Create drawing "Arch Diagram"', "Create drawing row text matches");
+      h.assert(!drawRow.classList.contains("compass-result-active"), "Create drawing is not what Enter picks by default");
+      h.assert(
+        h.q(".compass-zone-create-page")?.classList.contains("compass-result-active"),
+        "Create page row is highlighted by default",
+      );
+      h.key("Enter");
+      await h.wait(250);
+      h.equal(createdDrawings.length, 0, "Enter creates page rather than calling RoamPlexus.create");
+      const southAfterArch = h.qa('.compass-node[data-zone="south"] .compass-node-title').map((el) => el.textContent.trim());
+      h.assert(southAfterArch.includes("Arch Diagram"), "Enter linked Arch Diagram as a page");
+
+      h.click(".compass-zone-add-south");
+      await h.wait(50);
+      h.type(".compass-zone-input", "foo]bar");
+      await h.wait(50);
+      h.equal(h.count(".compass-zone-create-page"), 0, "Create page absent for foo]bar with Plexus");
+      h.equal(h.count(".compass-zone-create-drawing"), 0, "Create drawing absent for foo]bar with Plexus");
+      h.equal(
+        h.text(".compass-zone-results .compass-result-none"),
+        "A page title cannot contain [ or ].",
+        "muted notice shown for foo]bar with Plexus",
+      );
+      h.key("Enter");
+      await h.wait(40);
+      h.equal(createdDrawings.length, 0, "Enter on foo]bar never calls RoamPlexus.create");
+      h.key("Escape");
+      await h.wait(40);
+    } finally {
+      delete window.RoamPlexus;
+    }
+
     // Reopen with 20 results for visual inspection in the screenshot.
     h.click(".compass-zone-add-south");
     await h.wait(50);

@@ -273,9 +273,14 @@ function planZoneCreate({ existingDrawingUid } = {}) {
 function refused(reason) {
   return { ops: [], reason };
 }
+function linkableTitle(title) {
+  if (typeof title !== "string") return false;
+  if (title.trim() === "") return false;
+  return !/[\[\]\r\n]/.test(title);
+}
 function planAttributeWrite({ attribute, title, existing } = {}) {
   if (typeof attribute !== "string" || attribute.trim() === "") return refused("attribute");
-  if (typeof title !== "string" || title.includes("[") || title.includes("]")) return refused("title");
+  if (!linkableTitle(title)) return refused("title");
   const ref = `[[${title}]]`;
   if (existing == null) return { ops: [{ op: "create", string: `${attribute}:: ${ref}` }] };
   const current = typeof existing.string === "string" ? existing.string : String(existing.string ?? "");
@@ -10422,13 +10427,19 @@ function createKeys(ctx) {
     guideLine2.textContent = isFlipped() ? GUIDE_LINE_2_FLIPPED : GUIDE_LINE_2_NORMAL;
   }
   function markGuideSeen() {
-    if (guideSeenLocal && isGuideSeen()) return;
+    if (guideSeenLocal) return;
     guideSeenLocal = true;
     if (typeof ctx?.saveSetting === "function") {
       void Promise.resolve(ctx.saveSetting(SETTING_IDS.guideSeen, true)).catch((error) => {
-        console.error("[compass] guide", error);
+        console.warn("[compass] guide", error);
       });
     }
+  }
+  function currentViewName(info) {
+    if (typeof info?.targetView === "string" && info.targetView) return info.targetView;
+    const raw = ctx?.extensionAPI?.settings?.get?.(SETTING_IDS.view);
+    if (typeof raw === "string" && raw) return raw;
+    return ctx?.state?.settings?.view || ctx?.features?.get?.("views")?.current?.()?.view || "compass";
   }
   if (ctx?.el && ctx?.button && ctx?.lifecycle && ctx?.dom?.stage && ctx?.dom?.root) {
     pill = ctx.el("div", "compass-select-pill");
@@ -10663,7 +10674,6 @@ function createKeys(ctx) {
   function closeHelp(restore = true) {
     if (!helpOpen) return;
     helpOpen = false;
-    markGuideSeen();
     if (helpBackdrop) helpBackdrop.hidden = true;
     const target = savedFocus;
     savedFocus = null;
@@ -10679,6 +10689,8 @@ function createKeys(ctx) {
     else if (arrowKey === "ArrowLeft") zone = flipped ? "east" : "west";
     else if (arrowKey === "ArrowRight") zone = flipped ? "west" : "east";
     const centerEl = ctx?.dom?.world?.querySelector?.(".compass-node-center") ?? (ctx?.state?.current ? ctx?.state?.nodeEls?.get?.(ctx.state.current) : null);
+    const active = globalThis.document?.activeElement ?? null;
+    const opener = active && (!ctx?.dom?.root?.contains || ctx.dom.root.contains(active)) ? active : centerEl ?? ctx?.dom?.stage ?? null;
     const rect = centerEl?.getBoundingClientRect?.() ?? ctx?.dom?.stage?.getBoundingClientRect?.();
     let x = NaN;
     let y = NaN;
@@ -10697,7 +10709,7 @@ function createKeys(ctx) {
         y = rect.top + rect.height / 2;
       }
     }
-    ctx?.openZonePop?.(zone, x, y);
+    ctx?.openZonePop?.(zone, x, y, opener);
   }
   function notifyWander(event) {
     if (event?.target === globalThis.document?.body) {
@@ -10891,13 +10903,17 @@ function createKeys(ctx) {
     }
     return false;
   }
-  function onOpen() {
+  function onOpen(info = {}) {
     syncGuideCopy();
-    if (helpBackdrop && !isGuideSeen()) help();
+    if (!helpBackdrop || isGuideSeen()) return;
+    if (info?.wander === true || ctx?.features?.get?.("wander")?.isActive?.()) return;
+    if (currentViewName(info) !== "compass") return;
+    markGuideSeen();
+    help();
   }
   function onSettings(settings) {
-    if (settings && typeof settings.guideSeen === "boolean") {
-      guideSeenLocal = settings.guideSeen;
+    if (settings?.guideSeen === true) {
+      guideSeenLocal = true;
     }
     syncGuideCopy();
   }
@@ -10910,7 +10926,7 @@ function createKeys(ctx) {
   }
   function commands() {
     return [
-      { id: "keys-help", title: "Keyboard help", hint: "Alt+?", run: () => help() },
+      { id: "keys-help", title: "How Compass works", hint: "Alt+?", run: () => help() },
       { id: "select-center", title: "Select the center", hint: "Alt+0", run: () => focusCenter() }
     ];
   }
@@ -11140,7 +11156,7 @@ function createPalette(ctx) {
   function stageMenu() {
     return [
       { title: "Command palette…", run: () => open() },
-      { title: "Keyboard help", run: () => ctx?.features?.get?.("keys")?.help?.() }
+      { title: "How Compass works", run: () => ctx?.features?.get?.("keys")?.help?.() }
     ];
   }
   return {
@@ -15880,6 +15896,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       observedSidebar = sidebar || null;
     }
   }
+  function clampZonePop() {
+    if (zoneAnchor && !zonePopEl.hidden) placeFloating(zonePopEl, zoneAnchor.x, zoneAnchor.y);
+  }
   function refitIfResized() {
     if (root.hidden || !geometry || typeof stage.getBoundingClientRect !== "function") return;
     const rect = stage.getBoundingClientRect();
@@ -15889,6 +15908,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     lastStageW = w;
     lastStageH = h;
     if (autoFitted) fit(false);
+    clampZonePop();
   }
   function placeFrame(force = true) {
     syncFrameObservers();
@@ -15904,6 +15924,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       root.style.right = `${inset}px`;
     }
     refitIfResized();
+    clampZonePop();
   }
   function applyCamera(glide = false) {
     world.classList.toggle("compass-glide", glide);
@@ -16177,12 +16198,12 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     pinButton.setAttribute("aria-pressed", pinned ? "true" : "false");
     outlineButton.setAttribute("aria-pressed", settings?.outline ? "true" : "false");
   }
-  function reveal() {
+  function reveal(openInfo = {}) {
     if (!root.hidden) return;
     sampleTheme();
     root.hidden = false;
     placeFrame();
-    features.each("onOpen");
+    features.each("onOpen", openInfo);
   }
   function focusUid(uid, options = {}) {
     const record = options.record !== false;
@@ -16198,7 +16219,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const changed = current !== uid;
     if (changed) openBoardUid = null;
     current = uid;
-    reveal();
+    reveal({ targetView: options.targetView, wander: options.wander === true });
     features.each("onNavigate", { uid, previous, changed, record, follow: false });
     host.watch(uid, scheduleReload);
     load({ navigate: changed });
@@ -16307,10 +16328,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       await sleep(40);
     }
   }
-  async function openOnCurrentOrLast() {
+  async function openOnCurrentOrLast(options = {}) {
     const uid = await host.openPageUid();
-    if (uid) focusUid(uid);
-    else if (root.hidden && current) focusUid(current, { record: false });
+    if (uid) focusUid(uid, options);
+    else if (root.hidden && current) focusUid(current, { ...options, record: false });
   }
   async function toggle() {
     if (!root.hidden) {
@@ -16324,11 +16345,11 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (uid) focusUid(uid);
   }
   async function openView(nextView) {
-    await openOnCurrentOrLast();
+    await openOnCurrentOrLast({ targetView: nextView });
     await features.get("views")?.set?.(nextView);
   }
   async function openWander() {
-    if (root.hidden) await openOnCurrentOrLast();
+    if (root.hidden) await openOnCurrentOrLast({ wander: true });
     features.get("wander")?.start?.();
   }
   function isOpen() {
@@ -16715,6 +16736,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       if (!titleCache) titleCache = host.titles();
       const found = rankTitles(titleCache, trimmed, 20);
       const exactMatch = (titleCache ?? []).some((row) => row?.title === trimmed);
+      const canLink = linkableTitle(trimmed);
       for (const row of found) {
         const item = button("compass-result", row.title);
         item.dataset.action = "page";
@@ -16723,23 +16745,26 @@ function mountReal({ extensionAPI, lifecycle, host }) {
         item.setAttribute("role", "option");
         zoneResults.append(item);
       }
-      if (!exactMatch) {
+      if (canLink && !exactMatch) {
         const createPageRow = button("compass-result compass-zone-create-page", `Create page "${trimmed}"`);
         createPageRow.dataset.action = "create-page";
         createPageRow.dataset.title = trimmed;
         createPageRow.setAttribute("role", "option");
         zoneResults.append(createPageRow);
       }
-      if (typeof plexus()?.create === "function") {
+      if (canLink && typeof plexus()?.create === "function") {
         const drawRow = button("compass-result compass-result-drawing compass-zone-create-drawing", `Create drawing "${trimmed}"`);
         drawRow.dataset.action = "create-drawing";
         drawRow.dataset.title = trimmed;
         drawRow.setAttribute("role", "option");
         zoneResults.append(drawRow);
       }
+      if (!canLink && !found.length) {
+        zoneResults.append(el("div", "compass-result-none", "A page title cannot contain [ or ]."));
+      }
       markZoneResult();
     }
-    if (zoneAnchor && !zonePopEl.hidden) placeFloating(zonePopEl, zoneAnchor.x, zoneAnchor.y);
+    clampZonePop();
   }
   function chooseZoneItem(item) {
     if (!item || !zoneTarget) return;
@@ -16758,11 +16783,13 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const items = [...zoneResults.querySelectorAll(".compass-result")];
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
+      event.stopPropagation();
       if (!items.length) return;
       activeZoneResult = clamp3(activeZoneResult + (event.key === "ArrowDown" ? 1 : -1), 0, items.length - 1);
       markZoneResult();
     } else if (event.key === "Enter") {
       event.preventDefault();
+      event.stopPropagation();
       if (items[activeZoneResult]) chooseZoneItem(items[activeZoneResult]);
     } else if (event.key === "Escape") {
       event.preventDefault();
@@ -16792,6 +16819,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const clean = String(name ?? "").trim();
     hideZonePop();
     if (!zone || !clean || !current) return;
+    if (!linkableTitle(clean)) {
+      setStatus("That title cannot be written as a link.");
+      return;
+    }
     let existing = null;
     try {
       existing = host.findDrawingBlock(clean);
@@ -17925,6 +17956,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
       event.preventDefault();
+      if (!zonePopEl.hidden) hideZonePop();
       searchInput.focus();
       searchInput.select();
       return;
@@ -18163,7 +18195,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       if (!root.hidden) placeFrame(false);
     });
     stageObserver = new globalThis.ResizeObserver(() => {
-      if (!root.hidden) refitIfResized();
+      if (!root.hidden) {
+        refitIfResized();
+        clampZonePop();
+      }
     });
     syncFrameObservers();
     stageObserver.observe(stage);

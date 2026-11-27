@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CROSS_QUERY, ZONE_ATTR, crossEdges, hiddenUids, isEmptyPage, planAttributeWrite, planZoneCreate, urlGroups } from "../src/model/batch7.js";
+import { CROSS_QUERY, ZONE_ATTR, crossEdges, hiddenUids, isEmptyPage, linkableTitle, planAttributeWrite, planZoneCreate, urlGroups } from "../src/model/batch7.js";
 
 test("all chips on returns []", () => {
   const nodes = [
@@ -151,5 +151,19 @@ test("planAttributeWrite creates, appends, skips a present ref, and refuses a br
   assert.deepEqual(bracket.ops, []);
   assert.equal(bracket.reason, "title");
   assert.equal(planAttributeWrite({ attribute: "Parent", title: "[Bad", existing: null }).reason, "title");
+  assert.equal(planAttributeWrite({ attribute: "Parent", title: "   ", existing: null }).reason, "title");
+  assert.equal(planAttributeWrite({ attribute: "Parent", title: "Line\nBreak", existing: null }).reason, "title");
   assert.deepEqual(planAttributeWrite({ title: "Up", existing: null }), { ops: [], reason: "attribute" });
+});
+
+test("linkableTitle rejects blank strings, brackets, and line breaks", () => {
+  assert.equal(linkableTitle("Normal Title"), true);
+  assert.equal(linkableTitle("Drawings/System Map"), true);
+  assert.equal(linkableTitle(""), false);
+  assert.equal(linkableTitle("   "), false);
+  assert.equal(linkableTitle("[Draft]"), false);
+  assert.equal(linkableTitle("foo]bar"), false);
+  assert.equal(linkableTitle("a\nb"), false);
+  assert.equal(linkableTitle("a\rb"), false);
+  assert.equal(linkableTitle(null), false);
 });

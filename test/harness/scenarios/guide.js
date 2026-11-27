@@ -13,28 +13,63 @@ const FLIPPED_LINE_2 = "Parents sit above it, children below, friends on the rig
 
 export const SCENARIOS = {
   async guide(h) {
-    // Unset first-run flag so opening Compass auto-shows the guide.
+    // Unset first-run flag so we can test Wander/Mind Map gating before Compass view auto-opens the guide.
     await h.harness.extensionAPI.settings.set(SETTING_IDS.guideSeen, false);
-    await h.open("p-alpha");
-
     const backdrop = h.q(".compass-help-backdrop");
-    h.assert(Boolean(backdrop && !backdrop.hidden), "first open shows guide automatically");
-    h.equal(h.text(".compass-help-title"), "How Compass works", "guide title is How Compass works");
-    h.equal(h.text(".compass-help-guide .compass-help-group-title"), "The map", "first section is The map");
-    const items = h.qa(".compass-help-guide-item").map((el) => el.textContent.trim());
-    h.equal(items.length, 6, "guide lists all 6 lines");
-    for (let i = 0; i < EXPECTED_LINES.length; i += 1) {
-      h.equal(items[i], EXPECTED_LINES[i], `guide line ${i + 1} matches`);
-    }
 
-    // Close the guide, close Compass, reopen Compass -> must NOT auto-open again.
-    h.click(".compass-help-close");
-    await h.wait(40);
-    h.assert(backdrop.hidden, "closing guide hides panel");
+    // C6: opening through Wander does not auto-open the guide and leaves guideSeen unset.
+    await h.harness.overlay.openWander();
+    await h.wait(60);
+    h.assert(Boolean(backdrop && backdrop.hidden), "opening through Wander does not auto-open guide");
+    h.equal(h.harness.extensionAPI.settings.get(SETTING_IDS.guideSeen), false, "guideSeen stays unset after Wander");
     h.click(".compass-close");
     await h.wait(40);
-    await h.open("p-alpha");
-    h.assert(backdrop.hidden, "reopening Compass does not auto-open guide again");
+
+    // C6: opening through Mind Map does not auto-open the guide and leaves guideSeen unset.
+    await h.harness.overlay.openView("mindmap");
+    await h.wait(60);
+    h.assert(Boolean(backdrop && backdrop.hidden), "opening through Mind Map does not auto-open guide");
+    h.equal(h.harness.extensionAPI.settings.get(SETTING_IDS.guideSeen), false, "guideSeen stays unset after Mind Map");
+    h.click(".compass-close");
+    await h.wait(40);
+    await h.harness.extensionAPI.settings.set(SETTING_IDS.view, "compass");
+
+    // C5: even when settings.set rejects, first Compass-view open shows the guide once and latches seen locally.
+    const originalSet = h.harness.extensionAPI.settings.set.bind(h.harness.extensionAPI.settings);
+    h.harness.extensionAPI.settings.set = (id, value) => {
+      if (id === SETTING_IDS.guideSeen) return Promise.reject(new Error("read-only settings"));
+      return originalSet(id, value);
+    };
+    try {
+      await h.open("p-alpha");
+      await h.wait(50);
+
+      h.assert(Boolean(backdrop && !backdrop.hidden), "first Compass-view open shows guide automatically");
+      h.equal(h.text(".compass-help-title"), "How Compass works", "guide title is How Compass works");
+      h.equal(h.text(".compass-help-guide .compass-help-group-title"), "The map", "first section is The map");
+      const items = h.qa(".compass-help-guide-item").map((el) => el.textContent.trim());
+      h.equal(items.length, 6, "guide lists all 6 lines");
+      for (let i = 0; i < EXPECTED_LINES.length; i += 1) {
+        h.equal(items[i], EXPECTED_LINES[i], `guide line ${i + 1} matches`);
+      }
+
+      // Close the guide, close Compass, reopen Compass -> must NOT auto-open again despite settings.set rejection.
+      h.click(".compass-help-close");
+      await h.wait(40);
+      h.assert(backdrop.hidden, "closing guide hides panel");
+      h.click(".compass-close");
+      await h.wait(40);
+      await h.open("p-alpha");
+      await h.wait(40);
+      h.assert(backdrop.hidden, "reopening Compass does not auto-open guide again when settings.set rejects");
+    } finally {
+      h.harness.extensionAPI.settings.set = originalSet;
+    }
+
+    // C7: Alt+? command is titled "How Compass works" (not "Keyboard help").
+    const commandTitles = h.harness.overlay.ctx.commands().map((cmd) => cmd.title);
+    h.assert(commandTitles.includes("How Compass works"), "commands list includes How Compass works");
+    h.assert(!commandTitles.includes("Keyboard help"), "commands list no longer uses Keyboard help");
 
     // Verify "?" button is in the bar just before More, with expected title, and reopens the guide.
     const helpBtn = h.q(".compass-bar .compass-help-btn");

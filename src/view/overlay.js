@@ -3,7 +3,7 @@ import { attributeForRole, buildNeighborhood, createPlexusOpener, DROP_ROLE, dra
 import { boardPlan, cardPlan, connectionEdges, openArgs, showBoardPlan } from "../model/boards.js";
 import { layout, sideAt } from "../model/layout.js";
 import { rankDrawings } from "../model/related.js";
-import { crossEdges, hiddenUids, isEmptyPage, planZoneCreate, urlGroups, ZONE_ATTR } from "../model/batch7.js";
+import { crossEdges, hiddenUids, isEmptyPage, linkableTitle, planZoneCreate, urlGroups, ZONE_ATTR } from "../model/batch7.js";
 import { factsFor } from "../model/facts.js";
 import { emptyQueryRows, rankTitles } from "../model/search.js";
 import { readCompassSettings, SETTING_IDS, writeSetting } from "../settings.js";
@@ -500,6 +500,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     }
   }
 
+  function clampZonePop() {
+    if (zoneAnchor && !zonePopEl.hidden) placeFloating(zonePopEl, zoneAnchor.x, zoneAnchor.y);
+  }
+
   function refitIfResized() {
     if (root.hidden || !geometry || typeof stage.getBoundingClientRect !== "function") return;
     const rect = stage.getBoundingClientRect();
@@ -509,6 +513,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     lastStageW = w;
     lastStageH = h;
     if (autoFitted) fit(false);
+    clampZonePop();
   }
 
   function placeFrame(force = true) {
@@ -525,6 +530,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       root.style.right = `${inset}px`;
     }
     refitIfResized();
+    clampZonePop();
   }
 
   function applyCamera(glide = false) {
@@ -828,12 +834,12 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     outlineButton.setAttribute("aria-pressed", settings?.outline ? "true" : "false");
   }
 
-  function reveal() {
+  function reveal(openInfo = {}) {
     if (!root.hidden) return;
     sampleTheme();
     root.hidden = false;
     placeFrame();
-    features.each("onOpen");
+    features.each("onOpen", openInfo);
   }
 
   function focusUid(uid, options = {}) {
@@ -850,7 +856,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const changed = current !== uid;
     if (changed) openBoardUid = null;
     current = uid;
-    reveal();
+    reveal({ targetView: options.targetView, wander: options.wander === true });
     features.each("onNavigate", { uid, previous, changed, record, follow: false });
     host.watch(uid, scheduleReload);
     load({ navigate: changed });
@@ -967,10 +973,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     }
   }
 
-  async function openOnCurrentOrLast() {
+  async function openOnCurrentOrLast(options = {}) {
     const uid = await host.openPageUid();
-    if (uid) focusUid(uid);
-    else if (root.hidden && current) focusUid(current, { record: false });
+    if (uid) focusUid(uid, options);
+    else if (root.hidden && current) focusUid(current, { ...options, record: false });
   }
 
   async function toggle() {
@@ -987,12 +993,12 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   }
 
   async function openView(nextView) {
-    await openOnCurrentOrLast();
+    await openOnCurrentOrLast({ targetView: nextView });
     await features.get("views")?.set?.(nextView);
   }
 
   async function openWander() {
-    if (root.hidden) await openOnCurrentOrLast();
+    if (root.hidden) await openOnCurrentOrLast({ wander: true });
     features.get("wander")?.start?.();
   }
 
@@ -1410,6 +1416,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       if (!titleCache) titleCache = host.titles();
       const found = rankTitles(titleCache, trimmed, 20);
       const exactMatch = (titleCache ?? []).some((row) => row?.title === trimmed);
+      const canLink = linkableTitle(trimmed);
       for (const row of found) {
         const item = button("compass-result", row.title);
         item.dataset.action = "page";
@@ -1418,23 +1425,26 @@ function mountReal({ extensionAPI, lifecycle, host }) {
         item.setAttribute("role", "option");
         zoneResults.append(item);
       }
-      if (!exactMatch) {
+      if (canLink && !exactMatch) {
         const createPageRow = button("compass-result compass-zone-create-page", `Create page "${trimmed}"`);
         createPageRow.dataset.action = "create-page";
         createPageRow.dataset.title = trimmed;
         createPageRow.setAttribute("role", "option");
         zoneResults.append(createPageRow);
       }
-      if (typeof plexus()?.create === "function") {
+      if (canLink && typeof plexus()?.create === "function") {
         const drawRow = button("compass-result compass-result-drawing compass-zone-create-drawing", `Create drawing "${trimmed}"`);
         drawRow.dataset.action = "create-drawing";
         drawRow.dataset.title = trimmed;
         drawRow.setAttribute("role", "option");
         zoneResults.append(drawRow);
       }
+      if (!canLink && !found.length) {
+        zoneResults.append(el("div", "compass-result-none", "A page title cannot contain [ or ]."));
+      }
       markZoneResult();
     }
-    if (zoneAnchor && !zonePopEl.hidden) placeFloating(zonePopEl, zoneAnchor.x, zoneAnchor.y);
+    clampZonePop();
   }
 
   function chooseZoneItem(item) {
@@ -1455,11 +1465,13 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const items = [...zoneResults.querySelectorAll(".compass-result")];
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
+      event.stopPropagation();
       if (!items.length) return;
       activeZoneResult = clamp(activeZoneResult + (event.key === "ArrowDown" ? 1 : -1), 0, items.length - 1);
       markZoneResult();
     } else if (event.key === "Enter") {
       event.preventDefault();
+      event.stopPropagation();
       if (items[activeZoneResult]) chooseZoneItem(items[activeZoneResult]);
     } else if (event.key === "Escape") {
       event.preventDefault();
@@ -1491,6 +1503,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const clean = String(name ?? "").trim();
     hideZonePop();
     if (!zone || !clean || !current) return;
+    if (!linkableTitle(clean)) {
+      setStatus("That title cannot be written as a link.");
+      return;
+    }
     let existing = null;
     try {
       existing = host.findDrawingBlock(clean);
@@ -2686,6 +2702,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
       event.preventDefault();
+      if (!zonePopEl.hidden) hideZonePop();
       searchInput.focus();
       searchInput.select();
       return;
@@ -2915,7 +2932,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       if (!root.hidden) placeFrame(false);
     });
     stageObserver = new globalThis.ResizeObserver(() => {
-      if (!root.hidden) refitIfResized();
+      if (!root.hidden) {
+        refitIfResized();
+        clampZonePop();
+      }
     });
     syncFrameObservers();
     stageObserver.observe(stage);

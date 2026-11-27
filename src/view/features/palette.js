@@ -233,7 +233,7 @@ export function createPalette(ctx) {
   function stageMenu() {
     return [
       { title: "Command palette…", run: () => open() },
-      { title: "Keyboard help", run: () => ctx?.features?.get?.("keys")?.help?.() },
+      { title: "How Compass works", run: () => ctx?.features?.get?.("keys")?.help?.() },
     ];
   }
 

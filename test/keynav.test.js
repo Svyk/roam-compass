@@ -198,7 +198,7 @@ test("createKeys handles shortcuts, flip-aware Ctrl/Cmd+Arrow, and Escape preced
   assert.deepEqual(
     keys.commands().map(({ id, title, hint }) => ({ id, title, hint })),
     [
-      { id: "keys-help", title: "Keyboard help", hint: "Alt+?" },
+      { id: "keys-help", title: "How Compass works", hint: "Alt+?" },
       { id: "select-center", title: "Select the center", hint: "Alt+0" },
     ],
   );
@@ -300,7 +300,7 @@ test("createPalette exposes stageMenu and tolerates missing DOM", () => {
   });
 
   const menu = palette.stageMenu();
-  assert.deepEqual(menu.map((item) => item.title), ["Command palette…", "Keyboard help"]);
+  assert.deepEqual(menu.map((item) => item.title), ["Command palette…", "How Compass works"]);
   menu[1].run();
   assert.equal(helpOpened, true);
   palette.open();
