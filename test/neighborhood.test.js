@@ -711,3 +711,16 @@ test("referenced and linked blocks resolve two levels of reference text through 
   assert.equal(mentionB1?.title, "Slot Task");
   assert.equal(mentionM1?.title, "Meeting Slot Task");
 });
+
+test("center attribute badge does not expand its own source block reference", () => {
+  const hood = buildNeighborhood(snap({
+    out: [{
+      uid: "h-self",
+      attribute: "Status",
+      source: source("b-self", "Status:: Loop ((b-self))"),
+      values: [{ uid: "v-self", text: "Loop ((b-self))" }],
+      labels: [],
+    }],
+  }));
+  assert.deepEqual(hood.center.badges, [{ attribute: "Status", text: "Loop (( ))" }]);
+});

@@ -490,7 +490,7 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
       if (!isNode(value)) {
         if (value?.text != null && settings.badges && badges.length < BADGE_CAP) {
           const rawBadge = String(value.text);
-          const built = labelParts(rawBadge, 90, { refs: refMap });
+          const built = labelParts(rawBadge, 90, { refs: refMap, selfUid: harc.source?.uid });
           const badge = { attribute: harc.attribute, text: built.text || rawBadge };
           if (hasRichParts(built.parts)) badge.parts = built.parts;
           badges.push(badge);

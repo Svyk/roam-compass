@@ -1055,8 +1055,7 @@ function tokenizeAliases(tokens, cut) {
     let i = 0;
     while (i < s.length) {
       if (s[i] === "[" && s[i + 1] === "[") {
-        const bEnd = matchBrackets(s, i);
-        i = bEnd > i ? bEnd : i + 2;
+        i += 2;
         continue;
       }
       const isImage = s[i] === "!" && s[i + 1] === "[" && s[i + 2] !== "[";
@@ -1081,6 +1080,90 @@ function tokenizeAliases(tokens, cut) {
       i += 1;
     }
     if (cursor < s.length) out.push({ kind: "raw", text: s.slice(cursor) });
+  }
+  return out;
+}
+function stripPageBracketsAcrossTokens(tokens) {
+  let hasOpen = false;
+  let hasClose = false;
+  for (const tok of tokens) {
+    if (tok.kind !== "raw") continue;
+    if (!hasOpen && tok.text.includes("[[")) hasOpen = true;
+    if (!hasClose && tok.text.includes("]]")) hasClose = true;
+    if (hasOpen && hasClose) break;
+  }
+  if (!hasOpen || !hasClose) {
+    for (const tok of tokens) {
+      if (tok.kind === "alias") tok.labelTokens = stripPageBracketsAcrossTokens(tok.labelTokens);
+    }
+    return tokens;
+  }
+  const stack = [];
+  const removals = /* @__PURE__ */ new Map();
+  const markRemove = (tIdx, pos) => {
+    let list = removals.get(tIdx);
+    if (!list) {
+      list = [];
+      removals.set(tIdx, list);
+    }
+    list.push(pos);
+  };
+  for (let tIdx = 0; tIdx < tokens.length; tIdx += 1) {
+    const tok = tokens[tIdx];
+    if (tok.kind === "alias") {
+      tok.labelTokens = stripPageBracketsAcrossTokens(tok.labelTokens);
+      continue;
+    }
+    if (tok.kind !== "raw") continue;
+    const s = tok.text;
+    let lastRefPos = -1;
+    let i = 0;
+    while (i < s.length - 1) {
+      if (s[i] === "(" && s[i + 1] === "(") {
+        lastRefPos = i;
+        i += 2;
+        continue;
+      }
+      if (s[i] === "[" && s[i + 1] === "[") {
+        stack.push({ tIdx, pos: i });
+        i += 2;
+        continue;
+      }
+      if (s[i] === "]" && s[i + 1] === "]") {
+        if (stack.length > 0) {
+          const open = stack.pop();
+          const sameToken = open.tIdx === tIdx;
+          const spansRef = sameToken && lastRefPos > open.pos;
+          if (!sameToken || spansRef) {
+            markRemove(open.tIdx, open.pos);
+            markRemove(tIdx, i);
+          }
+          i += 2;
+          continue;
+        }
+      }
+      i += 1;
+    }
+  }
+  if (removals.size === 0) return tokens;
+  const out = [];
+  for (let tIdx = 0; tIdx < tokens.length; tIdx += 1) {
+    const tok = tokens[tIdx];
+    const cuts = removals.get(tIdx);
+    if (!cuts) {
+      out.push(tok);
+      continue;
+    }
+    cuts.sort((a, b) => a - b);
+    const s = tok.text;
+    let rebuilt = "";
+    let cursor = 0;
+    for (const pos of cuts) {
+      if (pos > cursor) rebuilt += s.slice(cursor, pos);
+      cursor = pos + 2;
+    }
+    if (cursor < s.length) rebuilt += s.slice(cursor);
+    if (rebuilt) out.push({ kind: "raw", text: rebuilt });
   }
   return out;
 }
@@ -1149,7 +1232,7 @@ function tokenHasOtherText(token, expandRefs) {
 function buildRawParts(raw, refs, depth, seen, memo, limit) {
   const { text, cut } = capInput(raw);
   const stage2 = tokenizeCodeAndMacros(text, cut);
-  const stage3 = tokenizeAliases(stage2, cut);
+  const stage3 = stripPageBracketsAcrossTokens(tokenizeAliases(stage2, cut));
   const budget = { count: 0, limit };
   const expanded = [];
   let hasOtherText = false;
@@ -1641,7 +1724,7 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
       if (!isNode(value)) {
         if (value?.text != null && settings.badges && badges.length < BADGE_CAP) {
           const rawBadge = String(value.text);
-          const built = labelParts(rawBadge, 90, { refs: refMap });
+          const built = labelParts(rawBadge, 90, { refs: refMap, selfUid: harc.source?.uid });
           const badge = { attribute: harc.attribute, text: built.text || rawBadge };
           if (hasRichParts(built.parts)) badge.parts = built.parts;
           badges.push(badge);

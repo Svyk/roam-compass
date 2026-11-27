@@ -430,6 +430,42 @@ test("expansion budget preserves SmartBlock workflow suppression, non-finite max
   assert.equal(queryRes.parts.some((part) => part.button), false);
 });
 
+test("page-link and tag brackets that span code, macros, aliases, or block references are stripped", () => {
+  const cases = [
+    ["[[`code span`]]", "code span"],
+    ["#[[`code span`]]", "#code span"],
+    ["[[{{[[DONE]]}}]]", "DONE"],
+    ["#[[{{[[TODO]]}}]]", "#TODO"],
+    ["[[[alias]([[Page]])]]", "alias"],
+    ["#[[[alias]([[Page]])]]", "#alias"],
+    ["[[Notes on ((abc123def))]]", "Notes on (( ))"],
+    ["#[[Topic ((abc123def))]]", "#Topic (( ))"],
+    ["[[nested [[#[[long tag]] ```js\nlet a = 1;```]] page]]", "nested #long tag js let a = 1; page"],
+  ];
+  for (const [input, expected] of cases) {
+    assert.equal(plainText(input), expected, input);
+  }
+
+  const withRefs = labelParts("[[Notes on ((b1))]]", 90, { refs: { b1: "Subtask B" } });
+  assert.equal(withRefs.text, "Notes on Subtask B");
+  assert.deepEqual(withRefs.parts, [
+    { text: "Notes on " },
+    { text: "Subtask B", ref: true },
+  ]);
+
+  const startLong = performance.now();
+  const longResult = plainText(`${"[[".repeat(1000)}\`a\`${"]]".repeat(1000)}`);
+  const elapsedLong = performance.now() - startLong;
+  assert.ok(elapsedLong < 50, `1000-bracket timing case took ${elapsedLong.toFixed(1)}ms`);
+  assert.equal(longResult.length, 90);
+
+  const startDeep = performance.now();
+  const deepResult = plainText(`${"[[".repeat(499)}\`a\`${"]]".repeat(499)}`);
+  const elapsedDeep = performance.now() - startDeep;
+  assert.ok(elapsedDeep < 50, `499-pair cross-token timing case took ${elapsedDeep.toFixed(1)}ms`);
+  assert.equal(deepResult, "a");
+});
+
 test("stage-ordered tokenization handles macros and page links inside aliases without expanding alias targets", () => {
   const refs = { abc123def: "Reply to Lori" };
 
