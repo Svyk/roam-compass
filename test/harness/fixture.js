@@ -159,6 +159,13 @@ export function createGraph(now = new Date()) {
     p(today.uid, today.title, [
       b("b-today-1", "Daily check-in on [[Project Alpha]]"),
     ]),
+    p("p-smartblock", "SmartBlock Log", [
+      b("b-sb-1", "21:13 {{⇥🕞:SmartBlock:Elapsed time}}   [[League Of Legends/16.3]] and watching random youtube videos. ", [
+        b("b-sb-child-ref", "Child:: ((b-sb-2))"),
+        b("b-sb-2", "{{🕗↦:SmartBlock:Double timestamp buttons2}}"),
+      ]),
+    ]),
+    p("p-lol", "League Of Legends/16.3", []),
   ];
 
   const watchers = new Set();

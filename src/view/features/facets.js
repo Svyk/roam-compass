@@ -9,6 +9,7 @@ import {
   validatePreset,
 } from "../../model/facets.js";
 import { SETTING_IDS } from "../../settings.js";
+import { fillLabel } from "../label.js";
 import { copyText } from "../clipboard.js";
 
 const FOCUSABLE_SELECTOR = 'button:not(:disabled), textarea:not(:disabled), input:not(:disabled), [tabindex="0"]';
@@ -510,7 +511,7 @@ export function createFacets(ctx) {
 
     const head = ctx.el("div", "compass-center-head");
     const kind = ctx.el("span", "compass-kind", hood.center.kind === "block" ? "Block" : "Page");
-    const title = ctx.el("span", "compass-node-title", hood.center.title);
+    const title = fillLabel(ctx.el("span", "compass-node-title"), hood.center.title, hood.center.parts);
     head.append(kind, title);
     element.append(head);
     placeBox(element, box);
@@ -694,8 +695,9 @@ export function createFacets(ctx) {
         cardEl.classList.add("compass-fade");
       }
 
-      const visibleTitle = typeof node.alias === "string" && node.alias ? node.alias : node.title;
-      cardEl.append(ctx.el("span", "compass-node-title", visibleTitle));
+      const hasAlias = typeof node.alias === "string" && node.alias.length > 0;
+      const visibleTitle = hasAlias ? node.alias : node.title;
+      cardEl.append(fillLabel(ctx.el("span", "compass-node-title"), visibleTitle, hasAlias ? null : node.parts));
 
       const matchedIds = result.matches?.[node.uid];
       if (Array.isArray(matchedIds) && matchedIds.length > 1) {

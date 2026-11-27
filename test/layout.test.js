@@ -225,3 +225,27 @@ test("variable heights via sub align row edges and never overlap in any zone", (
     }
   }
 });
+
+test("long center titles use a two-line header and shift rows and edges accordingly", () => {
+  const shortSize = centerSize({ title: "Project Alpha" });
+  const longTitle = "21:13 ⇥🕞 League Of Legends/16.3 and watching random youtube videos.";
+  const longSize = centerSize({ title: longTitle });
+  assert.equal(shortSize.h, 56);
+  assert.equal(shortSize.headerH, 56);
+  assert.ok(longSize.headerH > shortSize.headerH);
+  assert.equal(longSize.h, longSize.headerH);
+
+  const withRowsShort = layout(
+    { center: { title: "Short", badges: [{ attribute: "Status", text: "Active" }] }, nodes: [{ uid: "s-0", zone: "south" }], overflow: {} },
+    { rows: [{ uid: "r0", depth: 0 }] },
+  );
+  const withRowsLong = layout(
+    { center: { title: longTitle, badges: [{ attribute: "Status", text: "Active" }] }, nodes: [{ uid: "s-0", zone: "south" }], overflow: {} },
+    { rows: [{ uid: "r0", depth: 0 }] },
+  );
+  assert.equal(withRowsLong.center.h - withRowsShort.center.h, longSize.headerH - shortSize.headerH);
+  const shortRowOffset = (withRowsShort.rows[0].y - withRowsShort.rows[0].h / 2) - (-withRowsShort.center.h / 2);
+  const longRowOffset = (withRowsLong.rows[0].y - withRowsLong.rows[0].h / 2) - (-withRowsLong.center.h / 2);
+  assert.equal(longRowOffset - shortRowOffset, longSize.headerH - shortSize.headerH);
+  assert.ok(withRowsLong.items[0].y - withRowsLong.items[0].h / 2 > withRowsLong.center.h / 2);
+});

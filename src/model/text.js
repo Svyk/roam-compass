@@ -178,9 +178,10 @@ export function refMarkup(target) {
   return "";
 }
 
-// Plain one-line text for a node label. Keeps the words, drops Roam markup.
-export function plainText(input, max = 90) {
-  let text = String(input ?? "");
+const SMARTBLOCK_RE = /\{\{\s*([^:}][^:}]*?)\s*:(?:42)?SmartBlock:([^:}]+)(?::[^}]*)?\}\}/g;
+
+function cleanMarkup(raw) {
+  let text = String(raw ?? "");
   text = text.replace(/\{\{\s*\[\[(TODO|DONE)\]\]\s*\}\}/g, "$1");
   text = text.replace(/\{\{\s*\[\[([^\]]+)\]\][^}]*\}\}/g, "$1");
   text = text.replace(/\{\{([^}]*)\}\}/g, "$1");
@@ -192,9 +193,125 @@ export function plainText(input, max = 90) {
   }
   text = text.replace(/\(\(([\w-]+)\)\)/g, "(( ))");
   text = text.replace(/\*\*|__|\^\^|~~|`/g, "");
-  text = text.replace(/\s+/g, " ").trim();
-  if (text.length > max) text = `${text.slice(0, Math.max(1, max - 1)).trimEnd()}…`;
   return text;
+}
+
+function safeSlice(text, len) {
+  if (len <= 0) return "";
+  if (len >= text.length) return text;
+  let end = len;
+  const code = text.charCodeAt(end - 1);
+  if (code >= 0xd800 && code <= 0xdbff) end -= 1;
+  return text.slice(0, end);
+}
+
+function normalizeParts(rawParts) {
+  const merged = [];
+  for (const part of rawParts) {
+    if (!part || !part.text) continue;
+    if (part.button) {
+      const label = part.text.replace(/\s+/g, " ").trim();
+      if (!label) continue;
+      if (merged.length && merged[merged.length - 1].button) {
+        merged.push({ text: " " });
+      }
+      merged.push({ text: label, button: true });
+      continue;
+    }
+    let text = part.text.replace(/\s+/g, " ");
+    if (!text) continue;
+    const prev = merged[merged.length - 1];
+    if (prev && !prev.button) {
+      if (prev.text.endsWith(" ") && text.startsWith(" ")) text = text.slice(1);
+      prev.text += text;
+    } else {
+      merged.push({ text });
+    }
+  }
+  while (merged.length && !merged[0].button) {
+    merged[0].text = merged[0].text.replace(/^ +/, "");
+    if (!merged[0].text) merged.shift();
+    else break;
+  }
+  while (merged.length && !merged[merged.length - 1].button) {
+    merged[merged.length - 1].text = merged[merged.length - 1].text.replace(/ +$/, "");
+    if (!merged[merged.length - 1].text) merged.pop();
+    else break;
+  }
+  return merged;
+}
+
+function truncateParts(parts, max) {
+  const full = parts.map((part) => part.text).join("");
+  if (full.length <= max) return { text: full, parts };
+  const target = safeSlice(full, Math.max(1, max - 1)).trimEnd();
+  let remaining = target.length;
+  const cut = [];
+  for (const part of parts) {
+    if (remaining <= 0) break;
+    if (part.text.length <= remaining) {
+      cut.push({ ...part });
+      remaining -= part.text.length;
+    } else {
+      const slice = safeSlice(part.text, remaining);
+      if (slice) cut.push({ ...part, text: slice });
+      remaining = 0;
+    }
+  }
+  while (cut.length && !cut[cut.length - 1].button) {
+    cut[cut.length - 1].text = cut[cut.length - 1].text.replace(/ +$/, "");
+    if (!cut[cut.length - 1].text) cut.pop();
+    else break;
+  }
+  if (cut.length && !cut[cut.length - 1].button) {
+    cut[cut.length - 1].text += "…";
+  } else {
+    cut.push({ text: "…" });
+  }
+  return { text: cut.map((part) => part.text).join(""), parts: cut };
+}
+
+// Structured one-line label parts for a block string: plain text plus SmartBlock button chips.
+export function labelParts(input, max = 90) {
+  const raw = String(input ?? "");
+  const tokens = [];
+  let cursor = 0;
+  SMARTBLOCK_RE.lastIndex = 0;
+  let match;
+  while ((match = SMARTBLOCK_RE.exec(raw))) {
+    if (match.index > cursor) {
+      tokens.push({ button: false, text: cleanMarkup(raw.slice(cursor, match.index)) });
+    }
+    tokens.push({
+      button: true,
+      label: match[1].trim(),
+      workflow: cleanMarkup(match[2]).replace(/\s+/g, " ").trim(),
+    });
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < raw.length) {
+    tokens.push({ button: false, text: cleanMarkup(raw.slice(cursor)) });
+  }
+
+  const hasOtherText = tokens.some((token) => !token.button && token.text.trim() !== "");
+  const rawParts = [];
+  for (const token of tokens) {
+    if (!token.button) {
+      if (token.text) rawParts.push({ text: token.text });
+      continue;
+    }
+    if (token.label) rawParts.push({ text: token.label, button: true });
+    if (!hasOtherText && token.workflow) {
+      rawParts.push({ text: ` ${token.workflow}` });
+    }
+  }
+  const normalized = normalizeParts(rawParts);
+  return truncateParts(normalized, max);
+}
+
+// Plain one-line text for a node label. Keeps the words, drops Roam markup.
+export function plainText(input, max = 90) {
+  return labelParts(input, max).text;
 }
 
 // Title for Plexus region and Excalidraw drawing blocks; null for any other block.

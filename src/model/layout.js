@@ -10,6 +10,7 @@ const V_GAP = 64;
 const H_GAP = 72;
 const CHIP_GAP = 22;
 const HEADER_H = 56;
+const HEADER_TWO_H = 76;
 const BADGE_H = 24;
 const MAX_ROWS = 40;
 
@@ -80,12 +81,20 @@ function columnHeight(nodes, size, gap, sub) {
   return total;
 }
 
-export function centerSize({ badges = 0, rows = 0, more = false } = {}) {
+export function headerHeight(title, expanded = false) {
+  const text = typeof title === "string" ? title.trim() : "";
+  const limit = expanded ? 26 : 20;
+  return text.length > limit ? HEADER_TWO_H : HEADER_H;
+}
+
+export function centerSize({ badges = 0, rows = 0, more = false, title = "" } = {}) {
   const expanded = rows > 0 || more;
   const shown = Math.min(rows, MAX_ROWS) + (more ? 1 : 0);
+  const headerH = headerHeight(title, expanded);
   return {
     w: expanded ? 320 : 240,
-    h: HEADER_H + (badges ? BADGE_H : 0) + (expanded ? shown * ROW_H + 8 : 0),
+    h: headerH + (badges ? BADGE_H : 0) + (expanded ? shown * ROW_H + 8 : 0),
+    headerH,
   };
 }
 
@@ -94,9 +103,11 @@ export function layout(neighborhood, options = {}) {
   const rowsIn = Array.isArray(options.rows) ? options.rows.slice(0, MAX_ROWS) : [];
   const more = rowsIn.length < (options.rows?.length ?? 0);
   const badges = neighborhood?.center?.badges?.length ?? 0;
-  const size = centerSize({ badges, rows: rowsIn.length, more });
+  const title = neighborhood?.center?.title ?? "";
+  const size = centerSize({ badges, rows: rowsIn.length, more, title });
   const cw = size.w;
   const ch = size.h;
+  const headH = size.headerH;
   const flip = options.flip === true;
   const oneSided = options.oneSided === true;
   const sub = options.sub && typeof options.sub === "object" ? options.sub : null;
@@ -159,7 +170,7 @@ export function layout(neighborhood, options = {}) {
     }
   }
 
-  const rowTop = -ch / 2 + HEADER_H + (badges ? BADGE_H : 0);
+  const rowTop = -ch / 2 + headH + (badges ? BADGE_H : 0);
   const rows = rowsIn.map((row, index) => ({
     uid: row.uid,
     depth: row.depth,
@@ -196,7 +207,7 @@ export function layout(neighborhood, options = {}) {
   }
 
   const out = {
-    center: { x: 0, y: 0, w: cw, h: ch },
+    center: { x: 0, y: 0, w: cw, h: ch, headerH: headH },
     items,
     rows,
     more,

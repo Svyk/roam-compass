@@ -549,8 +549,9 @@ function refMarkup(target) {
   if (target?.uid) return `((${target.uid}))`;
   return "";
 }
-function plainText(input, max = 90) {
-  let text = String(input ?? "");
+var SMARTBLOCK_RE = /\{\{\s*([^:}][^:}]*?)\s*:(?:42)?SmartBlock:([^:}]+)(?::[^}]*)?\}\}/g;
+function cleanMarkup(raw) {
+  let text = String(raw ?? "");
   text = text.replace(/\{\{\s*\[\[(TODO|DONE)\]\]\s*\}\}/g, "$1");
   text = text.replace(/\{\{\s*\[\[([^\]]+)\]\][^}]*\}\}/g, "$1");
   text = text.replace(/\{\{([^}]*)\}\}/g, "$1");
@@ -562,9 +563,117 @@ function plainText(input, max = 90) {
   }
   text = text.replace(/\(\(([\w-]+)\)\)/g, "(( ))");
   text = text.replace(/\*\*|__|\^\^|~~|`/g, "");
-  text = text.replace(/\s+/g, " ").trim();
-  if (text.length > max) text = `${text.slice(0, Math.max(1, max - 1)).trimEnd()}…`;
   return text;
+}
+function safeSlice(text, len) {
+  if (len <= 0) return "";
+  if (len >= text.length) return text;
+  let end = len;
+  const code = text.charCodeAt(end - 1);
+  if (code >= 55296 && code <= 56319) end -= 1;
+  return text.slice(0, end);
+}
+function normalizeParts(rawParts) {
+  const merged = [];
+  for (const part of rawParts) {
+    if (!part || !part.text) continue;
+    if (part.button) {
+      const label = part.text.replace(/\s+/g, " ").trim();
+      if (!label) continue;
+      if (merged.length && merged[merged.length - 1].button) {
+        merged.push({ text: " " });
+      }
+      merged.push({ text: label, button: true });
+      continue;
+    }
+    let text = part.text.replace(/\s+/g, " ");
+    if (!text) continue;
+    const prev = merged[merged.length - 1];
+    if (prev && !prev.button) {
+      if (prev.text.endsWith(" ") && text.startsWith(" ")) text = text.slice(1);
+      prev.text += text;
+    } else {
+      merged.push({ text });
+    }
+  }
+  while (merged.length && !merged[0].button) {
+    merged[0].text = merged[0].text.replace(/^ +/, "");
+    if (!merged[0].text) merged.shift();
+    else break;
+  }
+  while (merged.length && !merged[merged.length - 1].button) {
+    merged[merged.length - 1].text = merged[merged.length - 1].text.replace(/ +$/, "");
+    if (!merged[merged.length - 1].text) merged.pop();
+    else break;
+  }
+  return merged;
+}
+function truncateParts(parts, max) {
+  const full = parts.map((part) => part.text).join("");
+  if (full.length <= max) return { text: full, parts };
+  const target = safeSlice(full, Math.max(1, max - 1)).trimEnd();
+  let remaining = target.length;
+  const cut = [];
+  for (const part of parts) {
+    if (remaining <= 0) break;
+    if (part.text.length <= remaining) {
+      cut.push({ ...part });
+      remaining -= part.text.length;
+    } else {
+      const slice = safeSlice(part.text, remaining);
+      if (slice) cut.push({ ...part, text: slice });
+      remaining = 0;
+    }
+  }
+  while (cut.length && !cut[cut.length - 1].button) {
+    cut[cut.length - 1].text = cut[cut.length - 1].text.replace(/ +$/, "");
+    if (!cut[cut.length - 1].text) cut.pop();
+    else break;
+  }
+  if (cut.length && !cut[cut.length - 1].button) {
+    cut[cut.length - 1].text += "…";
+  } else {
+    cut.push({ text: "…" });
+  }
+  return { text: cut.map((part) => part.text).join(""), parts: cut };
+}
+function labelParts(input, max = 90) {
+  const raw = String(input ?? "");
+  const tokens = [];
+  let cursor = 0;
+  SMARTBLOCK_RE.lastIndex = 0;
+  let match;
+  while (match = SMARTBLOCK_RE.exec(raw)) {
+    if (match.index > cursor) {
+      tokens.push({ button: false, text: cleanMarkup(raw.slice(cursor, match.index)) });
+    }
+    tokens.push({
+      button: true,
+      label: match[1].trim(),
+      workflow: cleanMarkup(match[2]).replace(/\s+/g, " ").trim()
+    });
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < raw.length) {
+    tokens.push({ button: false, text: cleanMarkup(raw.slice(cursor)) });
+  }
+  const hasOtherText = tokens.some((token) => !token.button && token.text.trim() !== "");
+  const rawParts = [];
+  for (const token of tokens) {
+    if (!token.button) {
+      if (token.text) rawParts.push({ text: token.text });
+      continue;
+    }
+    if (token.label) rawParts.push({ text: token.label, button: true });
+    if (!hasOtherText && token.workflow) {
+      rawParts.push({ text: ` ${token.workflow}` });
+    }
+  }
+  const normalized = normalizeParts(rawParts);
+  return truncateParts(normalized, max);
+}
+function plainText(input, max = 90) {
+  return labelParts(input, max).text;
 }
 function drawingTitle(input, max = 90) {
   const text = String(input ?? "").trimStart();
@@ -685,17 +794,26 @@ function attributeForRole(role, settings) {
   if (!name || name.includes("::") || /[[\]\n]/.test(name) || isReadOnlyAttribute(name)) return null;
   return name;
 }
-function blockTitle(uid, string, max, resolveRegion) {
+function blockLabel(uid, string, max, resolveRegion) {
   if (resolveRegion && regionOwner(string) !== null) {
     const label = resolveRegion(uid, string);
-    if (label) return label.length > max ? `${label.slice(0, Math.max(1, max - 1)).trimEnd()}…` : label;
+    if (label) {
+      const text = label.length > max ? `${label.slice(0, Math.max(1, max - 1)).trimEnd()}…` : label;
+      return { text, parts: null };
+    }
   }
-  return drawingTitle(string, max) ?? plainText(string ?? "", max);
+  const drawn = drawingTitle(string, max);
+  if (drawn !== null) return { text: drawn, parts: null };
+  const built = labelParts(string ?? "", max);
+  return {
+    text: built.text,
+    parts: built.parts.some((part) => part.button) ? built.parts : null
+  };
 }
-function titleOf(entity, resolveRegion) {
-  if (!entity) return "";
-  if (typeof entity.title === "string" && entity.title) return entity.title;
-  return blockTitle(entity.uid, entity.string, 90, resolveRegion);
+function labelOf(entity, resolveRegion) {
+  if (!entity) return { text: "", parts: null };
+  if (typeof entity.title === "string" && entity.title) return { text: entity.title, parts: null };
+  return blockLabel(entity.uid, entity.string, 90, resolveRegion);
 }
 function isDrawingLike(node) {
   const text = typeof node?.string === "string" ? node.string.trimStart() : "";
@@ -777,14 +895,17 @@ function outlineIndex(outline, resolveRegion) {
   const rows = [];
   walk(outline, (block, depth, parentUid) => {
     index.set(block.uid, { parentUid, depth });
-    rows.push({
+    const built = blockLabel(block.uid, block.string, 72, resolveRegion);
+    const row = {
       uid: block.uid,
-      text: blockTitle(block.uid, block.string, 72, resolveRegion) || " ",
+      text: built.text || " ",
       depth,
       parentUid,
       childCount: (block.children ?? []).filter((child) => child?.uid).length,
       plexus: plexusKind(block)
-    });
+    };
+    if (built.parts) row.parts = built.parts;
+    rows.push(row);
   });
   return { index, rows };
 }
@@ -1033,10 +1154,11 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
     const entity = entities.get(uid);
     const picked = pickRole(items);
     const typed = picked.strongest.filter((item) => item.kind === "typed");
-    nodes.push({
+    const built = labelOf(entity, resolveRegion);
+    const node = {
       uid,
       kind: kindOf(entity),
-      title: titleOf(entity, resolveRegion) || uid,
+      title: built.text || uid,
       string: typeof entity?.string === "string" ? entity.string : "",
       alias: aliasOf(entity, source.aliases),
       editTime: finiteTime(entity?.editTime),
@@ -1049,7 +1171,9 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
       label: [...new Set(typed.map((item) => [item.caption ?? item.attribute, ...item.labels].join(" · ")))].join(" | "),
       writable: typed.length === 1 && typed[0].writable ? typed[0] : null,
       via: null
-    });
+    };
+    if (built.parts) node.parts = built.parts;
+    nodes.push(node);
   }
   const placed = new Set(nodes.map((node) => node.uid));
   if (settings.siblings) {
@@ -1062,10 +1186,11 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
         existing.evidence.push(item);
         return;
       }
-      siblings.set(entity.uid, {
+      const built = labelOf(entity, resolveRegion);
+      const sibling = {
         uid: entity.uid,
         kind: kindOf(entity),
-        title: titleOf(entity, resolveRegion) || entity.uid,
+        title: built.text || entity.uid,
         string: typeof entity.string === "string" ? entity.string : "",
         alias: aliasOf(entity, source.aliases),
         editTime: finiteTime(entity?.editTime),
@@ -1078,7 +1203,9 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
         label: "",
         writable: null,
         via
-      });
+      };
+      if (built.parts) sibling.parts = built.parts;
+      siblings.set(entity.uid, sibling);
     };
     for (const peer of source.peers ?? []) {
       for (const item of peer.incoming ?? []) {
@@ -1122,14 +1249,17 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
   appendExtras(kept, options.cards, "south", "child", "card", settings.maxPerZone, centerUid);
   const keptUids = new Set(kept.map((node) => node.uid));
   for (const node of kept) if (node.via && !keptUids.has(node.via)) node.via = null;
+  const centerBuilt = center.kind === "block" ? blockLabel(centerUid, center.string, 120, resolveRegion) : { text: center.title || "", parts: null };
+  const centerOut = {
+    uid: centerUid,
+    kind: center.kind === "block" ? "block" : "page",
+    title: centerBuilt.text || centerUid,
+    badges,
+    plexus: center.kind === "block" ? plexusKind(center) : null
+  };
+  if (centerBuilt.parts) centerOut.parts = centerBuilt.parts;
   return {
-    center: {
-      uid: centerUid,
-      kind: center.kind === "block" ? "block" : "page",
-      title: center.kind === "block" ? blockTitle(centerUid, center.string, 120, resolveRegion) || centerUid : center.title || centerUid,
-      badges,
-      plexus: center.kind === "block" ? plexusKind(center) : null
-    },
+    center: centerOut,
     nodes: kept,
     overflow,
     outline: outline.rows,
@@ -2725,6 +2855,7 @@ var V_GAP = 64;
 var H_GAP = 72;
 var CHIP_GAP = 22;
 var HEADER_H = 56;
+var HEADER_TWO_H = 76;
 var BADGE_H = 24;
 var MAX_ROWS = 40;
 function nodeHeight(uid, baseH, sub) {
@@ -2787,12 +2918,19 @@ function columnHeight(nodes, size, gap, sub) {
   for (const node of nodes) total += nodeHeight(node.uid, size.h, sub);
   return total;
 }
-function centerSize({ badges = 0, rows = 0, more = false } = {}) {
+function headerHeight(title, expanded = false) {
+  const text = typeof title === "string" ? title.trim() : "";
+  const limit = expanded ? 26 : 20;
+  return text.length > limit ? HEADER_TWO_H : HEADER_H;
+}
+function centerSize({ badges = 0, rows = 0, more = false, title = "" } = {}) {
   const expanded = rows > 0 || more;
   const shown = Math.min(rows, MAX_ROWS) + (more ? 1 : 0);
+  const headerH = headerHeight(title, expanded);
   return {
     w: expanded ? 320 : 240,
-    h: HEADER_H + (badges ? BADGE_H : 0) + (expanded ? shown * ROW_H + 8 : 0)
+    h: headerH + (badges ? BADGE_H : 0) + (expanded ? shown * ROW_H + 8 : 0),
+    headerH
   };
 }
 function layout(neighborhood, options = {}) {
@@ -2800,9 +2938,11 @@ function layout(neighborhood, options = {}) {
   const rowsIn = Array.isArray(options.rows) ? options.rows.slice(0, MAX_ROWS) : [];
   const more = rowsIn.length < (options.rows?.length ?? 0);
   const badges = neighborhood?.center?.badges?.length ?? 0;
-  const size = centerSize({ badges, rows: rowsIn.length, more });
+  const title = neighborhood?.center?.title ?? "";
+  const size = centerSize({ badges, rows: rowsIn.length, more, title });
   const cw = size.w;
   const ch = size.h;
+  const headH = size.headerH;
   const flip = options.flip === true;
   const oneSided = options.oneSided === true;
   const sub = options.sub && typeof options.sub === "object" ? options.sub : null;
@@ -2859,7 +2999,7 @@ function layout(neighborhood, options = {}) {
       }
     }
   }
-  const rowTop = -ch / 2 + HEADER_H + (badges ? BADGE_H : 0);
+  const rowTop = -ch / 2 + headH + (badges ? BADGE_H : 0);
   const rows = rowsIn.map((row, index) => ({
     uid: row.uid,
     depth: row.depth,
@@ -2893,7 +3033,7 @@ function layout(neighborhood, options = {}) {
     maxY = Math.max(maxY, chip.y + 12);
   }
   const out = {
-    center: { x: 0, y: 0, w: cw, h: ch },
+    center: { x: 0, y: 0, w: cw, h: ch, headerH: headH },
     items,
     rows,
     more,
@@ -5406,6 +5546,33 @@ function treeOutline(tree) {
   };
 }
 
+// src/view/label.js
+function fillLabel(element, text, parts) {
+  if (!element) return element;
+  if (!Array.isArray(parts) || !parts.length) {
+    element.textContent = text ?? "";
+    return element;
+  }
+  const doc = element.ownerDocument ?? globalThis.document;
+  if (!doc?.createElement || !doc?.createTextNode || typeof element.replaceChildren !== "function") {
+    element.textContent = text ?? "";
+    return element;
+  }
+  element.replaceChildren();
+  for (const part of parts) {
+    if (!part?.text) continue;
+    if (part.button) {
+      const chip = doc.createElement("span");
+      chip.className = "compass-btn-chip";
+      chip.textContent = part.text;
+      element.append(chip);
+    } else {
+      element.append(doc.createTextNode(part.text));
+    }
+  }
+  return element;
+}
+
 // src/view/features/mindmap.js
 var EXPANDED_SOUTH = /* @__PURE__ */ new Set(["south"]);
 function emptyState() {
@@ -5561,12 +5728,12 @@ function createMindMap(ctx) {
     element.dataset.style = "center";
     element.title = center.title;
     element.setAttribute("aria-label", `Center: ${center.title}`);
-    const sig = `center|${center.kind}|${center.title}`;
+    const sig = `center|${center.kind}|${center.title}|${center.parts ? 1 : 0}`;
     if (element._mmSig !== sig) {
       element._mmSig = sig;
       const head = ctx.el("div", "compass-center-head");
       const kind = ctx.el("span", "compass-kind", center.kind === "block" ? "Block" : "Page");
-      const title = ctx.el("span", "compass-node-title", center.title);
+      const title = fillLabel(ctx.el("span", "compass-node-title"), center.title, center.parts);
       head.append(kind, title);
       element.replaceChildren(head);
     }
@@ -5609,10 +5776,11 @@ function createMindMap(ctx) {
     const isTreeBranch = Boolean(occ) && (item.status === "open" || item.status === "folded");
     const cachedKids = childCache.get(item.uid);
     const knownCount = occ?.childCount != null ? occ.childCount : Array.isArray(cachedKids) ? cachedKids.length : null;
-    const sig = `${visibleTitle}|${item.status}|${item.side}|${isTreeBranch ? 1 : 0}|${knownCount ?? ""}`;
+    const hasAlias = typeof node?.alias === "string" && node.alias.length > 0;
+    const sig = `${visibleTitle}|${hasAlias ? 0 : node?.parts ? 1 : 0}|${item.status}|${item.side}|${isTreeBranch ? 1 : 0}|${knownCount ?? ""}`;
     if (element._mmSig !== sig) {
       element._mmSig = sig;
-      const titleSpan = ctx.el("span", "compass-node-title", visibleTitle);
+      const titleSpan = fillLabel(ctx.el("span", "compass-node-title"), visibleTitle, hasAlias ? null : node?.parts);
       if (isTreeBranch) {
         const expanded = item.status === "open";
         const label = expanded ? `Fold ${fullTitle}` : `Expand ${fullTitle}`;
@@ -7571,7 +7739,7 @@ function createFacets(ctx) {
     element.title = hood.center.title;
     const head = ctx.el("div", "compass-center-head");
     const kind = ctx.el("span", "compass-kind", hood.center.kind === "block" ? "Block" : "Page");
-    const title = ctx.el("span", "compass-node-title", hood.center.title);
+    const title = fillLabel(ctx.el("span", "compass-node-title"), hood.center.title, hood.center.parts);
     head.append(kind, title);
     element.append(head);
     placeBox(element, box);
@@ -7728,8 +7896,9 @@ function createFacets(ctx) {
       if (hiddenByLenses instanceof Set && hiddenByLenses.has(node.uid)) {
         cardEl.classList.add("compass-fade");
       }
-      const visibleTitle = typeof node.alias === "string" && node.alias ? node.alias : node.title;
-      cardEl.append(ctx.el("span", "compass-node-title", visibleTitle));
+      const hasAlias = typeof node.alias === "string" && node.alias.length > 0;
+      const visibleTitle = hasAlias ? node.alias : node.title;
+      cardEl.append(fillLabel(ctx.el("span", "compass-node-title"), visibleTitle, hasAlias ? null : node.parts));
       const matchedIds = result.matches?.[node.uid];
       if (Array.isArray(matchedIds) && matchedIds.length > 1) {
         const matchedLabels = matchedIds.map((id) => catLabelById.get(id) || id).join(", ");
@@ -9504,8 +9673,9 @@ function createLayoutOptions(ctx) {
           element.classList.add("compass-node-expanded");
           const subs = ctx.el("div", "compass-subs");
           for (const child of children.slice(0, SUB_CAP)) {
-            const label = child.alias || child.title;
-            const row = ctx.el("div", "compass-sub", label);
+            const hasAlias = typeof child.alias === "string" && child.alias.length > 0;
+            const label = hasAlias ? child.alias : child.title;
+            const row = fillLabel(ctx.el("div", "compass-sub"), label, hasAlias ? null : child.parts);
             row.dataset.uid = child.uid;
             row.setAttribute("role", "button");
             row.tabIndex = 0;
@@ -14898,7 +15068,7 @@ function luminance(color) {
   });
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
-function describe(item, titleOf2) {
+function describe(item, titleOf) {
   if (item.kind === "typed") {
     const labels = item.labels?.length ? ` (${item.labels.join(", ")})` : "";
     return item.direction === "out" ? `${item.attribute}:: on the center${labels}` : `${item.attribute}:: on this node, pointing at the center${labels}`;
@@ -14912,7 +15082,7 @@ function describe(item, titleOf2) {
     if (item.note === "drawing on page") return "A drawing on this page";
     return "The block this block sits under";
   }
-  if (item.attribute) return `Shares ${item.attribute}:: under ${titleOf2(item.via) || "a parent"}`;
+  if (item.attribute) return `Shares ${item.attribute}:: under ${titleOf(item.via) || "a parent"}`;
   if (item.note === "mentioned together") return "Mentioned in the same block";
   return item.note === "sibling block" ? "Sibling block" : "Same namespace";
 }
@@ -15147,7 +15317,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       return null;
     }
   }
-  function titleOf2(uid) {
+  function titleOf(uid) {
     if (!uid) return "";
     if (uid === hood?.center?.uid) return hood.center.title;
     return nodeByUid.get(uid)?.title ?? "";
@@ -15642,9 +15812,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   }
   function renderCenterContent(element, box) {
     element.replaceChildren();
+    element.style.setProperty("--compass-head-h", `${box.headerH ?? 56}px`);
     const head = el("div", "compass-center-head");
     const kind = el("span", "compass-kind", hood.center.kind === "block" ? "Block" : "Page");
-    const title = el("span", "compass-node-title", hood.center.title);
+    const title = fillLabel(el("span", "compass-node-title"), hood.center.title, hood.center.parts);
     head.append(kind, title);
     element.append(head);
     if (hood.center.badges.length) {
@@ -15671,7 +15842,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       } else {
         line.append(el("span", "compass-caret-space"));
       }
-      line.append(el("span", "compass-row-text", info?.text ?? ""));
+      line.append(fillLabel(el("span", "compass-row-text"), info?.text ?? "", info?.parts));
       line.title = info?.text ?? "";
       element.append(line);
     }
@@ -16286,8 +16457,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
         element.setAttribute("aria-label", `Center: ${hood.center.title}`);
         element.title = hood.center.title;
       } else {
-        const visible = typeof node.alias === "string" && node.alias ? node.alias : node.title;
-        element.replaceChildren(el("span", "compass-node-title", visible));
+        const hasAlias = typeof node.alias === "string" && node.alias.length > 0;
+        const visible = hasAlias ? node.alias : node.title;
+        element.replaceChildren(fillLabel(el("span", "compass-node-title"), visible, hasAlias ? null : node.parts));
         if (emptyNode(node)) {
           const start = button("compass-start", "Start writing");
           start.dataset.uid = node.uid;
@@ -16532,7 +16704,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       await savePins(pins.filter((pin) => pin.uid !== uid));
       return;
     }
-    await savePins([...pins, { uid, title: titleOf2(uid) || uid }]);
+    await savePins([...pins, { uid, title: titleOf(uid) || uid }]);
   }
   async function toggleOutline() {
     if (!settings) return;
@@ -16679,7 +16851,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       if (seen.has(key)) continue;
       seen.add(key);
       const entry = el("li", "compass-details-item");
-      entry.append(el("span", "", describe({ ...item, via: node.via }, titleOf2)));
+      entry.append(el("span", "", describe({ ...item, via: node.via }, titleOf)));
       if (item.sourceUid) {
         const open = button("compass-details-open", "Open block");
         open.addEventListener("click", () => {
@@ -17253,7 +17425,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     cancel,
     frame,
     state,
-    titleOf: titleOf2,
+    titleOf,
     nodeKind,
     focusUid,
     goBack,

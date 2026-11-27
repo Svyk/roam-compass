@@ -340,6 +340,17 @@
   text-overflow: ellipsis;
 }
 
+.compass-root .compass-btn-chip {
+  display: inline;
+  padding: 0 4px;
+  border: 1px solid var(--compass-line);
+  border-radius: 4px;
+  background: transparent;
+  font-size: 0.85em;
+  font-style: normal;
+  line-height: 1;
+}
+
 .compass-root .compass-node.compass-node-center {
   z-index: 2;
   display: block;
@@ -363,7 +374,7 @@
   flex-direction: column;
   justify-content: center;
   box-sizing: border-box;
-  height: 56px;
+  height: calc(var(--compass-head-h, 56px) - 4px);
   padding: 6px 12px;
 }
 
@@ -386,7 +397,7 @@
 
 .compass-root .compass-badges {
   position: absolute;
-  top: 56px;
+  top: calc(var(--compass-head-h, 56px) - 4px);
   right: 8px;
   left: 8px;
   display: flex;

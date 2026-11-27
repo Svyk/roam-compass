@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { drawingTitle, parseAttribute, plainText, removeToken, scanRefs, tailShape } from "../src/model/text.js";
+import { drawingTitle, labelParts, parseAttribute, plainText, removeToken, scanRefs, tailShape } from "../src/model/text.js";
 
 const titles = (text) => scanRefs(text).map((token) => (token.type === "block" ? `((${token.uid}))` : token.title));
 
@@ -53,6 +53,53 @@ test("plainText strips Roam markup for labels", () => {
   assert.equal(plainText("{{[[TODO]]}} Call [[Jane]] **now** #[[Project X]]"), "TODO Call Jane now #Project X");
   assert.equal(plainText("See [this](https://example.com) and ((abc123def))"), "See this and (( ))");
   assert.equal(plainText("x".repeat(20), 10), `${"x".repeat(9)}…`);
+});
+
+test("labelParts renders SmartBlock buttons with surrounding text as chips only", () => {
+  const raw = "21:13 {{⇥🕞:SmartBlock:Elapsed time}}   [[League Of Legends/16.3]] and watching random youtube videos. ";
+  const result = labelParts(raw, 120);
+  assert.equal(result.text, "21:13 ⇥🕞 League Of Legends/16.3 and watching random youtube videos.");
+  assert.deepEqual(result.parts, [
+    { text: "21:13 " },
+    { text: "⇥🕞", button: true },
+    { text: " League Of Legends/16.3 and watching random youtube videos." },
+  ]);
+  assert.equal(plainText(raw, 120), result.text);
+  assert.ok(!result.text.includes("SmartBlock"));
+});
+
+test("labelParts renders button-only SmartBlock blocks with chip and workflow name", () => {
+  const a = labelParts("{{🕗↦:SmartBlock:Double timestamp buttons2}}");
+  assert.equal(a.text, "🕗↦ Double timestamp buttons2");
+  assert.deepEqual(a.parts, [
+    { text: "🕗↦", button: true },
+    { text: " Double timestamp buttons2" },
+  ]);
+
+  const b = labelParts("{{Run:SmartBlock:Daily review:RemoveButton=false}}");
+  assert.equal(b.text, "Run Daily review");
+  assert.deepEqual(b.parts, [
+    { text: "Run", button: true },
+    { text: " Daily review" },
+  ]);
+  assert.ok(!b.text.includes("RemoveButton"));
+
+  const c = labelParts("{{Go:42SmartBlock:Old flow}}");
+  assert.equal(c.text, "Go Old flow");
+  assert.deepEqual(c.parts, [
+    { text: "Go", button: true },
+    { text: " Old flow" },
+  ]);
+  assert.equal(plainText("{{Go:42SmartBlock:Old flow}}"), "Go Old flow");
+});
+
+test("labelParts truncates parts in lockstep with plain text", () => {
+  const raw = "21:13 {{⇥🕞:SmartBlock:Elapsed time}}   [[League Of Legends/16.3]] and watching random youtube videos. ";
+  const cut = labelParts(raw, 25);
+  assert.equal(cut.text.length <= 25, true);
+  assert.ok(cut.text.endsWith("…"));
+  assert.equal(cut.parts.map((part) => part.text).join(""), cut.text);
+  assert.equal(cut.parts.some((part) => part.button && part.text === "⇥🕞"), true);
 });
 
 test("removeToken drops one ref and its spacing", () => {

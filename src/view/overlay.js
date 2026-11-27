@@ -10,6 +10,7 @@ import { readCompassSettings, SETTING_IDS, writeSetting } from "../settings.js";
 import { createFeatures } from "./features.js";
 import { FEATURES } from "./features/index.js";
 import { markHover } from "./hover-dim.js";
+import { fillLabel } from "./label.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SIDE_NAME = { north: "Parents", south: "Children", west: "Friends", east: "Challengers", siblings: "Siblings" };
@@ -1003,9 +1004,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
 
   function renderCenterContent(element, box) {
     element.replaceChildren();
+    element.style.setProperty("--compass-head-h", `${box.headerH ?? 56}px`);
     const head = el("div", "compass-center-head");
     const kind = el("span", "compass-kind", hood.center.kind === "block" ? "Block" : "Page");
-    const title = el("span", "compass-node-title", hood.center.title);
+    const title = fillLabel(el("span", "compass-node-title"), hood.center.title, hood.center.parts);
     head.append(kind, title);
     element.append(head);
     if (hood.center.badges.length) {
@@ -1032,7 +1034,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       } else {
         line.append(el("span", "compass-caret-space"));
       }
-      line.append(el("span", "compass-row-text", info?.text ?? ""));
+      line.append(fillLabel(el("span", "compass-row-text"), info?.text ?? "", info?.parts));
       line.title = info?.text ?? "";
       element.append(line);
     }
@@ -1672,8 +1674,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
         element.setAttribute("aria-label", `Center: ${hood.center.title}`);
         element.title = hood.center.title;
       } else {
-        const visible = typeof node.alias === "string" && node.alias ? node.alias : node.title;
-        element.replaceChildren(el("span", "compass-node-title", visible));
+        const hasAlias = typeof node.alias === "string" && node.alias.length > 0;
+        const visible = hasAlias ? node.alias : node.title;
+        element.replaceChildren(fillLabel(el("span", "compass-node-title"), visible, hasAlias ? null : node.parts));
         if (emptyNode(node)) {
           const start = button("compass-start", "Start writing");
           start.dataset.uid = node.uid;

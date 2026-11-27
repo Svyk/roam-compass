@@ -1,5 +1,5 @@
 import { buildOntology, captionFor } from "./ontology.js";
-import { drawingTitle, parseAttribute, plainText, regionOwner, scanRefs, splitNames, tailShape } from "./text.js";
+import { drawingTitle, labelParts, parseAttribute, regionOwner, scanRefs, splitNames, tailShape } from "./text.js";
 
 // One center, six relationship roles, four directions. Siblings sit in their own band.
 export const ROLES = ["parent", "child", "friend", "challenger", "previous", "next"];
@@ -117,19 +117,28 @@ export function attributeForRole(role, settings) {
   return name;
 }
 
-// Title of a block string. A Plexus region takes the resolver's label when it gives a non-empty string.
-function blockTitle(uid, string, max, resolveRegion) {
+// Title and optional button parts of a block string. A Plexus region takes the resolver's label when it gives a non-empty string.
+function blockLabel(uid, string, max, resolveRegion) {
   if (resolveRegion && regionOwner(string) !== null) {
     const label = resolveRegion(uid, string);
-    if (label) return label.length > max ? `${label.slice(0, Math.max(1, max - 1)).trimEnd()}…` : label;
+    if (label) {
+      const text = label.length > max ? `${label.slice(0, Math.max(1, max - 1)).trimEnd()}…` : label;
+      return { text, parts: null };
+    }
   }
-  return drawingTitle(string, max) ?? plainText(string ?? "", max);
+  const drawn = drawingTitle(string, max);
+  if (drawn !== null) return { text: drawn, parts: null };
+  const built = labelParts(string ?? "", max);
+  return {
+    text: built.text,
+    parts: built.parts.some((part) => part.button) ? built.parts : null,
+  };
 }
 
-function titleOf(entity, resolveRegion) {
-  if (!entity) return "";
-  if (typeof entity.title === "string" && entity.title) return entity.title;
-  return blockTitle(entity.uid, entity.string, 90, resolveRegion);
+function labelOf(entity, resolveRegion) {
+  if (!entity) return { text: "", parts: null };
+  if (typeof entity.title === "string" && entity.title) return { text: entity.title, parts: null };
+  return blockLabel(entity.uid, entity.string, 90, resolveRegion);
 }
 
 export function isDrawingLike(node) {
@@ -231,14 +240,17 @@ function outlineIndex(outline, resolveRegion) {
   const rows = [];
   walk(outline, (block, depth, parentUid) => {
     index.set(block.uid, { parentUid, depth });
-    rows.push({
+    const built = blockLabel(block.uid, block.string, 72, resolveRegion);
+    const row = {
       uid: block.uid,
-      text: blockTitle(block.uid, block.string, 72, resolveRegion) || " ",
+      text: built.text || " ",
       depth,
       parentUid,
       childCount: (block.children ?? []).filter((child) => child?.uid).length,
       plexus: plexusKind(block),
-    });
+    };
+    if (built.parts) row.parts = built.parts;
+    rows.push(row);
   });
   return { index, rows };
 }
@@ -512,10 +524,11 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
     const entity = entities.get(uid);
     const picked = pickRole(items);
     const typed = picked.strongest.filter((item) => item.kind === "typed");
-    nodes.push({
+    const built = labelOf(entity, resolveRegion);
+    const node = {
       uid,
       kind: kindOf(entity),
-      title: titleOf(entity, resolveRegion) || uid,
+      title: built.text || uid,
       string: typeof entity?.string === "string" ? entity.string : "",
       alias: aliasOf(entity, source.aliases),
       editTime: finiteTime(entity?.editTime),
@@ -528,7 +541,9 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
       label: [...new Set(typed.map((item) => [item.caption ?? item.attribute, ...item.labels].join(" · ")))].join(" | "),
       writable: typed.length === 1 && typed[0].writable ? typed[0] : null,
       via: null,
-    });
+    };
+    if (built.parts) node.parts = built.parts;
+    nodes.push(node);
   }
 
   const placed = new Set(nodes.map((node) => node.uid));
@@ -542,10 +557,11 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
         existing.evidence.push(item);
         return;
       }
-      siblings.set(entity.uid, {
+      const built = labelOf(entity, resolveRegion);
+      const sibling = {
         uid: entity.uid,
         kind: kindOf(entity),
-        title: titleOf(entity, resolveRegion) || entity.uid,
+        title: built.text || entity.uid,
         string: typeof entity.string === "string" ? entity.string : "",
         alias: aliasOf(entity, source.aliases),
         editTime: finiteTime(entity?.editTime),
@@ -558,7 +574,9 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
         label: "",
         writable: null,
         via,
-      });
+      };
+      if (built.parts) sibling.parts = built.parts;
+      siblings.set(entity.uid, sibling);
     };
     for (const peer of source.peers ?? []) {
       for (const item of peer.incoming ?? []) {
@@ -604,14 +622,20 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
   const keptUids = new Set(kept.map((node) => node.uid));
   for (const node of kept) if (node.via && !keptUids.has(node.via)) node.via = null;
 
+  const centerBuilt = center.kind === "block"
+    ? blockLabel(centerUid, center.string, 120, resolveRegion)
+    : { text: center.title || "", parts: null };
+  const centerOut = {
+    uid: centerUid,
+    kind: center.kind === "block" ? "block" : "page",
+    title: centerBuilt.text || centerUid,
+    badges,
+    plexus: center.kind === "block" ? plexusKind(center) : null,
+  };
+  if (centerBuilt.parts) centerOut.parts = centerBuilt.parts;
+
   return {
-    center: {
-      uid: centerUid,
-      kind: center.kind === "block" ? "block" : "page",
-      title: center.kind === "block" ? blockTitle(centerUid, center.string, 120, resolveRegion) || centerUid : center.title || centerUid,
-      badges,
-      plexus: center.kind === "block" ? plexusKind(center) : null,
-    },
+    center: centerOut,
     nodes: kept,
     overflow,
     outline: outline.rows,

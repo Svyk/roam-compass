@@ -15,6 +15,7 @@ import * as drawingsModule from "./scenarios/drawings.js";
 import * as releaseModule from "./scenarios/release.js";
 import * as frameModule from "./scenarios/frame.js";
 import * as roamDialogModule from "./scenarios/roam-dialog.js";
+import * as smartblockModule from "./scenarios/smartblock.js";
 
 const SCENARIO_SOURCES = [
   ["test/harness/scenarios/base.js", baseModule],
@@ -32,6 +33,7 @@ const SCENARIO_SOURCES = [
   ["test/harness/scenarios/release.js", releaseModule],
   ["test/harness/scenarios/frame.js", frameModule],
   ["test/harness/scenarios/roam-dialog.js", roamDialogModule],
+  ["test/harness/scenarios/smartblock.js", smartblockModule],
 ];
 
 function extractScenarios(mod) {

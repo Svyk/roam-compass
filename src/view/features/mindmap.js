@@ -9,6 +9,7 @@ import {
 } from "../../model/mindmap.js";
 import { buildNeighborhood, plexusRegionLabels } from "../../model/neighborhood.js";
 import { SETTING_IDS } from "../../settings.js";
+import { fillLabel } from "../label.js";
 
 const EXPANDED_SOUTH = new Set(["south"]);
 
@@ -186,12 +187,12 @@ export function createMindMap(ctx) {
     element.title = center.title;
     element.setAttribute("aria-label", `Center: ${center.title}`);
 
-    const sig = `center|${center.kind}|${center.title}`;
+    const sig = `center|${center.kind}|${center.title}|${center.parts ? 1 : 0}`;
     if (element._mmSig !== sig) {
       element._mmSig = sig;
       const head = ctx.el("div", "compass-center-head");
       const kind = ctx.el("span", "compass-kind", center.kind === "block" ? "Block" : "Page");
-      const title = ctx.el("span", "compass-node-title", center.title);
+      const title = fillLabel(ctx.el("span", "compass-node-title"), center.title, center.parts);
       head.append(kind, title);
       element.replaceChildren(head);
     }
@@ -243,10 +244,11 @@ export function createMindMap(ctx) {
       ? occ.childCount
       : (Array.isArray(cachedKids) ? cachedKids.length : null);
 
-    const sig = `${visibleTitle}|${item.status}|${item.side}|${isTreeBranch ? 1 : 0}|${knownCount ?? ""}`;
+    const hasAlias = typeof node?.alias === "string" && node.alias.length > 0;
+    const sig = `${visibleTitle}|${hasAlias ? 0 : (node?.parts ? 1 : 0)}|${item.status}|${item.side}|${isTreeBranch ? 1 : 0}|${knownCount ?? ""}`;
     if (element._mmSig !== sig) {
       element._mmSig = sig;
-      const titleSpan = ctx.el("span", "compass-node-title", visibleTitle);
+      const titleSpan = fillLabel(ctx.el("span", "compass-node-title"), visibleTitle, hasAlias ? null : node?.parts);
       if (isTreeBranch) {
         const expanded = item.status === "open";
         const label = expanded ? `Fold ${fullTitle}` : `Expand ${fullTitle}`;

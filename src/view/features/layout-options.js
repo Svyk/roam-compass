@@ -2,6 +2,7 @@ import { hiddenUids as baseHiddenUids } from "../../model/batch7.js";
 import { groupNodes } from "../../model/group.js";
 import { buildNeighborhood } from "../../model/neighborhood.js";
 import { SETTING_IDS } from "../../settings.js";
+import { fillLabel } from "../label.js";
 
 const EXPANDABLE_ZONES = new Set(["north", "south", "west", "east"]);
 const SUB_CAP = 4;
@@ -264,8 +265,9 @@ export function createLayoutOptions(ctx) {
           element.classList.add("compass-node-expanded");
           const subs = ctx.el("div", "compass-subs");
           for (const child of children.slice(0, SUB_CAP)) {
-            const label = child.alias || child.title;
-            const row = ctx.el("div", "compass-sub", label);
+            const hasAlias = typeof child.alias === "string" && child.alias.length > 0;
+            const label = hasAlias ? child.alias : child.title;
+            const row = fillLabel(ctx.el("div", "compass-sub"), label, hasAlias ? null : child.parts);
             row.dataset.uid = child.uid;
             row.setAttribute("role", "button");
             row.tabIndex = 0;
