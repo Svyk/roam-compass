@@ -5,7 +5,7 @@ var EXTENSION_TOOLS_KEY = "roam-compass";
 function defaultRoamApi() {
   return typeof globalThis.window !== "undefined" ? globalThis.window.roamAlphaAPI : globalThis.roamAlphaAPI;
 }
-function createCompassExtensionTools({ api, roam = defaultRoamApi(), version = "1.1.0" } = {}) {
+function createCompassExtensionTools({ api, roam = defaultRoamApi(), version = "1.2.0" } = {}) {
   const getRoam = () => roam || defaultRoamApi();
   return {
     name: "Compass",
