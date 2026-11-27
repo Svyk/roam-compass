@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createHost } from "../src/host.js";
+import {
+  CENTER_PULL,
+  ENTITY_PULL,
+  OUTLINE_PULL,
+  PAGE_ATTRIBUTES_PULL,
+  PEER_PULL,
+  REFS_TEXT_PULL,
+  createHost,
+} from "../src/host.js";
 import { createLifecycle } from "../src/lifecycle.js";
 
 function installRoam({ data = {}, util = {}, graph = "test-graph" } = {}) {
@@ -121,7 +129,7 @@ test("host.pageAttributes merges harcs of the same attribute, normalizes values,
       pull(pattern, ref) {
         assert.equal(
           pattern,
-          "[:block/uid {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string {:block/refs [:block/uid :block/string]}]}]}]",
+          PAGE_ATTRIBUTES_PULL,
         );
         const match = /:block\/uid "([^"]+)"/.exec(ref);
         const uid = match?.[1];
@@ -458,4 +466,32 @@ test("host.blockStrings pulls one string per uid, caps at 50, and skips errors",
     console.error = originalError;
     delete globalThis.roamAlphaAPI;
   }
+});
+
+test("every labelled block pull includes the shared two-level refs sub-pattern while :block/_refs stays one level", () => {
+  const leaf = "{:block/refs [:block/uid :block/string]}";
+  assert.equal(REFS_TEXT_PULL, `{:block/refs [:block/uid :block/string ${leaf}]}`);
+
+  // CENTER_PULL: center refs, parent, siblings, outgoing harc values, and incoming harc entities all pull two levels.
+  const parentAndSiblings = CENTER_PULL.slice(CENTER_PULL.indexOf("{:block/_children"), CENTER_PULL.indexOf("{:harc/_e"));
+  const harcOut = CENTER_PULL.slice(CENTER_PULL.indexOf("{:harc/_e"), CENTER_PULL.indexOf("{:harc/_v"));
+  const harcIn = CENTER_PULL.slice(CENTER_PULL.indexOf("{:harc/_v"), CENTER_PULL.indexOf("{:block/_refs"));
+  const mentions = CENTER_PULL.slice(CENTER_PULL.indexOf("{:block/_refs"));
+
+  assert.ok(CENTER_PULL.slice(0, CENTER_PULL.indexOf("{:block/page")).includes(leaf));
+  assert.equal(parentAndSiblings.split(REFS_TEXT_PULL).length - 1, 2);
+  assert.ok(harcOut.includes(REFS_TEXT_PULL));
+  assert.ok(harcIn.includes(REFS_TEXT_PULL));
+  assert.ok(!mentions.includes(REFS_TEXT_PULL));
+  assert.ok(!mentions.includes(leaf));
+
+  // OUTLINE_PULL pulls two levels on outline block refs.
+  assert.ok(OUTLINE_PULL.includes(leaf));
+
+  // PEER_PULL pulls two levels on both incoming entities and outgoing values.
+  assert.equal(PEER_PULL.split(REFS_TEXT_PULL).length - 1, 2);
+
+  // ENTITY_PULL and PAGE_ATTRIBUTES_PULL pull two levels.
+  assert.ok(ENTITY_PULL.includes(REFS_TEXT_PULL));
+  assert.ok(PAGE_ATTRIBUTES_PULL.includes(REFS_TEXT_PULL));
 });

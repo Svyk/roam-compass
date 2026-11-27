@@ -1671,17 +1671,19 @@ function planMove({ source, fromAttribute, toAttribute, value, newUid }) {
 // src/host.js
 var LABELS = "{:harc/_e [{:harc/a [:node/title :edit/time :create/time]} {:harc/v [:block/uid :node/title :edit/time :create/time :block/string :harc/v-string]}]}";
 var SOURCE = "[:block/uid :block/string :block/order {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order]}]";
+var REFS_LEAF_PULL = "{:block/refs [:block/uid :block/string]}";
+var REFS_TEXT_PULL = `{:block/refs [:block/uid :block/string ${REFS_LEAF_PULL}]}`;
 var CENTER_PULL = `[:block/uid :node/title :edit/time :create/time :block/string :block/order
- {:block/refs [:block/uid :node/title :edit/time :create/time :block/string {:block/refs [:block/uid :block/string]}]}
+ {:block/refs [:block/uid :node/title :edit/time :create/time :block/string ${REFS_LEAF_PULL}]}
  {:block/page [:block/uid :node/title :edit/time :create/time]}
- {:block/_children [:block/uid :node/title :edit/time :create/time :block/string {:block/refs [:block/uid :block/string]} {:block/children [:block/uid :block/string :block/order {:block/refs [:block/uid :block/string]}]}]}
+ {:block/_children [:block/uid :node/title :edit/time :create/time :block/string ${REFS_TEXT_PULL} {:block/children [:block/uid :block/string :block/order ${REFS_TEXT_PULL}]}]}
  {:harc/_e [:block/uid
    {:harc/a [:node/title :edit/time :create/time]}
-   {:harc/v [:block/uid :node/title :edit/time :create/time :block/string :harc/v-string {:block/refs [:block/uid :block/string]}]}
+   {:harc/v [:block/uid :node/title :edit/time :create/time :block/string :harc/v-string ${REFS_TEXT_PULL}]}
    {:harc/a-source ${SOURCE}}
    ${LABELS}]}
  {:harc/_v [:block/uid
-   {:harc/e [:block/uid :node/title :edit/time :create/time :block/string {:block/refs [:block/uid :block/string]}]}
+   {:harc/e [:block/uid :node/title :edit/time :create/time :block/string ${REFS_TEXT_PULL}]}
    {:harc/a [:node/title :edit/time :create/time]}
    {:harc/a-source ${SOURCE}}
    {:harc/v-source [:block/uid]}
@@ -1689,10 +1691,10 @@ var CENTER_PULL = `[:block/uid :node/title :edit/time :create/time :block/string
  {:block/_refs [:block/uid :block/string
    {:block/page [:block/uid :node/title :edit/time :create/time]}
    {:block/refs [:block/uid :node/title :edit/time :create/time :block/string]}]}]`;
-var OUTLINE_PULL = "[:block/uid :block/string :block/order {:block/refs [:block/uid :node/title :block/string {:block/refs [:block/uid :block/string]}]} {:block/children ...}]";
+var OUTLINE_PULL = `[:block/uid :block/string :block/order {:block/refs [:block/uid :node/title :block/string ${REFS_LEAF_PULL}]} {:block/children ...}]`;
 var PEER_PULL = `[:block/uid
- {:harc/_v [{:harc/a [:node/title]} {:harc/e [:block/uid :node/title :block/string {:block/refs [:block/uid :block/string]}]}]}
- {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string {:block/refs [:block/uid :block/string]}]}]}]`;
+ {:harc/_v [{:harc/a [:node/title]} {:harc/e [:block/uid :node/title :block/string ${REFS_TEXT_PULL}]}]}
+ {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string ${REFS_TEXT_PULL}]}]}]`;
 var WATCHES = [
   "[:block/string :node/title {:block/_refs [:block/uid :block/string]} {:harc/_e [:block/uid]} {:harc/_v [:block/uid]}]",
   "[:block/uid :block/string {:block/children ...}]"
@@ -1723,9 +1725,9 @@ var ATTR_BLOCK_PULL = "[:block/uid {:block/children [:block/uid :block/string :b
 var SOURCE_BLOCK_PULL = "[:block/uid :block/string :block/order {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order {:block/children [:block/uid]}]}]";
 var RECENT_PAGES_QUERY = "[:find ?uid ?title ?edit ?create :where [?e :node/title ?title] [?e :block/uid ?uid] [?e :edit/time ?edit] [?e :create/time ?create]]";
 var RECENT_DRAWINGS_QUERY = `[:find ?uid ?edit :where [?b :block/uid ?uid] [?b :block/string ?s] [(clojure.string/includes? ?s "excalidraw")] [?b :edit/time ?edit]]`;
-var ENTITY_PULL = "[:block/uid :node/title :block/string {:block/refs [:block/uid :block/string {:block/refs [:block/uid :block/string]}]}]";
+var ENTITY_PULL = `[:block/uid :node/title :block/string ${REFS_TEXT_PULL}]`;
 var GUARD_PULL = "[:block/uid :block/string]";
-var PAGE_ATTRIBUTES_PULL = "[:block/uid {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string {:block/refs [:block/uid :block/string]}]}]}]";
+var PAGE_ATTRIBUTES_PULL = `[:block/uid {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string ${REFS_TEXT_PULL}]}]}]`;
 var PAGE_ATTRIBUTES_CAP = 200;
 var BLOCK_STRINGS_PULL = "[:block/uid :block/string]";
 var BLOCK_STRINGS_CAP = 50;

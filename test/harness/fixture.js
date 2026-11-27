@@ -299,12 +299,12 @@ function pageEntity(page) {
   return out;
 }
 
-function blockEntity(block, blocksByUid = null, depth = 0) {
+function blockEntity(block, blocksByUid = null, maxDepth = 0) {
   if (!block) return null;
   const out = { uid: block.uid, string: block.string ?? "", order: block.order ?? 0 };
   if (Number.isFinite(block.editTime)) out.editTime = block.editTime;
   if (Number.isFinite(block.createTime)) out.createTime = block.createTime;
-  if (blocksByUid && depth < 2 && typeof block.string === "string" && block.string.includes("((")) {
+  if (blocksByUid && maxDepth > 0 && typeof block.string === "string" && block.string.includes("((")) {
     const refs = [];
     const seen = new Set();
     for (const token of scanRefs(block.string)) {
@@ -312,11 +312,22 @@ function blockEntity(block, blocksByUid = null, depth = 0) {
       const hit = blocksByUid.get(token.uid);
       if (!hit) continue;
       seen.add(token.uid);
-      refs.push(blockEntity(hit.block, blocksByUid, depth + 1));
+      refs.push(blockEntity(hit.block, blocksByUid, maxDepth - 1));
     }
     if (refs.length) out.refs = refs;
   }
   return out;
+}
+
+function collectRefMap(entity, map = new Map()) {
+  if (!entity || typeof entity !== "object") return map;
+  for (const ref of entity.refs ?? []) {
+    if (typeof ref?.uid === "string" && typeof ref?.string === "string" && !map.has(ref.uid)) {
+      map.set(ref.uid, ref.string);
+    }
+    collectRefMap(ref, map);
+  }
+  return map;
 }
 
 function buildIndex(graph) {
@@ -339,11 +350,11 @@ function buildIndex(graph) {
     walk(page.children, page);
   }
 
-  function resolveToken(token) {
+  function resolveToken(token, maxDepth = 1) {
     if (!token) return null;
     if (token.type === "block") {
       const hit = blocksByUid.get(token.uid);
-      return hit ? blockEntity(hit.block, blocksByUid) : null;
+      return hit ? blockEntity(hit.block, blocksByUid, maxDepth) : null;
     }
     if (token.type === "page") {
       const hit = pagesByTitle.get(token.title);
@@ -352,11 +363,11 @@ function buildIndex(graph) {
     return null;
   }
 
-  function refsOfString(string) {
+  function refsOfString(string, maxDepth = 1) {
     const refs = [];
     const seen = new Set();
     for (const token of scanRefs(string)) {
-      const entity = resolveToken(token);
+      const entity = resolveToken(token, maxDepth);
       if (entity && !seen.has(entity.uid)) {
         seen.add(entity.uid);
         refs.push(entity);
@@ -397,7 +408,7 @@ function buildIndex(graph) {
 
     if (shape.kind === "refs") {
       for (const token of shape.values) {
-        addTarget(resolveToken(token), block.uid);
+        addTarget(resolveToken(token, 2), block.uid);
       }
     } else if (shape.kind === "bare") {
       const sortedChildren = [...(block.children ?? [])].sort(byOrder);
@@ -406,12 +417,12 @@ function buildIndex(graph) {
         const childShape = tailShape(child.string);
         if (childShape.kind === "refs") {
           for (const token of childShape.values) {
-            addTarget(resolveToken(token), child.uid);
+            addTarget(resolveToken(token, 2), child.uid);
           }
         } else {
           const refs = scanRefs(child.string).filter((t) => !t.classTag);
           if (refs.length) {
-            for (const token of refs) addTarget(resolveToken(token), child.uid);
+            for (const token of refs) addTarget(resolveToken(token, 2), child.uid);
           } else {
             const text = (child.string ?? "").trim();
             if (text) values.push({ uid: `v-${child.uid}`, text });
@@ -421,7 +432,7 @@ function buildIndex(graph) {
     } else {
       const refs = scanRefs(parsed.tail).filter((t) => !t.classTag);
       if (refs.length) {
-        for (const token of refs) addTarget(resolveToken(token), block.uid);
+        for (const token of refs) addTarget(resolveToken(token, 2), block.uid);
       } else {
         const text = parsed.tail.trim();
         if (text) values.push({ uid: `v-${block.uid}`, text });
@@ -457,7 +468,7 @@ function buildIndex(graph) {
     if (parent !== page && parseAttribute(parent.string)) continue;
     const extracted = extractAttributeValues(block);
     if (!extracted) continue;
-    const ownerEntity = parent === page ? pageEntity(page) : blockEntity(parent);
+    const ownerEntity = parent === page ? pageEntity(page) : blockEntity(parent, blocksByUid, 2);
     const harc = {
       uid: `h-${block.uid}`,
       attribute: extracted.attribute,
@@ -649,7 +660,7 @@ export function createFakeHost(graph = createGraph(), { lifecycle } = {}) {
   function mentionsFor(targetUid, index) {
     const mentions = [];
     for (const { block, page } of index.blocksByUid.values()) {
-      const refs = index.refsOfString(block.string ?? "");
+      const refs = index.refsOfString(block.string ?? "", 0);
       if (!refs.some((ref) => ref.uid === targetUid)) continue;
       mentions.push({
         uid: block.uid,
@@ -709,12 +720,12 @@ export function createFakeHost(graph = createGraph(), { lifecycle } = {}) {
         kind: "block",
         string: block.string ?? "",
         page: pageEntity(ownerPage),
-        parent: parent === ownerPage ? pageEntity(ownerPage) : blockEntity(parent, index.blocksByUid),
+        parent: parent === ownerPage ? pageEntity(ownerPage) : blockEntity(parent, index.blocksByUid, 2),
         siblings: [...(parent.children ?? [])]
           .filter((sib) => sib.uid !== block.uid)
-          .map((sib) => blockEntity(sib, index.blocksByUid))
+          .map((sib) => blockEntity(sib, index.blocksByUid, 2))
           .sort(byOrder),
-        refs: index.refsOfString(block.string ?? ""),
+        refs: index.refsOfString(block.string ?? "", 1),
       };
       rawChildren = block.children;
     }
@@ -1092,7 +1103,7 @@ export function createFakeHost(graph = createGraph(), { lifecycle } = {}) {
     const blockHit = index.blocksByUid.get(uid);
     if (!blockHit) return null;
     const raw = blockHit.block.string ?? "";
-    const refs = (refUid) => index.blocksByUid.get(refUid)?.block?.string;
+    const refs = collectRefMap(blockEntity(blockHit.block, index.blocksByUid, 2));
     const title = drawingTitle(raw, 90) ?? (plainText(raw, 90, { refs, selfUid: blockHit.block.uid }) || blockHit.block.uid);
     return { uid: blockHit.block.uid, kind: "block", title };
   }
@@ -1156,7 +1167,7 @@ export function createFakeHost(graph = createGraph(), { lifecycle } = {}) {
           } else if (val?.text != null) {
             out[uid][key].values.push({ text: String(val.text) });
           } else if (typeof val?.string === "string") {
-            const refs = (refUid) => index.blocksByUid.get(refUid)?.block?.string;
+            const refs = collectRefMap(val);
             out[uid][key].values.push({ text: plainText(val.string, 90, { refs, selfUid: val.uid }) || val.uid });
           }
         }

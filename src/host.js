@@ -6,18 +6,20 @@ import { drawingTitle, parseAttribute, plainText } from "./model/text.js";
 // Harc labels: attributes nested under a relation block (Role:: Lead under Owner::).
 const LABELS = "{:harc/_e [{:harc/a [:node/title :edit/time :create/time]} {:harc/v [:block/uid :node/title :edit/time :create/time :block/string :harc/v-string]}]}";
 const SOURCE = "[:block/uid :block/string :block/order {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order]}]";
+const REFS_LEAF_PULL = "{:block/refs [:block/uid :block/string]}";
+export const REFS_TEXT_PULL = `{:block/refs [:block/uid :block/string ${REFS_LEAF_PULL}]}`;
 
 export const CENTER_PULL = `[:block/uid :node/title :edit/time :create/time :block/string :block/order
- {:block/refs [:block/uid :node/title :edit/time :create/time :block/string {:block/refs [:block/uid :block/string]}]}
+ {:block/refs [:block/uid :node/title :edit/time :create/time :block/string ${REFS_LEAF_PULL}]}
  {:block/page [:block/uid :node/title :edit/time :create/time]}
- {:block/_children [:block/uid :node/title :edit/time :create/time :block/string {:block/refs [:block/uid :block/string]} {:block/children [:block/uid :block/string :block/order {:block/refs [:block/uid :block/string]}]}]}
+ {:block/_children [:block/uid :node/title :edit/time :create/time :block/string ${REFS_TEXT_PULL} {:block/children [:block/uid :block/string :block/order ${REFS_TEXT_PULL}]}]}
  {:harc/_e [:block/uid
    {:harc/a [:node/title :edit/time :create/time]}
-   {:harc/v [:block/uid :node/title :edit/time :create/time :block/string :harc/v-string {:block/refs [:block/uid :block/string]}]}
+   {:harc/v [:block/uid :node/title :edit/time :create/time :block/string :harc/v-string ${REFS_TEXT_PULL}]}
    {:harc/a-source ${SOURCE}}
    ${LABELS}]}
  {:harc/_v [:block/uid
-   {:harc/e [:block/uid :node/title :edit/time :create/time :block/string {:block/refs [:block/uid :block/string]}]}
+   {:harc/e [:block/uid :node/title :edit/time :create/time :block/string ${REFS_TEXT_PULL}]}
    {:harc/a [:node/title :edit/time :create/time]}
    {:harc/a-source ${SOURCE}}
    {:harc/v-source [:block/uid]}
@@ -26,11 +28,11 @@ export const CENTER_PULL = `[:block/uid :node/title :edit/time :create/time :blo
    {:block/page [:block/uid :node/title :edit/time :create/time]}
    {:block/refs [:block/uid :node/title :edit/time :create/time :block/string]}]}]`;
 
-export const OUTLINE_PULL = "[:block/uid :block/string :block/order {:block/refs [:block/uid :node/title :block/string {:block/refs [:block/uid :block/string]}]} {:block/children ...}]";
+export const OUTLINE_PULL = `[:block/uid :block/string :block/order {:block/refs [:block/uid :node/title :block/string ${REFS_LEAF_PULL}]} {:block/children ...}]`;
 
 export const PEER_PULL = `[:block/uid
- {:harc/_v [{:harc/a [:node/title]} {:harc/e [:block/uid :node/title :block/string {:block/refs [:block/uid :block/string]}]}]}
- {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string {:block/refs [:block/uid :block/string]}]}]}]`;
+ {:harc/_v [{:harc/a [:node/title]} {:harc/e [:block/uid :node/title :block/string ${REFS_TEXT_PULL}]}]}
+ {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string ${REFS_TEXT_PULL}]}]}]`;
 
 const WATCHES = [
   "[:block/string :node/title {:block/_refs [:block/uid :block/string]} {:harc/_e [:block/uid]} {:harc/_v [:block/uid]}]",
@@ -63,9 +65,9 @@ const ATTR_BLOCK_PULL = "[:block/uid {:block/children [:block/uid :block/string 
 const SOURCE_BLOCK_PULL = "[:block/uid :block/string :block/order {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order {:block/children [:block/uid]}]}]";
 const RECENT_PAGES_QUERY = "[:find ?uid ?title ?edit ?create :where [?e :node/title ?title] [?e :block/uid ?uid] [?e :edit/time ?edit] [?e :create/time ?create]]";
 const RECENT_DRAWINGS_QUERY = `[:find ?uid ?edit :where [?b :block/uid ?uid] [?b :block/string ?s] [(clojure.string/includes? ?s "excalidraw")] [?b :edit/time ?edit]]`;
-const ENTITY_PULL = "[:block/uid :node/title :block/string {:block/refs [:block/uid :block/string {:block/refs [:block/uid :block/string]}]}]";
+export const ENTITY_PULL = `[:block/uid :node/title :block/string ${REFS_TEXT_PULL}]`;
 const GUARD_PULL = "[:block/uid :block/string]";
-const PAGE_ATTRIBUTES_PULL = "[:block/uid {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string {:block/refs [:block/uid :block/string]}]}]}]";
+export const PAGE_ATTRIBUTES_PULL = `[:block/uid {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string ${REFS_TEXT_PULL}]}]}]`;
 const PAGE_ATTRIBUTES_CAP = 200;
 const BLOCK_STRINGS_PULL = "[:block/uid :block/string]";
 const BLOCK_STRINGS_CAP = 50;
