@@ -192,7 +192,7 @@ async function runScenario({ chromeBin, indexHtmlPath, outDir, name, theme, sett
   await rm(screenshotPath, { force: true });
 
   let domRun = await runChrome(chromeBin, ["--dump-dom", pageUrl]);
-  if (domRun.timedOut) domRun = await runChrome(chromeBin, ["--dump-dom", pageUrl]);
+  if (domRun.timedOut || domRun.code !== 0) domRun = await runChrome(chromeBin, ["--dump-dom", pageUrl]);
   let result = null;
 
   if (domRun.timedOut) {
