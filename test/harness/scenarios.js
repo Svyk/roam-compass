@@ -13,6 +13,7 @@ import * as editModule from "./scenarios/edit.js";
 import * as boardsModule from "./scenarios/boards.js";
 import * as drawingsModule from "./scenarios/drawings.js";
 import * as releaseModule from "./scenarios/release.js";
+import * as frameModule from "./scenarios/frame.js";
 
 const SCENARIO_SOURCES = [
   ["test/harness/scenarios/base.js", baseModule],
@@ -28,6 +29,7 @@ const SCENARIO_SOURCES = [
   ["test/harness/scenarios/boards.js", boardsModule],
   ["test/harness/scenarios/drawings.js", drawingsModule],
   ["test/harness/scenarios/release.js", releaseModule],
+  ["test/harness/scenarios/frame.js", frameModule],
 ];
 
 function extractScenarios(mod) {

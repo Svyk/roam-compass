@@ -15054,6 +15054,13 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   let panX = 0;
   let panY = 0;
   let zoom = 1;
+  let autoFitted = false;
+  let lastStageW = 0;
+  let lastStageH = 0;
+  let frameObserver = null;
+  let stageObserver = null;
+  let observedMain = null;
+  let observedSidebar = null;
   let pointer = null;
   let suppressClick = false;
   let clickTimer = null;
@@ -15143,7 +15150,33 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const light = luminance(paper);
     root.dataset.tone = light != null && light < 0.35 ? "dark" : "light";
   }
+  function syncFrameObservers() {
+    if (!frameObserver) return;
+    const main = document.querySelector(".roam-main");
+    if (main !== observedMain) {
+      if (observedMain) frameObserver.unobserve(observedMain);
+      if (main) frameObserver.observe(main);
+      observedMain = main || null;
+    }
+    const sidebar = document.getElementById("right-sidebar");
+    if (sidebar !== observedSidebar) {
+      if (observedSidebar) frameObserver.unobserve(observedSidebar);
+      if (sidebar) frameObserver.observe(sidebar);
+      observedSidebar = sidebar || null;
+    }
+  }
+  function refitIfResized() {
+    if (root.hidden || !geometry || typeof stage.getBoundingClientRect !== "function") return;
+    const rect = stage.getBoundingClientRect();
+    const w = Math.round(rect.width);
+    const h = Math.round(rect.height);
+    if (!w || !h || w === lastStageW && h === lastStageH) return;
+    lastStageW = w;
+    lastStageH = h;
+    if (autoFitted) fit(false);
+  }
   function placeFrame() {
+    syncFrameObservers();
     const sidebar = document.getElementById("right-sidebar");
     const viewport = globalThis.innerWidth || 0;
     let inset = 0;
@@ -15152,21 +15185,63 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       if (width > 48 && width < viewport * 0.6) inset = Math.round(width);
     }
     root.style.right = `${inset}px`;
+    refitIfResized();
   }
   function applyCamera(glide = false) {
     world.classList.toggle("compass-glide", glide);
     world.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
     if (glide) later(() => world.classList.remove("compass-glide"), 320);
   }
+  function fitPadding(rect) {
+    if (customView || !rect?.width || !rect?.height) {
+      return { left: 24, right: 24, top: 24, bottom: 24 };
+    }
+    let left = 48;
+    let right = 48;
+    let top = 48;
+    let bottom = 48;
+    const gap = 8;
+    const maxH = Math.min(160, rect.width * 0.3);
+    const maxV = Math.min(120, rect.height * 0.25);
+    const chrome = typeof stage.querySelectorAll === "function" ? stage.querySelectorAll(".compass-zone-add, .compass-zone-count") : [];
+    for (const item of chrome) {
+      if (item.hidden || typeof item.getBoundingClientRect !== "function") continue;
+      const r = item.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      if (item.classList.contains("compass-zone-add-north") || item.classList.contains("compass-zone-count-north")) {
+        top = Math.max(top, r.bottom - rect.top + gap);
+      } else if (item.classList.contains("compass-zone-add-south") || item.classList.contains("compass-zone-count-south") || item.classList.contains("compass-zone-count-siblings")) {
+        bottom = Math.max(bottom, rect.bottom - r.top + gap);
+      } else {
+        const cx = (r.left + r.right) / 2 - rect.left;
+        if (cx < rect.width / 2) left = Math.max(left, r.right - rect.left + gap);
+        else right = Math.max(right, rect.right - r.left + gap);
+      }
+    }
+    return {
+      left: Math.min(left, maxH),
+      right: Math.min(right, maxH),
+      top: Math.min(top, maxV),
+      bottom: Math.min(bottom, maxV)
+    };
+  }
   function fit(glide = true) {
     if (!geometry) return;
     const rect = stage.getBoundingClientRect();
+    if (rect.width && rect.height) {
+      lastStageW = Math.round(rect.width);
+      lastStageH = Math.round(rect.height);
+    }
     const { minX, minY, maxX, maxY } = geometry.bounds;
-    const width = Math.max(1, maxX - minX + 48);
-    const height = Math.max(1, maxY - minY + 48);
-    zoom = clamp3(Math.min(1, (rect.width || width) / width, (rect.height || height) / height), 0.3, 1);
-    panX = -((minX + maxX) / 2) * zoom;
-    panY = -((minY + maxY) / 2) * zoom;
+    const pad3 = fitPadding(rect);
+    const worldW = Math.max(1, maxX - minX);
+    const worldH = Math.max(1, maxY - minY);
+    const availW = rect.width ? Math.max(1, rect.width - pad3.left - pad3.right) : worldW;
+    const availH = rect.height ? Math.max(1, rect.height - pad3.top - pad3.bottom) : worldH;
+    zoom = clamp3(Math.min(1, availW / worldW, availH / worldH), 0.3, 1);
+    panX = (rect.width ? (pad3.left - pad3.right) / 2 : 0) - (minX + maxX) / 2 * zoom;
+    panY = (rect.height ? (pad3.top - pad3.bottom) / 2 : 0) - (minY + maxY) / 2 * zoom;
+    autoFitted = true;
     applyCamera(glide);
   }
   function clientToWorld(clientX, clientY) {
@@ -15180,6 +15255,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (Number.isFinite(camera?.panX)) panX = camera.panX;
     if (Number.isFinite(camera?.panY)) panY = camera.panY;
     if (Number.isFinite(camera?.zoom)) zoom = clamp3(camera.zoom, 0.25, 2.5);
+    autoFitted = false;
     applyCamera(glide === true);
   }
   function setGeometry(next) {
@@ -15362,7 +15438,6 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     forceSidecar = false;
     void host.syncSidecar(uid, sidecar).catch((error) => console.error("[compass] sidecar", error)).then(() => {
       placeFrame();
-      later(placeFrame, 350);
     });
   }
   function scheduleReload() {
@@ -16729,6 +16804,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       pointer.dragging = true;
       panX = pointer.panX + dx;
       panY = pointer.panY + dy;
+      autoFitted = false;
       applyCamera(false);
       return;
     }
@@ -16766,6 +16842,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     zoom = clamp3(zoom * (event.deltaY < 0 ? step2 : 1 / step2), 0.25, 2.5);
     panX = ox - wx * zoom;
     panY = oy - wy * zoom;
+    autoFitted = false;
     applyCamera(false);
   }
   function openPart(part) {
@@ -17287,12 +17364,29 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   lifecycle.event(globalThis, "resize", () => {
     if (!root.hidden) placeFrame();
   });
+  if (typeof globalThis.ResizeObserver === "function") {
+    frameObserver = new globalThis.ResizeObserver(() => {
+      syncFrameObservers();
+      if (!root.hidden) placeFrame();
+    });
+    stageObserver = new globalThis.ResizeObserver(() => {
+      if (!root.hidden) refitIfResized();
+    });
+    syncFrameObservers();
+    stageObserver.observe(stage);
+  }
   lifecycle.event(document, "keydown", onKey);
   lifecycle.event(document, "keyup", onKeyUp);
   lifecycle.event(globalThis, "roam-plexus:ready", onPlexusReady);
   lifecycle.event(globalThis, "roam-plexus:unload", onPlexusUnload);
   subscribePlexus();
   lifecycle.add(() => {
+    frameObserver?.disconnect();
+    frameObserver = null;
+    stageObserver?.disconnect();
+    stageObserver = null;
+    observedMain = null;
+    observedSidebar = null;
     if (plexusOff) plexusOff();
     dropAllThumbs();
     revokePartUrls();

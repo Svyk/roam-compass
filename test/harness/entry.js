@@ -35,9 +35,66 @@ window.addEventListener("unhandledrejection", (event) => {
   errors.push(`Unhandled rejection: ${formatError(event?.reason)}`);
 });
 
+let stopResizeShim = null;
 if (new URLSearchParams(window.location.search).has("scenario")) {
   window.requestAnimationFrame = (callback) => window.setTimeout(() => callback(performance.now()), 16);
   window.cancelAnimationFrame = (id) => window.clearTimeout(id);
+  // Headless Chrome under --virtual-time-budget stops delivering BeginMainFrame after initial load,
+  // so ResizeObserver callbacks never fire after boot. Mirror the rAF shim by checking observed boxes.
+  const observers = new Set();
+  let roTimer = null;
+  const pumpObservers = () => {
+    roTimer = null;
+    let active = false;
+    for (const obs of [...observers]) {
+      const entries = [];
+      for (const [el, prev] of obs._targets) {
+        if (!el.isConnected) continue;
+        active = true;
+        const r = el.getBoundingClientRect();
+        const w = Math.round(r.width);
+        const h = Math.round(r.height);
+        if (!prev || prev.w !== w || prev.h !== h) {
+          obs._targets.set(el, { w, h });
+          entries.push({ target: el, contentRect: r });
+        }
+      }
+      if (entries.length) {
+        try { obs._cb(entries, obs); } catch (err) { errors.push(formatError(err)); }
+      }
+    }
+    if (active && observers.size) roTimer = window.setTimeout(pumpObservers, 16);
+  };
+  const schedulePump = () => {
+    if (roTimer == null && observers.size) roTimer = window.setTimeout(pumpObservers, 16);
+  };
+  window.ResizeObserver = class HarnessResizeObserver {
+    constructor(cb) {
+      this._cb = cb;
+      this._targets = new Map();
+    }
+    observe(el) {
+      if (!el) return;
+      if (!this._targets.has(el)) this._targets.set(el, null);
+      observers.add(this);
+      schedulePump();
+    }
+    unobserve(el) {
+      this._targets.delete(el);
+      if (!this._targets.size) observers.delete(this);
+    }
+    disconnect() {
+      this._targets.clear();
+      observers.delete(this);
+    }
+  };
+  stopResizeShim = () => {
+    observers.clear();
+    if (roTimer != null) {
+      window.clearTimeout(roTimer);
+      roTimer = null;
+    }
+  };
 }
 
 import { createLifecycle } from "../../src/lifecycle.js";
@@ -154,6 +211,7 @@ async function boot() {
     }
   }
 
+  stopResizeShim?.();
   const ok = errors.length === 0 && assertions.every((item) => item.ok);
   writeResult({
     scenario: scenarioName,
