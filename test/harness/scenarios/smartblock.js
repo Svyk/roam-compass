@@ -29,5 +29,38 @@ export const SCENARIOS = {
       childText.includes("Double timestamp buttons2") && !childText.includes("SmartBlock"),
       `child node shows workflow name without SmartBlock (got ${JSON.stringify(childText)})`,
     );
+
+    // D2: two-line center header is also unclipped in Mind Map and Facets.
+    const views = h.features("views");
+    await views.set("mindmap");
+    await h.wait(60);
+    const mmCard = h.q(".compass-mindmap .compass-node-center");
+    const mmHead = mmCard?.querySelector(".compass-center-head");
+    h.assert(Boolean(mmCard && mmHead), "Mind Map renders center card and header");
+    h.assert(
+      mmHead.scrollHeight <= mmHead.clientHeight + 1,
+      `Mind Map center header not clipped (scrollHeight=${mmHead.scrollHeight}, clientHeight=${mmHead.clientHeight})`,
+    );
+    h.assert(
+      mmCard.scrollHeight <= mmCard.clientHeight + 1,
+      `Mind Map center card not clipped (scrollHeight=${mmCard.scrollHeight}, clientHeight=${mmCard.clientHeight})`,
+    );
+
+    await views.set("facets");
+    await h.wait(60);
+    const fCard = h.q(".compass-facets .compass-node-center");
+    const fHead = fCard?.querySelector(".compass-center-head");
+    h.assert(Boolean(fCard && fHead), "Facets renders center card and header");
+    h.assert(
+      fHead.scrollHeight <= fHead.clientHeight + 1,
+      `Facets center header not clipped (scrollHeight=${fHead.scrollHeight}, clientHeight=${fHead.clientHeight})`,
+    );
+    h.assert(
+      fCard.scrollHeight <= fCard.clientHeight + 1,
+      `Facets center card not clipped (scrollHeight=${fCard.scrollHeight}, clientHeight=${fCard.clientHeight})`,
+    );
+
+    await views.set("compass");
+    await h.wait(60);
   },
 };

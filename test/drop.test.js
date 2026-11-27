@@ -29,7 +29,7 @@ test("draggedBlockUid reads data-block-uid from closest .roam-block-container", 
   assert.equal(draggedBlockUid(target), "l8we40Z2I");
 });
 
-test("draggedBlockUid falls back to the last 9 chars of .rm-block__input id", () => {
+test("draggedBlockUid falls back to the last 9 chars of .rm-block__input id only when preceded by -", () => {
   const target = makeTarget({
     bullet: {},
     container: { getAttribute: () => null },
@@ -38,6 +38,15 @@ test("draggedBlockUid falls back to the last 9 chars of .rm-block__input id", ()
     },
   });
   assert.equal(draggedBlockUid(target), "l8we40Z2I");
+
+  const longCustom = makeTarget({
+    bullet: {},
+    container: { getAttribute: () => null },
+    main: {
+      querySelector: (sel) => (sel === ".rm-block__input" ? { id: "block-input-customlonguid12345" } : null),
+    },
+  });
+  assert.equal(draggedBlockUid(longCustom), null);
 });
 
 test("draggedBlockUid ignores window-headers and non-bullet drags", () => {

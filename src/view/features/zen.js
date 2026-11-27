@@ -35,15 +35,6 @@ export function createZen(ctx) {
     });
   }
 
-  function syncFullOpen() {
-    const active = full && Boolean(ctx?.state?.isOpen);
-    globalThis.document?.documentElement?.classList?.toggle?.("compass-full-open", active);
-  }
-
-  ctx?.lifecycle?.add?.(() => {
-    globalThis.document?.documentElement?.classList?.remove?.("compass-full-open");
-  });
-
   function isZen() {
     return zen;
   }
@@ -68,15 +59,10 @@ export function createZen(ctx) {
     full = Boolean(on);
     ctx?.dom?.root?.classList?.toggle?.("compass-full", full);
     fullBtn?.setAttribute("aria-pressed", full ? "true" : "false");
-    syncFullOpen();
   }
 
   function toggleFull() {
     setFull(!full);
-  }
-
-  function onOpen() {
-    syncFullOpen();
   }
 
   function onEscape() {
@@ -94,7 +80,6 @@ export function createZen(ctx) {
   function onClose() {
     setZen(false);
     setFull(false);
-    syncFullOpen();
   }
 
   function commands() {
@@ -117,7 +102,6 @@ export function createZen(ctx) {
     setZen,
     toggleZen,
     toggleFull,
-    onOpen,
     onEscape,
     onClose,
     commands,

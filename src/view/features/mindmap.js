@@ -1,4 +1,5 @@
 import { hiddenUids } from "../../model/batch7.js";
+import { headerHeight } from "../../model/layout.js";
 import {
   buildTree,
   collapseGeneration,
@@ -186,6 +187,7 @@ export function createMindMap(ctx) {
     element.dataset.style = "center";
     element.title = center.title;
     element.setAttribute("aria-label", `Center: ${center.title}`);
+    element.style?.setProperty?.("--compass-head-h", `${box.h}px`);
 
     const sig = `center|${center.kind}|${center.title}|${center.parts ? 1 : 0}`;
     if (element._mmSig !== sig) {
@@ -332,7 +334,8 @@ export function createMindMap(ctx) {
     });
     lastTree = built;
 
-    const placed = layoutTree(built, { direction });
+    const headH = headerHeight(hood.center.title, false);
+    const placed = layoutTree(built, { direction, root: { w: 240, h: headH } });
 
     const occByKey = new Map();
     const walkOcc = (occ) => {

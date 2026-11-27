@@ -139,7 +139,7 @@ The command palette lists every action available right now. Type to filter, Ente
 
 ## Zen, fullscreen and Wander
 
-- **Zen** hides the bar and the pin row. **Fullscreen** covers the right sidebar too while keeping Roam dialogs above Compass. Both keep your selection and manual pan or zoom, and refit automatically if you have not moved the camera. The controls sit at the bottom right.
+- **Zen** hides the bar and the pin row. **Fullscreen** covers the left and right sidebars too. Both keep your selection and manual pan or zoom, and refit automatically if you have not moved the camera. The controls sit at the bottom right.
 - **Wander** walks from page to page on its own, 3 to 15 seconds per move, so old notes come back into view. Anything you do pauses it. It only visits nodes that are drawn, so filters steer it.
 
 ## Export

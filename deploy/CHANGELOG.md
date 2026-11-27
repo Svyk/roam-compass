@@ -19,7 +19,7 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 ### Fixed
 
 - The overlay follows right sidebar opens, closes and resizes with `ResizeObserver`, refits automatically unless the camera was moved by hand, and leaves room around `+` buttons and side labels.
-- Roam dialogs stay above Compass in normal and Full modes, while the sidebar resize handle stays inactive in Full mode.
+- Roam dialogs stay above Compass in normal mode, while Full mode covers the left and right sidebars at `z-index: 1000`.
 - SmartBlock buttons render as inline chips without `:SmartBlock:` markup or arguments, and long center titles expand to a two-line header without clipping.
 - Block references (`((uid))`) in node titles, center titles, outline rows and attribute badges show the referenced block's text with a dotted underline instead of `(( ))`.
 

@@ -6082,6 +6082,7 @@ function createMindMap(ctx) {
     element.dataset.style = "center";
     element.title = center.title;
     element.setAttribute("aria-label", `Center: ${center.title}`);
+    element.style?.setProperty?.("--compass-head-h", `${box.h}px`);
     const sig = `center|${center.kind}|${center.title}|${center.parts ? 1 : 0}`;
     if (element._mmSig !== sig) {
       element._mmSig = sig;
@@ -6210,7 +6211,8 @@ function createMindMap(ctx) {
       generations
     });
     lastTree = built;
-    const placed = layoutTree(built, { direction });
+    const headH = headerHeight(hood.center.title, false);
+    const placed = layoutTree(built, { direction, root: { w: 240, h: headH } });
     const occByKey = /* @__PURE__ */ new Map();
     const walkOcc = (occ) => {
       occByKey.set(occ.key, occ);
@@ -8091,6 +8093,7 @@ function createFacets(ctx) {
     element.setAttribute("role", "button");
     element.setAttribute("aria-label", `Center: ${hood.center.title}`);
     element.title = hood.center.title;
+    element.style?.setProperty?.("--compass-head-h", `${box.h}px`);
     const head = ctx.el("div", "compass-center-head");
     const kind = ctx.el("span", "compass-kind", hood.center.kind === "block" ? "Block" : "Page");
     const title = fillLabel(ctx.el("span", "compass-node-title"), hood.center.title, hood.center.parts);
@@ -8153,9 +8156,10 @@ function createFacets(ctx) {
     const preset = findPreset(list, state.preset);
     const neighbors = (hood.nodes ?? []).filter((node) => node && node.kind !== "group");
     layer.replaceChildren();
+    const headH = headerHeight(hood.center?.title ?? "", false);
     if (neighbors.length === 0) {
       lastClassified = classify(preset, []);
-      const centerBox = { x: 0, y: 0, w: 240, h: 56 };
+      const centerBox = { x: 0, y: 0, w: 240, h: headH };
       const emptyEl = ctx.el("p", "compass-facets-empty", "Nothing is connected here yet.");
       emptyEl.style.transform = `translate(-160px, ${centerBox.h / 2 + 28}px)`;
       const rawBounds = { minX: -160, minY: -centerBox.h / 2, maxX: 160, maxY: centerBox.h / 2 + 64 };
@@ -8185,7 +8189,7 @@ function createFacets(ctx) {
       focusCategory = centerCategory(preset, centerFact, result.categories);
     }
     const expandedRegions = expandedSetFor(hood.center?.uid, preset.id);
-    const geo = layoutFacets(result, { focusCategory, expandedRegions });
+    const geo = layoutFacets(result, { focusCategory, expandedRegions, center: { w: 240, h: headH } });
     if (geo.fallback === "circular" && !warnedFallbacks.has(preset.id)) {
       warnedFallbacks.add(preset.id);
       ctx?.setStatus?.("Quadrants needs four categories. Showing a circle instead.");
@@ -11583,13 +11587,6 @@ function createZen(ctx) {
       toggleFull();
     });
   }
-  function syncFullOpen() {
-    const active = full && Boolean(ctx?.state?.isOpen);
-    globalThis.document?.documentElement?.classList?.toggle?.("compass-full-open", active);
-  }
-  ctx?.lifecycle?.add?.(() => {
-    globalThis.document?.documentElement?.classList?.remove?.("compass-full-open");
-  });
   function isZen() {
     return zen;
   }
@@ -11611,13 +11608,9 @@ function createZen(ctx) {
     full = Boolean(on);
     ctx?.dom?.root?.classList?.toggle?.("compass-full", full);
     fullBtn?.setAttribute("aria-pressed", full ? "true" : "false");
-    syncFullOpen();
   }
   function toggleFull() {
     setFull(!full);
-  }
-  function onOpen() {
-    syncFullOpen();
   }
   function onEscape() {
     if (zen) {
@@ -11633,7 +11626,6 @@ function createZen(ctx) {
   function onClose() {
     setZen(false);
     setFull(false);
-    syncFullOpen();
   }
   function commands() {
     return [
@@ -11653,7 +11645,6 @@ function createZen(ctx) {
     setZen,
     toggleZen,
     toggleFull,
-    onOpen,
     onEscape,
     onClose,
     commands,
@@ -15115,7 +15106,7 @@ function draggedBlockUid(target) {
   const main = bullet.closest(".rm-block-main");
   const input = main?.querySelector?.(".rm-block__input");
   const id = typeof input?.id === "string" ? input.id.trim() : "";
-  if (id.length >= 9) {
+  if (id.length >= 10 && id[id.length - 10] === "-") {
     const tail = id.slice(-9);
     if (/^[\w-]{9}$/.test(tail)) return tail;
   }
@@ -16169,8 +16160,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       return;
     }
     rebuild();
-    render({ navigate });
     renderPins();
+    render({ navigate });
     if (snapshot.missing) setStatus("Nothing in this graph has that uid.", true);
     const uid = current;
     const sidecar = forceSidecar === true || settings.sidecar === true;
@@ -16284,8 +16275,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       return;
     }
     rebuild();
-    render({ navigate: true });
     renderPins();
+    render({ navigate: true });
     if (snapshot.missing) setStatus("Nothing in this graph has that uid.", true);
     updateButtons();
   }
@@ -17063,8 +17054,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       related.hidden = true;
       geometry = custom.geometry;
       updateButtons();
-      if (navigate) fit(true);
       features.each("afterRender", { hood, geometry, boxes: /* @__PURE__ */ new Map(), nodeEls, view: custom.view });
+      if (navigate) fit(true);
       return;
     }
     if (customView) {
@@ -17161,8 +17152,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       empty.style.transform = `translate(-50%, ${geometry.center.h / 2 + 36}px)`;
     }
     updateButtons();
-    if (navigate) fit(true);
     features.each("afterRender", { hood, geometry, boxes, nodeEls, view: "compass" });
+    if (navigate) fit(true);
   }
   function renderChips() {
     const keep = /* @__PURE__ */ new Set();

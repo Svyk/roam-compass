@@ -799,8 +799,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       return;
     }
     rebuild();
-    render({ navigate });
     renderPins();
+    render({ navigate });
     if (snapshot.missing) setStatus("Nothing in this graph has that uid.", true);
     const uid = current;
     const sidecar = forceSidecar === true || settings.sidecar === true;
@@ -925,8 +925,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       return;
     }
     rebuild();
-    render({ navigate: true });
     renderPins();
+    render({ navigate: true });
     if (snapshot.missing) setStatus("Nothing in this graph has that uid.", true);
     updateButtons();
   }
@@ -1747,8 +1747,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       related.hidden = true;
       geometry = custom.geometry;
       updateButtons();
-      if (navigate) fit(true);
       features.each("afterRender", { hood, geometry, boxes: new Map(), nodeEls, view: custom.view });
+      if (navigate) fit(true);
       return;
     }
     if (customView) {
@@ -1849,8 +1849,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       empty.style.transform = `translate(-50%, ${geometry.center.h / 2 + 36}px)`;
     }
     updateButtons();
-    if (navigate) fit(true);
     features.each("afterRender", { hood, geometry, boxes, nodeEls, view: "compass" });
+    if (navigate) fit(true);
   }
 
   function renderChips() {

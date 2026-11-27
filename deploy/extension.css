@@ -3526,12 +3526,7 @@
 
 .compass-root.compass-full {
   right: 0 !important;
-}
-
-/* Only rule outside .compass-root: Roam's #right-sidebar resize handle sits at z-index 1000
-   and would capture pointer events over Full mode (z-index 18) if left interactive. */
-html.compass-full-open #right-sidebar > .rm-resize-handle {
-  pointer-events: none;
+  z-index: 1000;
 }
 
 .compass-root .compass-zone-count-siblings {

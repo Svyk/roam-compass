@@ -30,58 +30,29 @@ export const SCENARIOS = {
     document.body.prepend(portal);
 
     const sidebar = document.getElementById("right-sidebar");
-    let handle = null;
-    if (sidebar) {
-      sidebar.style.width = "320px";
-      handle = document.createElement("div");
-      handle.className = "rm-resize-handle";
-      handle.style.position = "absolute";
-      handle.style.left = "0";
-      handle.style.top = "0";
-      handle.style.width = "8px";
-      handle.style.height = "100%";
-      handle.style.zIndex = "1000";
-      sidebar.append(handle);
-    }
+    if (sidebar) sidebar.style.width = "320px";
 
-    h.assert(!document.documentElement.classList.contains("compass-full-open"), "compass-full-open absent before open");
     await h.open("p-alpha");
 
+    const root = h.q(".compass-root");
     const boxRect = box.getBoundingClientRect();
     const cx = boxRect.left + boxRect.width / 2;
     const cy = boxRect.top + boxRect.height / 2;
 
     const hitNormal = document.elementFromPoint(cx, cy);
+    h.equal(getComputedStyle(root).zIndex, "18", "normal mode: overlay z-index is 18");
     h.assert(Boolean(hitNormal && box.contains(hitNormal)), "normal mode: elementFromPoint at dialog center hits inside dialog");
-    h.assert(!document.documentElement.classList.contains("compass-full-open"), "normal mode: compass-full-open is absent");
 
-    // Turn on Full mode
+    // Turn on Full mode: z-index restores to 1000 so Compass covers left and right sidebars.
     h.click(".compass-corner-full");
     await h.wait(60);
-    h.assert(document.documentElement.classList.contains("compass-full-open"), "Full mode open: compass-full-open is present");
-    const hitFull = document.elementFromPoint(cx, cy);
-    h.assert(Boolean(hitFull && box.contains(hitFull)), "Full mode: elementFromPoint at dialog center hits inside dialog");
-    if (handle) {
-      h.equal(getComputedStyle(handle).pointerEvents, "none", "Full mode disables pointer-events on sidebar resize handle");
-    }
+    h.equal(getComputedStyle(root).zIndex, "1000", "Full mode: overlay computed z-index is 1000");
 
-    // Turn off Full mode
+    // Turn off Full mode: dialog is back on top in normal mode for the screenshot.
     h.click(".compass-corner-full");
     await h.wait(60);
-    h.assert(!document.documentElement.classList.contains("compass-full-open"), "Full mode off: compass-full-open removed");
-
-    // Turn Full mode back on, then close Compass -> class removed
-    h.click(".compass-corner-full");
-    await h.wait(60);
-    h.assert(document.documentElement.classList.contains("compass-full-open"), "Full mode re-enabled: compass-full-open present");
-    h.click(".compass-close");
-    await h.wait(60);
-    h.assert(!document.documentElement.classList.contains("compass-full-open"), "Compass closed: compass-full-open removed");
-
-    // Reopen in Full mode so screenshot shows dialog cleanly on top of Full Compass
-    await h.open("p-alpha");
-    h.click(".compass-corner-full");
-    await h.wait(60);
-    h.assert(document.documentElement.classList.contains("compass-full-open"), "reopened Full mode: compass-full-open present");
+    h.equal(getComputedStyle(root).zIndex, "18", "normal mode restored: overlay z-index is 18");
+    const hitRestored = document.elementFromPoint(cx, cy);
+    h.assert(Boolean(hitRestored && box.contains(hitRestored)), "normal mode restored: dialog stays on top");
   },
 };

@@ -8,6 +8,7 @@ import {
   layoutFacets,
   validatePreset,
 } from "../../model/facets.js";
+import { headerHeight } from "../../model/layout.js";
 import { SETTING_IDS } from "../../settings.js";
 import { fillLabel } from "../label.js";
 import { copyText } from "../clipboard.js";
@@ -508,6 +509,7 @@ export function createFacets(ctx) {
     element.setAttribute("role", "button");
     element.setAttribute("aria-label", `Center: ${hood.center.title}`);
     element.title = hood.center.title;
+    element.style?.setProperty?.("--compass-head-h", `${box.h}px`);
 
     const head = ctx.el("div", "compass-center-head");
     const kind = ctx.el("span", "compass-kind", hood.center.kind === "block" ? "Block" : "Page");
@@ -583,9 +585,11 @@ export function createFacets(ctx) {
 
     layer.replaceChildren();
 
+    const headH = headerHeight(hood.center?.title ?? "", false);
+
     if (neighbors.length === 0) {
       lastClassified = classify(preset, []);
-      const centerBox = { x: 0, y: 0, w: 240, h: 56 };
+      const centerBox = { x: 0, y: 0, w: 240, h: headH };
       const emptyEl = ctx.el("p", "compass-facets-empty", "Nothing is connected here yet.");
       emptyEl.style.transform = `translate(-160px, ${centerBox.h / 2 + 28}px)`;
       const rawBounds = { minX: -160, minY: -centerBox.h / 2, maxX: 160, maxY: centerBox.h / 2 + 64 };
@@ -618,7 +622,7 @@ export function createFacets(ctx) {
     }
 
     const expandedRegions = expandedSetFor(hood.center?.uid, preset.id);
-    const geo = layoutFacets(result, { focusCategory, expandedRegions });
+    const geo = layoutFacets(result, { focusCategory, expandedRegions, center: { w: 240, h: headH } });
 
     if (geo.fallback === "circular" && !warnedFallbacks.has(preset.id)) {
       warnedFallbacks.add(preset.id);

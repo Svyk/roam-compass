@@ -11,7 +11,7 @@ export function draggedBlockUid(target) {
   const main = bullet.closest(".rm-block-main");
   const input = main?.querySelector?.(".rm-block__input");
   const id = typeof input?.id === "string" ? input.id.trim() : "";
-  if (id.length >= 9) {
+  if (id.length >= 10 && id[id.length - 10] === "-") {
     const tail = id.slice(-9);
     if (/^[\w-]{9}$/.test(tail)) return tail;
   }
