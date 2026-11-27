@@ -385,12 +385,15 @@ export function createMindMap(ctx) {
     edgesEl.replaceChildren();
     const itemByKey = new Map(placed.items.map((item) => [item.key, item]));
     for (const link of placed.links) {
+      const sourceItem = itemByKey.get(link.fromKey);
+      const sourceUid = sourceItem?.uid ?? (link.fromKey === built.root.key ? rootUid : null);
       const targetItem = itemByKey.get(link.toKey);
       const targetNode = nodeByKey.get(link.toKey);
       const vertical = link.side === "north";
       const shape = ctx.curve(link.from.x, link.from.y, link.to.x, link.to.y, vertical);
       const group = ctx.svg("g", "compass-edge");
       if (targetItem?.uid) group.dataset.uid = targetItem.uid;
+      if (sourceUid) group.dataset.source = sourceUid;
       if (targetNode?.style) group.dataset.style = targetNode.style;
       else if (targetItem?.kind === "more") group.dataset.style = "more";
       const path = ctx.svg("path", "compass-edge-line");

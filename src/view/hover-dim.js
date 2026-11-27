@@ -28,12 +28,15 @@ export function markHover(root, node) {
   }
 
   const litUids = new Set([uid]);
-  visit(root, ".compass-cross", (edge) => {
+  const addEdgePeer = (edge) => {
     const source = edge?.dataset?.source;
-    const target = edge?.dataset?.target;
-    if (source === uid && target) litUids.add(target);
-    if (target === uid && source) litUids.add(source);
-  });
+    const target = edge?.dataset?.target || edge?.dataset?.uid;
+    if (!source || !target) return;
+    if (source === uid) litUids.add(target);
+    if (target === uid) litUids.add(source);
+  };
+  visit(root, ".compass-cross", addEdgePeer);
+  visit(root, ".compass-edge", addEdgePeer);
   if (typeof node.querySelectorAll === "function") {
     for (const sub of node.querySelectorAll(".compass-sub")) {
       if (sub?.dataset?.uid) litUids.add(sub.dataset.uid);
@@ -50,7 +53,8 @@ export function markHover(root, node) {
     element.classList.toggle("compass-node-dim", !lit);
   });
   visit(root, ".compass-edge", (element) => {
-    const hot = element.dataset?.uid === uid;
+    const d = element.dataset;
+    const hot = d?.uid === uid || d?.source === uid || d?.target === uid;
     element.classList.toggle("compass-edge-hot", hot);
     element.classList.toggle("compass-edge-dim", !hot);
   });

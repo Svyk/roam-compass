@@ -145,3 +145,80 @@ test("markHover(root, null) clears the classes and removes compass-dimming", () 
     assert.equal(item.classList.contains("compass-edge-dim"), false);
   }
 });
+
+test("hovering a sibling or its parent keeps both lit and the sibling arc hot", () => {
+  const sibling = element(["compass-node"], "gamma");
+  const sibArc = element(["compass-edge"], { uid: "gamma", source: "north", style: "sibling" });
+  const { root, neighbour: parent, other } = scene([sibling, sibArc]);
+
+  markHover(root, sibling);
+  assert.equal(sibling.classList.contains("compass-node-hot"), true);
+  assert.equal(parent.classList.contains("compass-node-hot"), true);
+  assert.equal(parent.classList.contains("compass-node-dim"), false);
+  assert.equal(sibArc.classList.contains("compass-edge-hot"), true);
+  assert.equal(sibArc.classList.contains("compass-edge-dim"), false);
+  assert.equal(other.classList.contains("compass-node-dim"), true);
+
+  markHover(root, parent);
+  assert.equal(parent.classList.contains("compass-node-hot"), true);
+  assert.equal(sibling.classList.contains("compass-node-hot"), true);
+  assert.equal(sibling.classList.contains("compass-node-dim"), false);
+  assert.equal(sibArc.classList.contains("compass-edge-hot"), true);
+  assert.equal(sibArc.classList.contains("compass-edge-dim"), false);
+  assert.equal(other.classList.contains("compass-node-dim"), true);
+});
+
+test("hovering in a two-level Mind Map chain keeps direct branch peers lit and dims unrelated branches", () => {
+  const rootNode = element(["compass-node", "compass-node-center"], "root");
+  const branchA = element(["compass-node"], "t1");
+  const grandA = element(["compass-node"], "sub-a");
+  const branchB = element(["compass-node"], "t2");
+  const edgeRootA = element(["compass-edge"], { uid: "t1", source: "root" });
+  const edgeAGrand = element(["compass-edge"], { uid: "sub-a", source: "t1" });
+  const edgeRootB = element(["compass-edge"], { uid: "t2", source: "root" });
+  const all = [rootNode, branchA, grandA, branchB, edgeRootA, edgeAGrand, edgeRootB];
+  const root = {
+    classList: classes(["compass-root"]),
+    dataset: {},
+    querySelectorAll(selector) {
+      const wanted = selector.split(",").map((part) => part.trim().replace(/^\./, ""));
+      return all.filter((item) => wanted.some((name) => item.classList.contains(name)));
+    },
+  };
+
+  markHover(root, grandA);
+  assert.equal(grandA.classList.contains("compass-node-hot"), true);
+  assert.equal(branchA.classList.contains("compass-node-hot"), true);
+  assert.equal(branchA.classList.contains("compass-node-dim"), false);
+  assert.equal(branchB.classList.contains("compass-node-dim"), true);
+  assert.equal(edgeAGrand.classList.contains("compass-edge-hot"), true);
+  assert.equal(edgeRootB.classList.contains("compass-edge-dim"), true);
+
+  markHover(root, branchA);
+  assert.equal(branchA.classList.contains("compass-node-hot"), true);
+  assert.equal(grandA.classList.contains("compass-node-hot"), true);
+  assert.equal(grandA.classList.contains("compass-node-dim"), false);
+  assert.equal(branchB.classList.contains("compass-node-dim"), true);
+  assert.equal(edgeRootA.classList.contains("compass-edge-hot"), true);
+  assert.equal(edgeAGrand.classList.contains("compass-edge-hot"), true);
+  assert.equal(edgeRootB.classList.contains("compass-edge-dim"), true);
+});
+
+test("hovering a board card link keeps both resolved endpoints lit even when dataset.target differs from dataset.uid", () => {
+  const cardA = element(["compass-node"], "card-a");
+  const cardB = element(["compass-node"], "card-b");
+  const link = element(["compass-edge"], { uid: "Card B Title", source: "card-a", target: "card-b", style: "card" });
+  const { root, other } = scene([cardA, cardB, link]);
+
+  markHover(root, cardA);
+  assert.equal(cardB.classList.contains("compass-node-hot"), true);
+  assert.equal(cardB.classList.contains("compass-node-dim"), false);
+  assert.equal(link.classList.contains("compass-edge-hot"), true);
+  assert.equal(other.classList.contains("compass-node-dim"), true);
+
+  markHover(root, cardB);
+  assert.equal(cardA.classList.contains("compass-node-hot"), true);
+  assert.equal(cardA.classList.contains("compass-node-dim"), false);
+  assert.equal(link.classList.contains("compass-edge-hot"), true);
+  assert.equal(other.classList.contains("compass-node-dim"), true);
+});

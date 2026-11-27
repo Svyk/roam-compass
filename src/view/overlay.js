@@ -1963,15 +1963,24 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       if (target) alias.set(target, node.uid);
       if (node.kind === "page" && node.title) alias.set(node.title, node.uid);
     }
-    const endOf = (token) => boxes.get(token) || boxes.get(alias.get(token));
+    const resolveEnd = (token) => {
+      if (boxes.has(token)) return { uid: token, box: boxes.get(token) };
+      const mapped = alias.get(token);
+      if (mapped && boxes.has(mapped)) return { uid: mapped, box: boxes.get(mapped) };
+      return null;
+    };
     for (const edge of connectionEdges(kids)) {
-      const from = endOf(edge.from);
-      const to = endOf(edge.to);
-      if (!from || !to || from === to) continue;
+      const fromEnd = resolveEnd(edge.from);
+      const toEnd = resolveEnd(edge.to);
+      if (!fromEnd || !toEnd || fromEnd.box === toEnd.box) continue;
+      const from = fromEnd.box;
+      const to = toEnd.box;
       const shape = { d: `M${from.x},${from.y} L${to.x},${to.y}`, mid: [(from.x + to.x) / 2, (from.y + to.y) / 2] };
       const group = svg("g", "compass-edge");
       group.dataset.uid = edge.to;
       group.dataset.style = "card";
+      group.dataset.source = fromEnd.uid;
+      if (toEnd.uid !== edge.to) group.dataset.target = toEnd.uid;
       const hit = svg("path", "compass-edge-hit");
       hit.setAttribute("d", shape.d);
       const line = svg("path", "compass-edge-line");
@@ -1991,10 +2000,11 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   function renderEdges(boxes) {
     edgeLayer.replaceChildren();
     const rowBoxes = new Map(geometry.rows.map((row) => [row.uid, row]));
-    const draw = (node, shape, label) => {
+    const draw = (node, shape, label, sourceUid = "") => {
       const group = svg("g", "compass-edge");
       group.dataset.uid = node.uid;
       group.dataset.style = node.style;
+      if (sourceUid) group.dataset.source = sourceUid;
       const hit = svg("path", "compass-edge-hit");
       hit.setAttribute("d", shape.d);
       const line = svg("path", "compass-edge-line");
@@ -2015,7 +2025,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       if (!box) continue;
       if (node.zone === "siblings") {
         const via = node.via ? boxes.get(node.via) : null;
-        if (via) draw(node, edgeToSibling(via, box), "");
+        if (via) draw(node, edgeToSibling(via, box), "", node.via);
         continue;
       }
       const anchors = new Set();

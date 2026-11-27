@@ -20,6 +20,7 @@ import * as blockRefModule from "./scenarios/block-ref.js";
 import * as addPopupModule from "./scenarios/add-popup.js";
 import * as guideModule from "./scenarios/guide.js";
 import * as dropModule from "./scenarios/drop.js";
+import * as hoverModule from "./scenarios/hover.js";
 
 const SCENARIO_SOURCES = [
   ["test/harness/scenarios/base.js", baseModule],
@@ -42,6 +43,7 @@ const SCENARIO_SOURCES = [
   ["test/harness/scenarios/add-popup.js", addPopupModule],
   ["test/harness/scenarios/guide.js", guideModule],
   ["test/harness/scenarios/drop.js", dropModule],
+  ["test/harness/scenarios/hover.js", hoverModule],
 ];
 
 function extractScenarios(mod) {
