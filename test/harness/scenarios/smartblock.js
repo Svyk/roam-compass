@@ -1,3 +1,19 @@
+import { SETTING_IDS } from "../../../src/settings.js";
+
+function assertCenterUnclipped(h, scope, label) {
+  const card = h.q(`${scope} .compass-node-center`);
+  const title = card?.querySelector(".compass-node-title");
+  h.assert(Boolean(card && title), `${label} renders center card and title`);
+  h.assert(
+    card.clientHeight >= 70,
+    `${label} center card is tall enough for two lines (clientHeight=${card.clientHeight})`,
+  );
+  h.assert(
+    title.scrollHeight <= title.clientHeight + 1,
+    `${label} center title not clipped (scrollHeight=${title.scrollHeight}, clientHeight=${title.clientHeight})`,
+  );
+}
+
 export const SCENARIOS = {
   async smartblock(h) {
     await h.open("b-sb-1");
@@ -12,12 +28,8 @@ export const SCENARIOS = {
     h.equal(centerChips.length, 1, "center title holds one .compass-btn-chip");
     h.equal(centerChips[0]?.textContent?.trim(), "⇥🕞", "center chip reads ⇥🕞");
     h.assert(
-      centerHead.scrollHeight <= centerHead.clientHeight + 1,
-      `center header not clipped (scrollHeight=${centerHead.scrollHeight}, clientHeight=${centerHead.clientHeight})`,
-    );
-    h.assert(
-      centerCard.scrollHeight <= centerCard.clientHeight + 1,
-      `center card not clipped (scrollHeight=${centerCard.scrollHeight}, clientHeight=${centerCard.clientHeight})`,
+      centerCard.clientHeight >= 70,
+      `Compass center card is tall enough for two lines (clientHeight=${centerCard.clientHeight})`,
     );
 
     const childNode = h.q('.compass-node[data-uid="b-sb-2"]');
@@ -30,37 +42,47 @@ export const SCENARIOS = {
       `child node shows workflow name without SmartBlock (got ${JSON.stringify(childText)})`,
     );
 
-    // D2: two-line center header is also unclipped in Mind Map and Facets.
+    // D2 / G2: verify a two-line SmartBlock title is unclipped on the title element itself
+    // and card is >= 70px tall in Compass, Mind Map, Facets, and Facets with focusInCategory.
+    const twoLineUid = h.harness.graph.addBlock(
+      "p-smartblock",
+      "21:13 {{⇥🕞:SmartBlock:Elapsed time}} [[League Of Legends/16.3]]",
+    );
+    h.harness.graph.addBlock("p-smartblock", "Child:: ((b-sb-2))", { parentUid: twoLineUid });
+    await h.open(twoLineUid);
+    assertCenterUnclipped(h, ".compass-world", "Compass");
+
     const views = h.features("views");
     await views.set("mindmap");
     await h.wait(60);
-    const mmCard = h.q(".compass-mindmap .compass-node-center");
-    const mmHead = mmCard?.querySelector(".compass-center-head");
-    h.assert(Boolean(mmCard && mmHead), "Mind Map renders center card and header");
-    h.assert(
-      mmHead.scrollHeight <= mmHead.clientHeight + 1,
-      `Mind Map center header not clipped (scrollHeight=${mmHead.scrollHeight}, clientHeight=${mmHead.clientHeight})`,
-    );
-    h.assert(
-      mmCard.scrollHeight <= mmCard.clientHeight + 1,
-      `Mind Map center card not clipped (scrollHeight=${mmCard.scrollHeight}, clientHeight=${mmCard.clientHeight})`,
-    );
+    assertCenterUnclipped(h, ".compass-mindmap", "Mind Map");
 
-    await views.set("facets");
+    await views.set("facets", "roles");
     await h.wait(60);
-    const fCard = h.q(".compass-facets .compass-node-center");
-    const fHead = fCard?.querySelector(".compass-center-head");
-    h.assert(Boolean(fCard && fHead), "Facets renders center card and header");
-    h.assert(
-      fHead.scrollHeight <= fHead.clientHeight + 1,
-      `Facets center header not clipped (scrollHeight=${fHead.scrollHeight}, clientHeight=${fHead.clientHeight})`,
-    );
-    h.assert(
-      fCard.scrollHeight <= fCard.clientHeight + 1,
-      `Facets center card not clipped (scrollHeight=${fCard.scrollHeight}, clientHeight=${fCard.clientHeight})`,
-    );
+    assertCenterUnclipped(h, ".compass-facets", "Facets");
 
+    await h.harness.extensionAPI.settings.set(SETTING_IDS.facetsPresets, [
+      {
+        id: "focus-kind",
+        name: "Focus by kind",
+        source: "kind",
+        categories: [
+          { id: "blocks", label: "Blocks", values: ["block"] },
+          { id: "pages", label: "Pages", values: ["page"] },
+        ],
+        layout: "horizontal",
+        edges: true,
+        focusInCategory: true,
+        hideEmptyStatus: true,
+      },
+    ]);
+    await views.set("facets", "focus-kind");
+    await h.wait(60);
+    assertCenterUnclipped(h, ".compass-facets", "Facets (focusInCategory)");
+
+    await h.harness.extensionAPI.settings.set(SETTING_IDS.facetsPresets, []);
     await views.set("compass");
+    await h.open("b-sb-1");
     await h.wait(60);
   },
 };

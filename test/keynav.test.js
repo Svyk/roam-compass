@@ -307,3 +307,40 @@ test("createPalette exposes stageMenu and tolerates missing DOM", () => {
   assert.equal(palette.onEscape(), true);
   assert.equal(palette.onEscape(), false);
 });
+
+test("createKeys normalizes unrecognized stored view names to compass for first-run guide auto-open", () => {
+  const makeNode = () => ({
+    hidden: false,
+    textContent: "",
+    children: [],
+    setAttribute() {},
+    append(...items) { this.children.push(...items); },
+    focus() {},
+    remove() {},
+  });
+  let storedView = "bogus-view";
+  let savedSeen = 0;
+  const ctx = {
+    el: () => makeNode(),
+    button: () => makeNode(),
+    lifecycle: { node() {}, event() {}, add() {} },
+    dom: { stage: makeNode(), root: makeNode() },
+    extensionAPI: {
+      settings: {
+        get(id) {
+          if (id === "compass-guide-seen") return false;
+          if (id === "compass-view") return storedView;
+          return null;
+        },
+      },
+    },
+    saveSetting(id, val) {
+      if (id === "compass-guide-seen" && val === true) savedSeen += 1;
+    },
+  };
+  const keys = createKeys(ctx);
+  keys.onOpen();
+  assert.equal(savedSeen, 1, "unrecognized stored view normalizes to compass and auto-opens guide");
+  assert.equal(keys.onEscape(), true, "guide is open after onOpen with unrecognized stored view");
+  assert.equal(keys.onEscape(), false);
+});

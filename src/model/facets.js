@@ -600,7 +600,7 @@ function prepareBoxSpec(spec, { card, center, gap, maxRows, expandedRegions, foc
   const gridH = gridRows > 0 ? gridRows * card.h + (gridRows - 1) * rowGap : (focusCategory === spec.id ? 0 : EMPTY_INNER_H);
   const isFocused = focusCategory === spec.id;
   const focusW = isFocused ? Math.max(card.w, center.w) : 0;
-  const focusH = isFocused ? card.h * 2 : 0;
+  const focusH = isFocused ? Math.max(card.h * 2, center.h) : 0;
   const innerW = isFocused ? Math.max(gridW, focusW) : gridW;
   const innerH = isFocused ? focusH + (gridRows > 0 ? rowGap + gridH : 0) : gridH;
 
@@ -856,7 +856,7 @@ function layoutConcentricRings(rawSpecs, { card, center, gap, maxRows, expandedR
     const botRows = botCount > 0 ? Math.ceil(botCount / cols) : 0;
 
     const focusW = isFocused ? Math.max(card.w, center.w) : 0;
-    const focusH = isFocused ? card.h * 2 : 0;
+    const focusH = isFocused ? Math.max(card.h * 2, center.h) : 0;
     const topGridH = topRows > 0 ? topRows * card.h + (topRows - 1) * rowGap : 0;
     const botGridH = botRows > 0 ? botRows * card.h + (botRows - 1) * rowGap : 0;
 

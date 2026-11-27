@@ -1,4 +1,5 @@
 import { SHORTCUTS, cycle, jump, matches, step } from "../../model/keynav.js";
+import { normalizeView } from "../../model/views.js";
 import { SETTING_IDS } from "../../settings.js";
 
 const ARROW_DIR = Object.freeze({
@@ -73,10 +74,10 @@ export function createKeys(ctx) {
   }
 
   function currentViewName(info) {
-    if (typeof info?.targetView === "string" && info.targetView) return info.targetView;
+    if (typeof info?.targetView === "string" && info.targetView) return normalizeView(info.targetView);
     const raw = ctx?.extensionAPI?.settings?.get?.(SETTING_IDS.view);
-    if (typeof raw === "string" && raw) return raw;
-    return ctx?.state?.settings?.view || ctx?.features?.get?.("views")?.current?.()?.view || "compass";
+    if (typeof raw === "string" && raw) return normalizeView(raw);
+    return normalizeView(ctx?.state?.settings?.view || ctx?.features?.get?.("views")?.current?.()?.view);
   }
 
   if (ctx?.el && ctx?.button && ctx?.lifecycle && ctx?.dom?.stage && ctx?.dom?.root) {

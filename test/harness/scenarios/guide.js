@@ -1,4 +1,6 @@
+import { createLifecycle } from "../../../src/lifecycle.js";
 import { SETTING_IDS } from "../../../src/settings.js";
+import { mountOverlay } from "../../../src/view/overlay.js";
 
 const EXPECTED_LINES = [
   "The card in the middle is the page or block you are looking at.",
@@ -34,10 +36,16 @@ export const SCENARIOS = {
     await h.wait(40);
     await h.harness.extensionAPI.settings.set(SETTING_IDS.view, "compass");
 
-    // C5: even when settings.set rejects, first Compass-view open shows the guide once and latches seen locally.
+    // C5 + G3: even when settings.set rejects, first Compass-view open shows the guide once,
+    // marks it seen immediately, and stays closed across a second and third open (and even if Compass
+    // is closed while the auto-opened guide is still showing).
     const originalSet = h.harness.extensionAPI.settings.set.bind(h.harness.extensionAPI.settings);
+    let guideSetCalls = 0;
     h.harness.extensionAPI.settings.set = (id, value) => {
-      if (id === SETTING_IDS.guideSeen) return Promise.reject(new Error("read-only settings"));
+      if (id === SETTING_IDS.guideSeen) {
+        guideSetCalls += 1;
+        return Promise.reject(new Error("read-only settings"));
+      }
       return originalSet(id, value);
     };
     try {
@@ -45,6 +53,7 @@ export const SCENARIOS = {
       await h.wait(50);
 
       h.assert(Boolean(backdrop && !backdrop.hidden), "first Compass-view open shows guide automatically");
+      h.assert(guideSetCalls >= 1, "guideSeen write attempted immediately when guide auto-opened");
       h.equal(h.text(".compass-help-title"), "How Compass works", "guide title is How Compass works");
       h.equal(h.text(".compass-help-guide .compass-help-group-title"), "The map", "first section is The map");
       const items = h.qa(".compass-help-guide-item").map((el) => el.textContent.trim());
@@ -53,17 +62,60 @@ export const SCENARIOS = {
         h.equal(items[i], EXPECTED_LINES[i], `guide line ${i + 1} matches`);
       }
 
-      // Close the guide, close Compass, reopen Compass -> must NOT auto-open again despite settings.set rejection.
-      h.click(".compass-help-close");
+      // Close Compass directly while the auto-opened guide is still showing.
+      h.click(".compass-close");
       await h.wait(40);
-      h.assert(backdrop.hidden, "closing guide hides panel");
+      h.assert(backdrop.hidden, "closing Compass hides auto-opened guide");
+
+      // Second open: guide stays closed and load() runs onSettings({ guideSeen: false }).
+      await h.open("p-alpha");
+      await h.wait(40);
+      h.assert(backdrop.hidden, "second open does not auto-open guide again when settings.set rejects");
+
+      // Third open: catches any onSettings overwrite of the local latch from the second open.
       h.click(".compass-close");
       await h.wait(40);
       await h.open("p-alpha");
       await h.wait(40);
-      h.assert(backdrop.hidden, "reopening Compass does not auto-open guide again when settings.set rejects");
+      h.assert(backdrop.hidden, "third open still keeps guide closed when settings.set rejects");
     } finally {
       h.harness.extensionAPI.settings.set = originalSet;
+    }
+
+    // G3: read-only settings (canSet = false) also latch across three opens.
+    const roLife = createLifecycle();
+    const roApi = {
+      settings: {
+        canSet: false,
+        get(id) {
+          if (id === SETTING_IDS.guideSeen) return false;
+          if (id === SETTING_IDS.view) return "unrecognized-view-name";
+          return h.harness.extensionAPI.settings.get(id);
+        },
+        async set() {
+          throw new Error("should not call set when canSet is false");
+        },
+      },
+      ui: { commandPalette: { async addCommand() {}, async removeCommand() {} } },
+    };
+    const roOverlay = mountOverlay({ extensionAPI: roApi, lifecycle: roLife, host: h.harness.host });
+    try {
+      const roBackdrop = roOverlay.ctx.dom.root.querySelector(".compass-help-backdrop");
+      roOverlay.focusUid("p-alpha");
+      await h.wait(50);
+      h.assert(Boolean(roBackdrop && !roBackdrop.hidden), "canSet=false (and unrecognized stored view) auto-opens guide on first open");
+      roOverlay.ctx.close();
+      await h.wait(40);
+      roOverlay.focusUid("p-alpha");
+      await h.wait(40);
+      h.assert(Boolean(roBackdrop && roBackdrop.hidden), "canSet=false: second open keeps guide closed");
+      roOverlay.ctx.close();
+      await h.wait(40);
+      roOverlay.focusUid("p-alpha");
+      await h.wait(40);
+      h.assert(Boolean(roBackdrop && roBackdrop.hidden), "canSet=false: third open keeps guide closed");
+    } finally {
+      roLife.dispose();
     }
 
     // C7: Alt+? command is titled "How Compass works" (not "Keyboard help").

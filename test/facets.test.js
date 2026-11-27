@@ -13,6 +13,7 @@ import {
   layoutFacets,
   validatePreset,
 } from "../src/model/facets.js";
+import { headerHeight } from "../src/model/layout.js";
 import { createFacets } from "../src/view/features/facets.js";
 
 function pointInBox(px, py, box, inset = 0) {
@@ -991,4 +992,41 @@ test("createFacets implements commands, stageMenu, fallback status, empty center
   facets.clearView();
   assert.equal(facets.classified(), null);
   assert.equal(layer.children.length, 0);
+});
+
+test("layoutFacets with focusInCategory keeps center box at least headerHeight tall for two-line titles", () => {
+  const longTitle = "21:13 ⇥🕞 League Of Legends/16.3 and watching random youtube videos.";
+  const neededH = headerHeight(longTitle, false);
+  assert.ok(neededH >= 76);
+
+  const centerFact = factOf({ uid: "c", title: longTitle, kind: "block" }, {});
+  const neighborFacts = [
+    factOf({ uid: "n1", title: "Child block", kind: "block", zone: "south", style: "typed" }, {}),
+    factOf({ uid: "n2", title: "Related page", kind: "page", zone: "north", style: "structural" }, {}),
+  ];
+
+  for (const layoutMode of ["horizontal", "concentric"]) {
+    const preset = {
+      id: `focus-${layoutMode}`,
+      name: `Focus ${layoutMode}`,
+      source: "kind",
+      categories: [
+        { id: "blocks", label: "Blocks", values: ["block"], color: FACET_PALETTE[0] },
+        { id: "pages", label: "Pages", values: ["page"], color: FACET_PALETTE[1] },
+      ],
+      layout: layoutMode,
+      edges: true,
+      focusInCategory: true,
+      hideEmptyStatus: true,
+    };
+    const classified = classify(preset, neighborFacts);
+    const focusCat = centerCategory(preset, centerFact, classified.categories);
+    assert.equal(focusCat, "blocks", layoutMode);
+
+    const geo = layoutFacets(classified, { focusCategory: focusCat, center: { w: 240, h: neededH } });
+    assert.ok(
+      geo.center.h >= neededH,
+      `${layoutMode}: expected center.h (${geo.center.h}) >= headerHeight (${neededH})`,
+    );
+  }
 });
