@@ -171,7 +171,7 @@ test("cross links default off", () => {
 
 test("overlay send path does not open a drawing", () => {
   const overlay = readFileSync(new URL("../src/view/overlay.js", import.meta.url), "utf8");
-  for (const phrase of ["Send to drawing", "Start writing", "Empty page", "Create drawing here", "Plexus is needed", "Open a drawing first", "dropSubgraph"]) {
+  for (const phrase of ["Send to drawing", "Start writing", "Empty page", "Create drawing", "This needs the Roam Plexus extension.", "Open a drawing first", "dropSubgraph"]) {
     assert.equal(overlay.includes(phrase), true, phrase);
   }
   const at = overlay.indexOf("async function sendToDrawing");

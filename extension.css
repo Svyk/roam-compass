@@ -876,10 +876,13 @@
 .compass-root .compass-zone-pop {
   position: absolute;
   z-index: 10;
+  display: flex;
+  flex-direction: column;
   box-sizing: border-box;
-  min-width: 220px;
-  max-width: 360px;
-  padding: 6px;
+  width: 280px;
+  max-width: calc(100% - 16px);
+  max-height: calc(100% - 16px);
+  padding: 8px;
   border: 1px solid var(--compass-line);
   border-radius: 6px;
   background: var(--compass-paper);
@@ -890,7 +893,23 @@
   display: none;
 }
 
+.compass-root .compass-zone-title {
+  margin: 0 0 2px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.compass-root .compass-zone-sub {
+  margin: 0 0 6px;
+  font-size: 11px;
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .compass-root .compass-zone-input {
+  flex: none;
   box-sizing: border-box;
   width: 100%;
   margin-bottom: 4px;
@@ -900,6 +919,17 @@
   color: inherit;
   background: transparent;
   font: inherit;
+}
+
+.compass-root .compass-zone-results {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.compass-root .compass-zone-create-page {
+  font-weight: 500;
 }
 
 /* boards */

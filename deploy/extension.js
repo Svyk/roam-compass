@@ -15031,6 +15031,8 @@ function markHover(root, node) {
 // src/view/overlay.js
 var SVG_NS = "http://www.w3.org/2000/svg";
 var SIDE_NAME = { north: "Parents", south: "Children", west: "Friends", east: "Challengers", siblings: "Siblings" };
+var ZONE_ADD_LABEL = { north: "Add a parent", south: "Add a child", west: "Add a friend", east: "Add a challenger" };
+var ZONE_NOUN = { north: "parent", south: "child", west: "friend", east: "challenger" };
 var ENTER_FROM = { north: [0, -36], south: [0, 36], west: [-36, 0], east: [36, 0], siblings: [36, 0] };
 var CLICK_DELAY = 230;
 var HISTORY_CAP = 100;
@@ -15330,7 +15332,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   }
   const zoneAdds = {};
   for (const side of ["north", "south", "west", "east"]) {
-    const add = button(`compass-zone-add compass-zone-add-${side}`, "+", `Add to the ${side}`);
+    const add = button(`compass-zone-add compass-zone-add-${side}`, "+", ZONE_ADD_LABEL[side]);
     add.dataset.zone = side;
     zoneAdds[side] = add;
     stage.append(add);
@@ -15358,12 +15360,16 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   zonePopEl.hidden = true;
   zonePopEl.setAttribute("role", "dialog");
   zonePopEl.setAttribute("aria-label", "Add a related page");
+  const zoneTitle = el("div", "compass-zone-title");
+  const zoneSub = el("div", "compass-zone-sub");
   const zoneInput = el("input", "compass-zone-input");
-  zoneInput.setAttribute("aria-label", "Find a page or name a drawing");
+  zoneInput.type = "search";
+  zoneInput.autocomplete = "off";
+  zoneInput.placeholder = "Find a page";
+  zoneInput.setAttribute("aria-label", "Find a page");
   const zoneResults = el("div", "compass-zone-results");
-  const zoneCreate = button("compass-zone-create", "Create drawing here");
-  zoneCreate.disabled = true;
-  zonePopEl.append(zoneInput, zoneResults, zoneCreate);
+  zoneResults.setAttribute("role", "listbox");
+  zonePopEl.append(zoneTitle, zoneSub, zoneInput, zoneResults);
   root.append(bar, pinRow, urls, stage, menu, details, ghost, hover, related, zonePopEl);
   const features = createFeatures();
   const nodeEls = /* @__PURE__ */ new Map();
@@ -15419,6 +15425,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   const pageAttrCache = /* @__PURE__ */ new Map();
   let linksMode = false;
   let zoneTarget = null;
+  let zoneAnchor = null;
+  let zoneOpener = null;
+  let activeZoneResult = 0;
   let forceSidecar = false;
   const partUrls = /* @__PURE__ */ new Set();
   const rawOpenInMain = host.openInMain.bind(host);
@@ -16278,30 +16287,103 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     zonePopEl.hidden = true;
     zoneInput.value = "";
     zoneResults.replaceChildren();
-    zoneCreate.disabled = true;
     zoneTarget = null;
+    zoneAnchor = null;
+    zoneOpener = null;
+    activeZoneResult = 0;
   }
-  function openZonePop(zone, clientX, clientY) {
+  function closeZonePopToOpener() {
+    const opener = zoneOpener;
+    hideZonePop();
+    if (opener?.isConnected && !root.hidden) opener.focus?.({ preventScroll: true });
+  }
+  function openZonePop(zone, clientX, clientY, opener = null) {
     hideFloating();
     zoneTarget = zone;
+    zoneOpener = opener ?? zoneAdds[zone] ?? null;
+    const heading = ZONE_ADD_LABEL[zone] ?? "Add a related page";
+    const attr = ZONE_ATTR[zone];
+    const centerName = hood?.center?.title || "this page";
+    const noun = ZONE_NOUN[zone] || "neighbor";
+    zoneTitle.textContent = heading;
+    zoneSub.textContent = attr ? `Writes ${attr}:: [[page]] on ${centerName}` : `Links it as a ${noun} of ${centerName}`;
+    zonePopEl.setAttribute("aria-label", heading);
     zonePopEl.hidden = false;
     const rect = stage.getBoundingClientRect();
     const x = Number.isFinite(clientX) ? clientX : rect.left + rect.width / 2;
     const y = Number.isFinite(clientY) ? clientY : rect.top + rect.height / 2;
+    zoneAnchor = { x, y };
+    activeZoneResult = 0;
     placeFloating(zonePopEl, x, y);
     zoneInput.focus();
   }
+  function markZoneResult() {
+    const items = [...zoneResults.querySelectorAll(".compass-result")];
+    items.forEach((item, index) => item.classList.toggle("compass-result-active", index === activeZoneResult));
+    items[activeZoneResult]?.scrollIntoView?.({ block: "nearest" });
+  }
   function paintZoneResults(text) {
-    if (!titleCache) titleCache = host.titles();
-    const found = rankTitles(titleCache, text, 20);
+    const trimmed = String(text ?? "").trim();
     zoneResults.replaceChildren();
-    for (const row of found) {
-      const item = button("compass-result", row.title);
-      item.dataset.uid = row.uid;
-      item.dataset.title = row.title;
-      zoneResults.append(item);
+    activeZoneResult = 0;
+    if (trimmed) {
+      if (!titleCache) titleCache = host.titles();
+      const found = rankTitles(titleCache, trimmed, 20);
+      const exactMatch = (titleCache ?? []).some((row) => row?.title === trimmed);
+      for (const row of found) {
+        const item = button("compass-result", row.title);
+        item.dataset.action = "page";
+        item.dataset.uid = row.uid;
+        item.dataset.title = row.title;
+        item.setAttribute("role", "option");
+        zoneResults.append(item);
+      }
+      if (!exactMatch) {
+        const createPageRow = button("compass-result compass-zone-create-page", `Create page "${trimmed}"`);
+        createPageRow.dataset.action = "create-page";
+        createPageRow.dataset.title = trimmed;
+        createPageRow.setAttribute("role", "option");
+        zoneResults.append(createPageRow);
+      }
+      if (typeof plexus()?.create === "function") {
+        const drawRow = button("compass-result compass-result-drawing compass-zone-create-drawing", `Create drawing "${trimmed}"`);
+        drawRow.dataset.action = "create-drawing";
+        drawRow.dataset.title = trimmed;
+        drawRow.setAttribute("role", "option");
+        zoneResults.append(drawRow);
+      }
+      markZoneResult();
     }
-    zoneCreate.disabled = text.trim() === "";
+    if (zoneAnchor && !zonePopEl.hidden) placeFloating(zonePopEl, zoneAnchor.x, zoneAnchor.y);
+  }
+  function chooseZoneItem(item) {
+    if (!item || !zoneTarget) return;
+    const zone = zoneTarget;
+    const action = item.dataset.action;
+    const title = item.dataset.title || item.textContent;
+    if (action === "create-drawing") {
+      void createDrawingHere(zone, title);
+      return;
+    }
+    hideZonePop();
+    titleCache = null;
+    void writeZone(zone, title);
+  }
+  function onZoneKey(event) {
+    const items = [...zoneResults.querySelectorAll(".compass-result")];
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!items.length) return;
+      activeZoneResult = clamp3(activeZoneResult + (event.key === "ArrowDown" ? 1 : -1), 0, items.length - 1);
+      markZoneResult();
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      if (items[activeZoneResult]) chooseZoneItem(items[activeZoneResult]);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeZonePopToOpener();
+    }
   }
   async function writeZone(zone, title) {
     if (!zone || !current || !title) return;
@@ -16321,14 +16403,13 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     }
     load();
   }
-  async function createDrawingHere() {
-    const zone = zoneTarget;
-    const name = zoneInput.value.trim();
+  async function createDrawingHere(zone = zoneTarget, name = zoneInput.value.trim()) {
+    const clean = String(name ?? "").trim();
     hideZonePop();
-    if (!zone || !name || !current) return;
+    if (!zone || !clean || !current) return;
     let existing = null;
     try {
-      existing = host.findDrawingBlock(name);
+      existing = host.findDrawingBlock(clean);
     } catch (error) {
       console.error("[compass] drawing lookup", error);
     }
@@ -16336,18 +16417,19 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (plan.create) {
       const api = plexus();
       if (typeof api?.create !== "function") {
-        setStatus("Plexus is needed");
+        setStatus("This needs the Roam Plexus extension.");
         return;
       }
       try {
-        await api.create({ title: name });
+        await api.create({ title: clean });
       } catch (error) {
         console.error("[compass] create drawing", error);
         setStatus("Plexus could not create the drawing.");
         return;
       }
     }
-    await writeZone(zone, `Drawings/${name}`);
+    titleCache = null;
+    await writeZone(zone, `Drawings/${clean}`);
   }
   async function sendToDrawing() {
     if (!hood) return;
@@ -16359,7 +16441,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const mode = linksMode ? "links" : "plain";
     const api = plexus();
     if (typeof api?.dropSubgraph !== "function") {
-      setStatus("Plexus is needed");
+      setStatus("This needs the Roam Plexus extension.");
       return;
     }
     try {
@@ -17196,7 +17278,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     const add = target.closest?.(".compass-zone-add");
     if (add) {
       event.preventDefault();
-      openZonePop(add.dataset.zone, event.clientX, event.clientY);
+      openZonePop(add.dataset.zone, event.clientX, event.clientY, add);
       return;
     }
     const start = target.closest?.(".compass-start");
@@ -17449,7 +17531,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (!root.contains(event.target) && event.target !== document.body) return;
     const typing = isTypingTarget(event.target);
     if (event.key === "Escape") {
-      if (!menu.hidden || !details.hidden || !results.hidden || !zonePopEl.hidden) hideFloating();
+      if (!zonePopEl.hidden) closeZonePopToOpener();
+      else if (!menu.hidden || !details.hidden || !results.hidden) hideFloating();
       else if (features.any("onEscape", event)) {
       } else close();
       event.preventDefault();
@@ -17616,22 +17699,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   lifecycle.event(pinButton, "click", guard(() => togglePin()));
   lifecycle.event(outlineButton, "click", guard(() => toggleOutline()));
   lifecycle.event(zoneInput, "input", () => paintZoneResults(zoneInput.value));
-  lifecycle.event(zoneInput, "keydown", (event) => {
-    if (event.key === "Enter" && !zoneCreate.disabled) {
-      event.preventDefault();
-      void createDrawingHere();
-    }
-  });
+  lifecycle.event(zoneInput, "keydown", onZoneKey);
+  lifecycle.event(zoneResults, "mousedown", (event) => event.preventDefault());
   lifecycle.event(zoneResults, "click", (event) => {
-    const item = event.target.closest?.(".compass-result");
-    if (!item) return;
-    const zone = zoneTarget;
-    const title = item.dataset.title || item.textContent;
-    hideZonePop();
-    void writeZone(zone, title);
-  });
-  lifecycle.event(zoneCreate, "click", () => {
-    void createDrawingHere();
+    chooseZoneItem(event.target.closest?.(".compass-result"));
   });
   lifecycle.event(related, "click", (event) => {
     const item = event.target.closest?.(".compass-related-item");
