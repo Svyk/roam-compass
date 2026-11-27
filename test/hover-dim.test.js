@@ -16,21 +16,25 @@ function classes(initial = []) {
   };
 }
 
-function element(names, uid) {
+function element(names, dataset = {}, subs = []) {
   return {
     classList: classes(names),
-    dataset: { uid },
+    dataset: typeof dataset === "string" ? { uid: dataset } : { ...dataset },
     style: { left: "10px" },
+    querySelectorAll(selector) {
+      if (selector === ".compass-sub") return subs;
+      return [];
+    },
   };
 }
 
-function scene() {
+function scene(extra = []) {
   const center = element(["compass-node", "compass-node-center"], "center");
   const neighbour = element(["compass-node"], "north");
   const other = element(["compass-node"], "south");
   const northEdge = element(["compass-edge"], "north");
   const southEdge = element(["compass-edge"], "south");
-  const all = [center, neighbour, other, northEdge, southEdge];
+  const all = [center, neighbour, other, northEdge, southEdge, ...extra];
   const root = {
     classList: classes(["compass-root"]),
     dataset: {},
@@ -43,14 +47,14 @@ function scene() {
   return { root, center, neighbour, other, northEdge, southEdge, all };
 }
 
-test("a neighbour hover marks that edge hot, the other edge dim, and style.left stays \"10px\"", () => {
+test("a neighbour hover keeps itself and the center lit, dims unrelated nodes, and marks edges", () => {
   const { root, center, neighbour, other, northEdge, southEdge } = scene();
   markHover(root, neighbour);
   assert.equal(root.classList.contains("compass-dimming"), true);
   assert.equal(neighbour.classList.contains("compass-node-hot"), true);
   assert.equal(neighbour.classList.contains("compass-node-dim"), false);
-  assert.equal(center.classList.contains("compass-node-dim"), true);
-  assert.equal(center.classList.contains("compass-node-hot"), false);
+  assert.equal(center.classList.contains("compass-node-hot"), true);
+  assert.equal(center.classList.contains("compass-node-dim"), false);
   assert.equal(other.classList.contains("compass-node-dim"), true);
   assert.equal(other.classList.contains("compass-node-hot"), false);
   assert.equal(northEdge.classList.contains("compass-edge-hot"), true);
@@ -64,19 +68,60 @@ test("a neighbour hover marks that edge hot, the other edge dim, and style.left 
   assert.equal(neighbour.style.transform, undefined);
 });
 
-test("a center hover marks every edge hot", () => {
-  const { root, center, neighbour, northEdge, southEdge } = scene();
+test("hovering the center dims nothing and clears all hover marks", () => {
+  const { root, center, neighbour, other, northEdge, southEdge, all } = scene();
   markHover(root, neighbour);
   markHover(root, center);
-  assert.equal(northEdge.classList.contains("compass-edge-hot"), true);
-  assert.equal(southEdge.classList.contains("compass-edge-hot"), true);
+  assert.equal(root.classList.contains("compass-dimming"), false);
+  for (const item of all) {
+    assert.equal(item.classList.contains("compass-node-hot"), false);
+    assert.equal(item.classList.contains("compass-node-dim"), false);
+    assert.equal(item.classList.contains("compass-edge-hot"), false);
+    assert.equal(item.classList.contains("compass-edge-dim"), false);
+  }
+  assert.equal(center.style.left, "10px");
+  assert.equal(other.classList.contains("compass-node-dim"), false);
   assert.equal(northEdge.classList.contains("compass-edge-dim"), false);
   assert.equal(southEdge.classList.contains("compass-edge-dim"), false);
+});
+
+test("hovering a node keeps cross-edge peers lit in either direction", () => {
+  const peerOut = element(["compass-node"], "west");
+  const peerIn = element(["compass-node"], "east");
+  const crossOut = element(["compass-edge", "compass-cross"], { source: "north", target: "west" });
+  const crossIn = element(["compass-edge", "compass-cross"], { source: "east", target: "north" });
+  const { root, center, neighbour, other } = scene([peerOut, peerIn, crossOut, crossIn]);
+
+  markHover(root, neighbour);
+  assert.equal(root.classList.contains("compass-dimming"), true);
+  assert.equal(neighbour.classList.contains("compass-node-hot"), true);
   assert.equal(center.classList.contains("compass-node-hot"), true);
-  assert.equal(center.classList.contains("compass-node-dim"), false);
-  assert.equal(neighbour.classList.contains("compass-node-dim"), true);
-  assert.equal(neighbour.classList.contains("compass-node-hot"), false);
-  assert.equal(center.style.left, "10px");
+  assert.equal(peerOut.classList.contains("compass-node-hot"), true);
+  assert.equal(peerOut.classList.contains("compass-node-dim"), false);
+  assert.equal(peerIn.classList.contains("compass-node-hot"), true);
+  assert.equal(peerIn.classList.contains("compass-node-dim"), false);
+  assert.equal(other.classList.contains("compass-node-dim"), true);
+  assert.equal(other.classList.contains("compass-node-hot"), false);
+});
+
+test("hovering a node in Expanded keeps its children and its parent lit", () => {
+  const childNode = element(["compass-node"], "child-1");
+  const parentNode = element(["compass-node", "compass-node-expanded"], "parent-1", [
+    { dataset: { uid: "child-1" } },
+  ]);
+  const { root, other } = scene([parentNode, childNode]);
+
+  markHover(root, parentNode);
+  assert.equal(parentNode.classList.contains("compass-node-hot"), true);
+  assert.equal(childNode.classList.contains("compass-node-hot"), true);
+  assert.equal(childNode.classList.contains("compass-node-dim"), false);
+  assert.equal(other.classList.contains("compass-node-dim"), true);
+
+  markHover(root, childNode);
+  assert.equal(childNode.classList.contains("compass-node-hot"), true);
+  assert.equal(parentNode.classList.contains("compass-node-hot"), true);
+  assert.equal(parentNode.classList.contains("compass-node-dim"), false);
+  assert.equal(other.classList.contains("compass-node-dim"), true);
 });
 
 test("markHover(root, null) clears the classes and removes compass-dimming", () => {
