@@ -8,7 +8,9 @@ import {
   PAGE_ATTRIBUTES_PULL,
   PEER_PULL,
   REFS_TEXT_PULL,
+  SOURCE,
   createHost,
+  sourceOf,
 } from "../src/host.js";
 import { createLifecycle } from "../src/lifecycle.js";
 
@@ -483,9 +485,12 @@ test("every labelled block pull includes the shared two-level refs sub-pattern a
     }
     return stack.length === 0;
   };
-  for (const pull of [CENTER_PULL, OUTLINE_PULL, PEER_PULL, ENTITY_PULL, PAGE_ATTRIBUTES_PULL]) {
+  for (const pull of [SOURCE, CENTER_PULL, OUTLINE_PULL, PEER_PULL, ENTITY_PULL, PAGE_ATTRIBUTES_PULL]) {
     assert.ok(balanced(pull), `balanced pull syntax: ${pull}`);
   }
+
+  // SOURCE pulls two levels of refs on the attribute block and on its children.
+  assert.equal(SOURCE.split(REFS_TEXT_PULL).length - 1, 2);
 
   // CENTER_PULL: center refs, parent, siblings, outgoing harc values, and incoming harc entities pull REFS_TEXT_PULL;
   // :block/_refs inner :block/refs pulls REFS_LEAF_PULL.
@@ -508,7 +513,117 @@ test("every labelled block pull includes the shared two-level refs sub-pattern a
   // PEER_PULL pulls two levels on both incoming entities and outgoing values.
   assert.equal(PEER_PULL.split(REFS_TEXT_PULL).length - 1, 2);
 
-  // ENTITY_PULL and PAGE_ATTRIBUTES_PULL pull two levels.
+  // ENTITY_PULL pulls two levels; PAGE_ATTRIBUTES_PULL pulls two levels on both :harc/a-source and :harc/v.
   assert.ok(ENTITY_PULL.includes(REFS_TEXT_PULL));
-  assert.ok(PAGE_ATTRIBUTES_PULL.includes(REFS_TEXT_PULL));
+  assert.equal(PAGE_ATTRIBUTES_PULL.split(REFS_TEXT_PULL).length - 1, 2);
+});
+
+test("sourceOf carries nested refs when present and omits refs when absent", () => {
+  const withoutRefs = sourceOf({
+    ":block/uid": "s1",
+    ":block/string": "Status:: Active",
+    ":block/order": 0,
+    ":block/_children": [{ ":block/uid": "p1" }],
+    ":block/children": [{ ":block/uid": "c1", ":block/string": "Note", ":block/order": 0 }],
+  });
+  assert.deepEqual(withoutRefs, {
+    uid: "s1",
+    string: "Status:: Active",
+    order: 0,
+    parentUid: "p1",
+    children: [{ uid: "c1", string: "Note", order: 0 }],
+  });
+  assert.equal("refs" in withoutRefs, false);
+
+  const withRefs = sourceOf({
+    ":block/uid": "s2",
+    ":block/string": "Status:: Waiting on ((b1))",
+    ":block/order": 1,
+    ":block/_children": [{ ":block/uid": "p-daily" }],
+    ":block/refs": [{
+      ":block/uid": "b1",
+      ":block/string": "Slot ((b2))",
+      ":block/refs": [{ ":block/uid": "b2", ":block/string": "Task" }],
+    }],
+    ":block/children": [{
+      ":block/uid": "c2",
+      ":block/string": "Detail ((b3))",
+      ":block/order": 0,
+      ":block/refs": [{ ":block/uid": "b3", ":block/string": "Subdetail" }],
+    }],
+  });
+  assert.deepEqual(withRefs.refs, [{
+    uid: "b1",
+    string: "Slot ((b2))",
+    refs: [{ uid: "b2", string: "Task" }],
+  }]);
+  assert.deepEqual(withRefs.children[0].refs, [{ uid: "b3", string: "Subdetail" }]);
+});
+
+test("host.pageAttributes resolves inline :harc/v-string block refs from :harc/a-source while preserving non-ref strings", () => {
+  installRoam({
+    data: {
+      pull(pattern, ref) {
+        assert.equal(pattern, PAGE_ATTRIBUTES_PULL);
+        if (!ref.includes('"p1"')) return { ":block/uid": "other" };
+        return {
+          ":block/uid": "p1",
+          ":harc/_e": [
+            {
+              ":harc/a": [{ ":node/title": "Status" }],
+              ":harc/a-source": [{
+                ":block/uid": "s-one",
+                ":block/refs": [{ ":block/uid": "b1", ":block/string": "Subtask B" }],
+              }],
+              ":harc/v": [{ ":block/uid": "v1", ":harc/v-string": "Waiting on ((b1))" }],
+            },
+            {
+              ":harc/a": [{ ":node/title": "Chain" }],
+              ":harc/a-source": [{
+                ":block/uid": "s-two",
+                ":block/refs": [{
+                  ":block/uid": "b1",
+                  ":block/string": "Slot ((b2))",
+                  ":block/refs": [{ ":block/uid": "b2", ":block/string": "Task" }],
+                }],
+              }],
+              ":harc/v": [{ ":block/uid": "v2", ":harc/v-string": "Waiting on ((b1))" }],
+            },
+            {
+              ":harc/a": [{ ":node/title": "Plain" }],
+              ":harc/a-source": [{
+                ":block/uid": "s-plain",
+                ":block/refs": [{ ":block/uid": "b1", ":block/string": "Subtask B" }],
+              }],
+              ":harc/v": [{ ":block/uid": "v3", ":harc/v-string": "**Waiting** [[on]] it" }],
+            },
+            {
+              ":harc/a": [{ ":node/title": "Unresolved" }],
+              ":harc/a-source": [{ ":block/uid": "s-empty", ":block/refs": [] }],
+              ":harc/v": [{ ":block/uid": "v4", ":harc/v-string": "Waiting on ((b1))" }],
+            },
+            {
+              ":harc/a": [{ ":node/title": "Self" }],
+              ":harc/a-source": [{
+                ":block/uid": "s-self",
+                ":block/refs": [{ ":block/uid": "s-self", ":block/string": "Self:: Loop ((s-self))" }],
+              }],
+              ":harc/v": [{ ":block/uid": "v5", ":harc/v-string": "Loop ((s-self))" }],
+            },
+          ],
+        };
+      },
+    },
+  });
+  const host = createHost({ lifecycle: createLifecycle() });
+  try {
+    const result = host.pageAttributes(["p1"]);
+    assert.deepEqual(result.p1.status.values, [{ text: "Waiting on Subtask B" }]);
+    assert.deepEqual(result.p1.chain.values, [{ text: "Waiting on Slot Task" }]);
+    assert.deepEqual(result.p1.plain.values, [{ text: "**Waiting** [[on]] it" }]);
+    assert.deepEqual(result.p1.unresolved.values, [{ text: "Waiting on ((b1))" }]);
+    assert.deepEqual(result.p1.self.values, [{ text: "Loop (( ))" }]);
+  } finally {
+    delete globalThis.roamAlphaAPI;
+  }
 });

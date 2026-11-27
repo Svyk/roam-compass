@@ -1998,9 +1998,9 @@ function planMove({ source, fromAttribute, toAttribute, value, newUid }) {
 
 // src/host.js
 var LABELS = "{:harc/_e [{:harc/a [:node/title :edit/time :create/time]} {:harc/v [:block/uid :node/title :edit/time :create/time :block/string :harc/v-string]}]}";
-var SOURCE = "[:block/uid :block/string :block/order {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order]}]";
 var REFS_LEAF_PULL = "{:block/refs [:block/uid :block/string]}";
 var REFS_TEXT_PULL = `{:block/refs [:block/uid :block/string ${REFS_LEAF_PULL}]}`;
+var SOURCE = `[:block/uid :block/string :block/order ${REFS_TEXT_PULL} {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order ${REFS_TEXT_PULL}]}]`;
 var CENTER_PULL = `[:block/uid :node/title :edit/time :create/time :block/string :block/order
  {:block/refs [:block/uid :node/title :edit/time :create/time :block/string ${REFS_TEXT_PULL}]}
  {:block/page [:block/uid :node/title :edit/time :create/time]}
@@ -2055,7 +2055,7 @@ var RECENT_PAGES_QUERY = "[:find ?uid ?title ?edit ?create :where [?e :node/titl
 var RECENT_DRAWINGS_QUERY = `[:find ?uid ?edit :where [?b :block/uid ?uid] [?b :block/string ?s] [(clojure.string/includes? ?s "excalidraw")] [?b :edit/time ?edit]]`;
 var ENTITY_PULL = `[:block/uid :node/title :block/string ${REFS_TEXT_PULL}]`;
 var GUARD_PULL = "[:block/uid :block/string]";
-var PAGE_ATTRIBUTES_PULL = `[:block/uid {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string ${REFS_TEXT_PULL}]}]}]`;
+var PAGE_ATTRIBUTES_PULL = `[:block/uid {:harc/_e [{:harc/a [:node/title]} {:harc/a-source [:block/uid ${REFS_TEXT_PULL}]} {:harc/v [:block/uid :node/title :block/string :harc/v-string ${REFS_TEXT_PULL}]}]}]`;
 var PAGE_ATTRIBUTES_CAP = 200;
 var BLOCK_STRINGS_PULL = "[:block/uid :block/string]";
 var BLOCK_STRINGS_CAP = 50;
@@ -2132,13 +2132,18 @@ function sourceOf(node) {
   const uid = node?.[":block/uid"];
   if (typeof uid !== "string" || !uid || typeof node[":block/string"] !== "string") return null;
   const parentUid = asList(node[":block/_children"])[0]?.[":block/uid"];
-  return {
+  const out = {
     uid,
     string: node[":block/string"],
     order: Number.isFinite(node[":block/order"]) ? node[":block/order"] : null,
     parentUid: typeof parentUid === "string" ? parentUid : null,
     children: asList(node[":block/children"]).map((child) => entityOf(child)).filter((child) => child?.string != null).sort(byOrder)
   };
+  if (node[":block/refs"] != null) {
+    const refs = asList(node[":block/refs"]).map(entityOf).filter(Boolean);
+    if (refs.length) out.refs = refs;
+  }
+  return out;
 }
 function attributeOf(harc) {
   const title = asList(harc?.[":harc/a"])[0]?.[":node/title"];
@@ -2433,7 +2438,8 @@ function refsMapFromRaw(raw, map = /* @__PURE__ */ new Map()) {
   }
   return map;
 }
-function attributeValueOf(raw) {
+var HAS_BLOCK_REF = /\(\([\w-]+\)\)/;
+function attributeValueOf(raw, source = null) {
   if (!raw || typeof raw !== "object") return null;
   const uid = raw[":block/uid"];
   if (typeof uid === "string" && uid && typeof raw[":node/title"] === "string") {
@@ -2443,7 +2449,15 @@ function attributeValueOf(raw) {
     return { uid, text: plainText(raw[":block/string"], 90, { refs: refsMapFromRaw(raw), selfUid: uid }) };
   }
   if (raw[":harc/v-string"] != null) {
-    return { text: String(raw[":harc/v-string"]) };
+    const text = String(raw[":harc/v-string"]);
+    if (HAS_BLOCK_REF.test(text)) {
+      const refs = refsMapFromRaw(source);
+      if (refs.size > 0) {
+        const selfUid = typeof source?.[":block/uid"] === "string" ? source[":block/uid"] : void 0;
+        return { text: plainText(text, 90, { refs, selfUid }) };
+      }
+    }
+    return { text };
   }
   return null;
 }
@@ -2884,8 +2898,9 @@ function createHost({ lifecycle }) {
           entry = { name, values: [] };
           attrs[key] = entry;
         }
+        const source = asList(harc[":harc/a-source"])[0];
         for (const raw of asList(harc[":harc/v"])) {
-          const value = attributeValueOf(raw);
+          const value = attributeValueOf(raw, source);
           if (value) entry.values.push(value);
         }
       }

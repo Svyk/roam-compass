@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { buildNeighborhood, createPlexusOpener, drawingLinkEdges, isDrawingLike, plexusKind, plexusOpenPlan, plexusRegionLabels, roleOf, modelSettings, typedParentUids } from "../src/model/neighborhood.js";
-import { normalizeCenter, normalizeMentions, normalizeOutline } from "../src/host.js";
+import { normalizeCenter, normalizeMentions, normalizeOut, normalizeOutline } from "../src/host.js";
 
 const page = (uid, title, extra) => ({ uid, title, ...extra });
 
@@ -723,4 +723,33 @@ test("center attribute badge does not expand its own source block reference", ()
     }],
   }));
   assert.deepEqual(hood.center.badges, [{ attribute: "Status", text: "Loop (( ))" }]);
+});
+
+test("center badge resolves inline block references from an attribute block outside the center outline", () => {
+  const out = normalizeOut([{
+    ":block/uid": "h-ext",
+    ":harc/a": [{ ":node/title": "Status" }],
+    ":harc/a-source": [{
+      ":block/uid": "b-daily-status",
+      ":block/string": "Status:: Waiting on ((b1))",
+      ":block/order": 0,
+      ":block/_children": [{ ":block/uid": "b-daily-alpha" }],
+      ":block/refs": [{ ":block/uid": "b1", ":block/string": "Subtask B" }],
+    }],
+    ":harc/v": [{ ":block/uid": "v-ext", ":harc/v-string": "Waiting on ((b1))" }],
+    ":harc/_e": [],
+  }]);
+  const hood = buildNeighborhood(snap({
+    center: { uid: "p-alpha", kind: "page", title: "Project Alpha" },
+    outline: [],
+    out,
+  }));
+  assert.deepEqual(hood.center.badges, [{
+    attribute: "Status",
+    text: "Waiting on Subtask B",
+    parts: [
+      { text: "Waiting on " },
+      { text: "Subtask B", ref: true },
+    ],
+  }]);
 });

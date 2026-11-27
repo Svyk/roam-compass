@@ -377,16 +377,19 @@ function buildIndex(graph) {
   }
 
   function sourceSnapshot(block, parent) {
-    return {
+    const out = {
       uid: block.uid,
       string: block.string ?? "",
       order: Number.isFinite(block.order) ? block.order : 0,
       parentUid: parent?.uid ?? null,
       children: [...(block.children ?? [])]
-        .map((child) => blockEntity(child))
+        .map((child) => blockEntity(child, blocksByUid, 2))
         .filter(Boolean)
         .sort(byOrder),
     };
+    const refs = refsOfString(block.string ?? "", 2);
+    if (refs.length) out.refs = refs;
+    return out;
   }
 
   function extractAttributeValues(block) {
@@ -1161,11 +1164,16 @@ export function createFakeHost(graph = createGraph(), { lifecycle } = {}) {
       for (const harc of index.harcsByEntityUid.get(uid) ?? []) {
         const key = harc.attribute.toLowerCase();
         if (!out[uid][key]) out[uid][key] = { name: harc.attribute, values: [] };
+        const sourceRefs = collectRefMap(harc.source);
         for (const val of harc.values ?? []) {
           if (typeof val?.title === "string") {
             out[uid][key].values.push({ uid: val.uid, title: val.title });
           } else if (val?.text != null) {
-            out[uid][key].values.push({ text: String(val.text) });
+            const rawText = String(val.text);
+            const text = /\(\([\w-]+\)\)/.test(rawText) && sourceRefs.size > 0
+              ? plainText(rawText, 90, { refs: sourceRefs, selfUid: harc.source?.uid })
+              : rawText;
+            out[uid][key].values.push({ text });
           } else if (typeof val?.string === "string") {
             const refs = collectRefMap(val);
             out[uid][key].values.push({ text: plainText(val.string, 90, { refs, selfUid: val.uid }) || val.uid });

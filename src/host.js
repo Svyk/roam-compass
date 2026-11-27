@@ -5,9 +5,9 @@ import { drawingTitle, parseAttribute, plainText } from "./model/text.js";
 
 // Harc labels: attributes nested under a relation block (Role:: Lead under Owner::).
 const LABELS = "{:harc/_e [{:harc/a [:node/title :edit/time :create/time]} {:harc/v [:block/uid :node/title :edit/time :create/time :block/string :harc/v-string]}]}";
-const SOURCE = "[:block/uid :block/string :block/order {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order]}]";
 const REFS_LEAF_PULL = "{:block/refs [:block/uid :block/string]}";
 export const REFS_TEXT_PULL = `{:block/refs [:block/uid :block/string ${REFS_LEAF_PULL}]}`;
+export const SOURCE = `[:block/uid :block/string :block/order ${REFS_TEXT_PULL} {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order ${REFS_TEXT_PULL}]}]`;
 
 export const CENTER_PULL = `[:block/uid :node/title :edit/time :create/time :block/string :block/order
  {:block/refs [:block/uid :node/title :edit/time :create/time :block/string ${REFS_TEXT_PULL}]}
@@ -67,7 +67,7 @@ const RECENT_PAGES_QUERY = "[:find ?uid ?title ?edit ?create :where [?e :node/ti
 const RECENT_DRAWINGS_QUERY = `[:find ?uid ?edit :where [?b :block/uid ?uid] [?b :block/string ?s] [(clojure.string/includes? ?s "excalidraw")] [?b :edit/time ?edit]]`;
 export const ENTITY_PULL = `[:block/uid :node/title :block/string ${REFS_TEXT_PULL}]`;
 const GUARD_PULL = "[:block/uid :block/string]";
-export const PAGE_ATTRIBUTES_PULL = `[:block/uid {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string ${REFS_TEXT_PULL}]}]}]`;
+export const PAGE_ATTRIBUTES_PULL = `[:block/uid {:harc/_e [{:harc/a [:node/title]} {:harc/a-source [:block/uid ${REFS_TEXT_PULL}]} {:harc/v [:block/uid :node/title :block/string :harc/v-string ${REFS_TEXT_PULL}]}]}]`;
 const PAGE_ATTRIBUTES_CAP = 200;
 const BLOCK_STRINGS_PULL = "[:block/uid :block/string]";
 const BLOCK_STRINGS_CAP = 50;
@@ -157,7 +157,7 @@ export function sourceOf(node) {
   const uid = node?.[":block/uid"];
   if (typeof uid !== "string" || !uid || typeof node[":block/string"] !== "string") return null;
   const parentUid = asList(node[":block/_children"])[0]?.[":block/uid"];
-  return {
+  const out = {
     uid,
     string: node[":block/string"],
     order: Number.isFinite(node[":block/order"]) ? node[":block/order"] : null,
@@ -167,6 +167,11 @@ export function sourceOf(node) {
       .filter((child) => child?.string != null)
       .sort(byOrder),
   };
+  if (node[":block/refs"] != null) {
+    const refs = asList(node[":block/refs"]).map(entityOf).filter(Boolean);
+    if (refs.length) out.refs = refs;
+  }
+  return out;
 }
 
 function attributeOf(harc) {
@@ -494,7 +499,9 @@ function refsMapFromRaw(raw, map = new Map()) {
   return map;
 }
 
-function attributeValueOf(raw) {
+const HAS_BLOCK_REF = /\(\([\w-]+\)\)/;
+
+function attributeValueOf(raw, source = null) {
   if (!raw || typeof raw !== "object") return null;
   const uid = raw[":block/uid"];
   if (typeof uid === "string" && uid && typeof raw[":node/title"] === "string") {
@@ -504,7 +511,15 @@ function attributeValueOf(raw) {
     return { uid, text: plainText(raw[":block/string"], 90, { refs: refsMapFromRaw(raw), selfUid: uid }) };
   }
   if (raw[":harc/v-string"] != null) {
-    return { text: String(raw[":harc/v-string"]) };
+    const text = String(raw[":harc/v-string"]);
+    if (HAS_BLOCK_REF.test(text)) {
+      const refs = refsMapFromRaw(source);
+      if (refs.size > 0) {
+        const selfUid = typeof source?.[":block/uid"] === "string" ? source[":block/uid"] : undefined;
+        return { text: plainText(text, 90, { refs, selfUid }) };
+      }
+    }
+    return { text };
   }
   return null;
 }
@@ -981,8 +996,9 @@ export function createHost({ lifecycle }) {
           entry = { name, values: [] };
           attrs[key] = entry;
         }
+        const source = asList(harc[":harc/a-source"])[0];
         for (const raw of asList(harc[":harc/v"])) {
-          const value = attributeValueOf(raw);
+          const value = attributeValueOf(raw, source);
           if (value) entry.values.push(value);
         }
       }
