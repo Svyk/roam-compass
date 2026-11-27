@@ -3,8 +3,9 @@ import test from "node:test";
 
 import { drawingTitle, labelParts, parseAttribute, plainText, removeToken, safeSlice, scanRefs, tailShape } from "../src/model/text.js";
 
-// Timing limit for the adversarial-input tests. The regressions they guard against ran for 3 to 34 seconds;
-// GitHub's shared runners need up to about 70 ms for inputs that take 15 ms locally.
+// Timing limit for the adversarial-input tests. A slow shared CI runner needs about 70 ms for inputs that take
+// 15 ms locally, so a tight limit flakes. The inputs are sized so that losing a bound (the 2,000-character cap,
+// the per-call memo) costs several seconds. Where a lost bound would stay under the limit, the test counts work.
 const TIME_LIMIT_MS = 1000;
 
 const titles = (text) => scanRefs(text).map((token) => (token.type === "block" ? `((${token.uid}))` : token.title));
@@ -276,9 +277,9 @@ test("plainText handles 25,000 spaces after {{ without backtracking", () => {
 test("labelParts bounds adversarial inputs to 2000 chars and handles macros cut at the boundary", () => {
   const cases = [
     ["nested braces", `${"{{".repeat(8000)}x${"}}".repeat(8000)}`, `${"{{".repeat(44)}{…`],
-    ["alias bracket chain", `${"[a]([[".repeat(8000)}]]`, "a"],
-    ["unclosed aliases", "[a](".repeat(8000), "a"],
-    ["unclosed brackets", `${"[x ".repeat(8000)}] end ](`, `${"[x ".repeat(29)}[x…`],
+    ["alias bracket chain", `${"[a]([[".repeat(20000)}]]`, "a"],
+    ["unclosed aliases", "[a](".repeat(20000), "a"],
+    ["unclosed brackets", `${"[x ".repeat(20000)}] end ](`, `${"[x ".repeat(29)}[x…`],
   ];
   for (const [name, input, expected] of cases) {
     const start = performance.now();
@@ -326,10 +327,11 @@ test("labelParts bounds reference fan-out without truncating across long whitesp
     outer += `((${uid}))`;
     uniqueRefs[uid] = "((b))".repeat(300);
   }
-  const start300 = performance.now();
-  const res300 = labelParts(outer, 90, { refs: uniqueRefs });
-  const elapsed300 = performance.now() - start300;
-  assert.ok(elapsed300 < TIME_LIMIT_MS, `300 unique outer refs took ${elapsed300.toFixed(1)}ms`);
+  // Time cannot show a lost expansion budget here (about 35 ms without it), so count reference lookups:
+  // with the budget the label is full after the first outer reference.
+  let lookups = 0;
+  const res300 = labelParts(outer, 90, { refs: (uid) => { lookups += 1; return uniqueRefs[uid]; } });
+  assert.ok(lookups <= 5, `300 unique outer refs: expected <= 5 lookups, got ${lookups}`);
   assert.equal(res300.text, `${"y ".repeat(44)}y…`);
 
   const spaced = labelParts(`a${" ".repeat(500)}((u1)) tail`, 90, {
@@ -457,16 +459,11 @@ test("page-link and tag brackets that span code, macros, aliases, or block refer
     { text: "Subtask B", ref: true },
   ]);
 
-  const startLong = performance.now();
+  // Deep nesting must not throw. The 2,000-character cap bounds the work, so there is nothing to time here.
   const longResult = plainText(`${"[[".repeat(1000)}\`a\`${"]]".repeat(1000)}`);
-  const elapsedLong = performance.now() - startLong;
-  assert.ok(elapsedLong < TIME_LIMIT_MS, `1000-bracket timing case took ${elapsedLong.toFixed(1)}ms`);
   assert.equal(longResult.length, 90);
 
-  const startDeep = performance.now();
   const deepResult = plainText(`${"[[".repeat(499)}\`a\`${"]]".repeat(499)}`);
-  const elapsedDeep = performance.now() - startDeep;
-  assert.ok(elapsedDeep < TIME_LIMIT_MS, `499-pair cross-token timing case took ${elapsedDeep.toFixed(1)}ms`);
   assert.equal(deepResult, "a");
 });
 
