@@ -660,7 +660,8 @@ function matchAliasOrImage(text, index, lastCloseBracket) {
   }
   return null;
 }
-function parseSmartBlockBody(body) {
+var SMARTBLOCK_MARKERS = [":SmartBlock:", ":42SmartBlock:"];
+function parseSmartBlockBody(body, closedAtCut = false) {
   const idxA = body.indexOf(":SmartBlock:");
   const idxB = body.indexOf(":42SmartBlock:");
   let sepIndex = -1;
@@ -672,17 +673,33 @@ function parseSmartBlockBody(body) {
     sepIndex = idxB;
     sepLen = ":42SmartBlock:".length;
   }
-  if (sepIndex < 0) return null;
-  const rawLabel = body.slice(0, sepIndex).trim();
-  if (!rawLabel) return null;
-  const afterSep = body.slice(sepIndex + sepLen);
-  const nextColon = afterSep.indexOf(":");
-  const rawWorkflow = (nextColon >= 0 ? afterSep.slice(0, nextColon) : afterSep).trim();
-  if (!rawWorkflow) return null;
-  const label = cleanMarkup(rawLabel).replace(/\s+/g, " ").trim();
-  const workflow = cleanMarkup(rawWorkflow).replace(/\s+/g, " ").trim();
-  if (!label) return null;
-  return { label, workflow };
+  if (sepIndex >= 0) {
+    const rawLabel = body.slice(0, sepIndex).trim();
+    const afterSep = body.slice(sepIndex + sepLen);
+    const nextColon = afterSep.indexOf(":");
+    const rawWorkflow = (nextColon >= 0 ? afterSep.slice(0, nextColon) : afterSep).trim();
+    const cleanLabel = rawLabel ? cleanMarkup(rawLabel).replace(/\s+/g, " ").trim() : "";
+    const cleanWorkflow = rawWorkflow ? cleanMarkup(rawWorkflow).replace(/\s+/g, " ").trim() : "";
+    if (cleanLabel) return { label: cleanLabel, workflow: cleanWorkflow };
+    if (cleanWorkflow) return { label: cleanWorkflow, workflow: "" };
+    return { label: "SmartBlock", workflow: "" };
+  }
+  if (closedAtCut) {
+    const lastColon = body.lastIndexOf(":");
+    if (lastColon >= 0) {
+      const tail = body.slice(lastColon);
+      const matchesPrefix = SMARTBLOCK_MARKERS.some((marker) => marker.startsWith(tail) && tail.length < marker.length);
+      if (matchesPrefix) {
+        if (lastColon > 0) {
+          const rawLabel = body.slice(0, lastColon).trim();
+          const cleanLabel = rawLabel ? cleanMarkup(rawLabel).replace(/\s+/g, " ").trim() : "";
+          if (cleanLabel) return { label: cleanLabel, workflow: "" };
+        }
+        if (tail.length > 1) return { label: "SmartBlock", workflow: "" };
+      }
+    }
+  }
+  return null;
 }
 function parseEmbedBody(body) {
   const colon = body.indexOf(":");
@@ -878,37 +895,64 @@ function truncateParts(parts, max) {
   }
   return { text: cut.map((part) => part.text).join(""), parts: cut };
 }
-function resolveBlockRef(uid, refs, depth, seen) {
-  const target = depth < MAX_REF_DEPTH && !seen.has(uid) ? lookupRef(refs, uid) : null;
-  if (target != null) {
-    const nextSeen = new Set(seen);
-    nextSeen.add(uid);
-    const resolved = buildRawParts(target, refs, depth + 1, nextSeen).map((part) => part.text).join("").replace(/\s+/g, " ").trim();
-    if (resolved) return { text: resolved, ref: true };
+function nonWsLength(text) {
+  return text ? text.replace(/\s+/g, "").length : 0;
+}
+function resolveBlockRef(uid, refs, depth, seen, memo, limit) {
+  if (depth < MAX_REF_DEPTH && !seen.has(uid)) {
+    const key = `${depth}:${uid}`;
+    if (memo.has(key)) return memo.get(key);
+    const target = lookupRef(refs, uid);
+    if (target != null) {
+      const nextSeen = new Set(seen);
+      nextSeen.add(uid);
+      const resolved = buildRawParts(target, refs, depth + 1, nextSeen, memo, limit).map((part) => part.text).join("").replace(/\s+/g, " ").trim();
+      const out = resolved ? { text: resolved, ref: true } : { text: "(( ))" };
+      memo.set(key, out);
+      return out;
+    }
+    const missing = { text: "(( ))" };
+    memo.set(key, missing);
+    return missing;
   }
   return { text: "(( ))" };
 }
-function expandBareRefs(rawSegment, refs, depth, seen) {
-  if (!rawSegment) return [];
+function expandBareRefs(rawSegment, refs, depth, seen, memo, budget) {
+  if (!rawSegment || budget.count > budget.limit) return [];
   if (!rawSegment.includes("((") || !rawSegment.includes("))")) {
     const text = cleanMarkup(rawSegment);
-    return text ? [{ text }] : [];
+    if (!text) return [];
+    budget.count += nonWsLength(text);
+    return [{ text }];
   }
   const pieces = [];
   const re = new RegExp(BLOCK_REF_RE.source, "g");
   let cursor = 0;
   let match;
   while (match = re.exec(rawSegment)) {
+    if (budget.count > budget.limit) break;
     if (match.index > cursor) {
       const text = cleanMarkup(rawSegment.slice(cursor, match.index));
-      if (text) pieces.push({ text });
+      if (text) {
+        pieces.push({ text });
+        budget.count += nonWsLength(text);
+        if (budget.count > budget.limit) {
+          cursor = match.index;
+          break;
+        }
+      }
     }
-    pieces.push(resolveBlockRef(match[1], refs, depth, seen));
+    const resolved = resolveBlockRef(match[1], refs, depth, seen, memo, budget.limit);
+    pieces.push(resolved);
+    budget.count += nonWsLength(resolved.text);
     cursor = match.index + match[0].length;
   }
-  if (cursor < rawSegment.length) {
+  if (cursor < rawSegment.length && budget.count <= budget.limit) {
     const text = cleanMarkup(rawSegment.slice(cursor));
-    if (text) pieces.push({ text });
+    if (text) {
+      pieces.push({ text });
+      budget.count += nonWsLength(text);
+    }
   }
   return pieces;
 }
@@ -939,7 +983,7 @@ function tokenizeCodeAndMacros(text, cut) {
       if (end > i) {
         flushRaw(i);
         const body = closedAtCut ? text.slice(i + 2) : text.slice(i + 2, end - 2);
-        const sb = parseSmartBlockBody(body);
+        const sb = parseSmartBlockBody(body, closedAtCut);
         if (sb) {
           tokens.push({ kind: "smartblock", label: sb.label, workflow: sb.workflow });
         } else {
@@ -1039,43 +1083,58 @@ function tokenizeAliases(tokens, cut) {
   }
   return out;
 }
-function expandToken(token, refs, depth, seen, expandRefs) {
-  if (token.kind === "smartblock") return [token];
+function expandToken(token, refs, depth, seen, memo, budget, expandRefs) {
+  if (budget.count > budget.limit) return [];
+  if (token.kind === "smartblock") {
+    budget.count += nonWsLength(token.label);
+    return [token];
+  }
   if (token.kind === "code") {
     const text = cleanMarkup(token.raw);
+    if (text) budget.count += nonWsLength(text);
     return [{ kind: "pieces", pieces: text ? [{ text }] : [] }];
   }
   if (token.kind === "embed") {
-    return [{ kind: "pieces", pieces: [resolveBlockRef(token.uid, refs, depth, seen)] }];
+    const resolved = resolveBlockRef(token.uid, refs, depth, seen, memo, budget.limit);
+    budget.count += nonWsLength(resolved.text);
+    return [{ kind: "pieces", pieces: [resolved] }];
   }
   if (token.kind === "macro") {
     const text = renderOtherMacro(token.body);
+    if (text) budget.count += nonWsLength(text);
     return [{ kind: "pieces", pieces: text ? [{ text }] : [] }];
   }
   if (token.kind === "alias") {
     const inner = [];
     for (const child of token.labelTokens) {
-      inner.push(...expandToken(child, refs, depth, seen, false));
+      if (budget.count > budget.limit) break;
+      inner.push(...expandToken(child, refs, depth, seen, memo, budget, false));
     }
     if (token.isImage) {
       const hasContent = inner.some((item) => item.kind === "smartblock" || item.pieces.some((piece) => piece.text.trim() !== ""));
-      if (!hasContent) return [{ kind: "pieces", pieces: [{ text: "image" }] }];
+      if (!hasContent) {
+        budget.count += 5;
+        return [{ kind: "pieces", pieces: [{ text: "image" }] }];
+      }
     }
     return inner;
   }
-  const pieces = expandRefs ? expandBareRefs(token.text, refs, depth, seen) : (() => {
+  const pieces = expandRefs ? expandBareRefs(token.text, refs, depth, seen, memo, budget) : (() => {
     const text = cleanMarkup(token.text);
+    if (text) budget.count += nonWsLength(text);
     return text ? [{ text }] : [];
   })();
   return [{ kind: "pieces", pieces }];
 }
-function buildRawParts(raw, refs, depth, seen) {
+function buildRawParts(raw, refs, depth, seen, memo, limit) {
   const { text, cut } = capInput(raw);
   const stage2 = tokenizeCodeAndMacros(text, cut);
   const stage3 = tokenizeAliases(stage2, cut);
+  const budget = { count: 0, limit };
   const expanded = [];
   for (const token of stage3) {
-    expanded.push(...expandToken(token, refs, depth, seen, true));
+    if (budget.count > budget.limit) break;
+    expanded.push(...expandToken(token, refs, depth, seen, memo, budget, true));
   }
   const hasOtherText = expanded.some(
     (token) => token.kind !== "smartblock" && token.pieces.some((piece) => piece.text.trim() !== "")
@@ -1098,7 +1157,8 @@ function labelParts(input, max = 90, options = {}) {
   const refs = options?.refs ?? null;
   const seen = /* @__PURE__ */ new Set();
   if (typeof options?.selfUid === "string" && options.selfUid) seen.add(options.selfUid);
-  const normalized = buildRawParts(raw, refs, 0, seen);
+  const limit = Number.isFinite(max) && max > 0 ? max : 90;
+  const normalized = buildRawParts(raw, refs, 0, seen, /* @__PURE__ */ new Map(), limit);
   return truncateParts(normalized, max);
 }
 function plainText(input, max = 90, options = {}) {

@@ -271,16 +271,17 @@ test("plainText handles 25,000 spaces after {{ without backtracking", () => {
 
 test("labelParts bounds adversarial inputs to 2000 chars and handles macros cut at the boundary", () => {
   const cases = [
-    ["nested braces", `${"{{".repeat(8000)}x${"}}".repeat(8000)}`],
-    ["alias bracket chain", `${"[a]([[".repeat(8000)}]]`],
-    ["unclosed aliases", "[a](".repeat(8000)],
-    ["unclosed brackets", `${"[x ".repeat(8000)}] end ](`],
+    ["nested braces", `${"{{".repeat(8000)}x${"}}".repeat(8000)}`, `${"{{".repeat(44)}{…`],
+    ["alias bracket chain", `${"[a]([[".repeat(8000)}]]`, "a"],
+    ["unclosed aliases", "[a](".repeat(8000), "a"],
+    ["unclosed brackets", `${"[x ".repeat(8000)}] end ](`, `${"[x ".repeat(29)}[x…`],
   ];
-  for (const [name, input] of cases) {
+  for (const [name, input, expected] of cases) {
     const start = performance.now();
     const res = labelParts(input, 90);
     const elapsed = performance.now() - start;
-    assert.equal(typeof res.text, "string", name);
+    assert.ok(res.text.length <= 90, `${name}: length ${res.text.length} <= 90`);
+    assert.equal(res.text, expected, name);
     assert.ok(elapsed < 50, `${name}: expected < 50ms, got ${elapsed.toFixed(1)}ms`);
   }
 
@@ -291,6 +292,84 @@ test("labelParts bounds adversarial inputs to 2000 chars and handles macros cut 
   const hugeQuery = `{{[[query]]: {and: [[TODO]] ${"x ".repeat(1500)}}}}`;
   assert.ok(hugeQuery.length > 3000);
   assert.equal(plainText(hugeQuery), "query");
+});
+
+test("labelParts bounds reference fan-out without truncating across long whitespace", () => {
+  const start400 = performance.now();
+  const res400 = labelParts("((a))".repeat(400), 90, {
+    refs: { a: "((b))".repeat(400), b: "x".repeat(2000) },
+  });
+  const elapsed400 = performance.now() - start400;
+  assert.ok(elapsed400 < 50, `400x400 took ${elapsed400.toFixed(1)}ms`);
+  const res3 = labelParts("((a))".repeat(3), 90, {
+    refs: { a: "((b))".repeat(3), b: "x".repeat(2000) },
+  });
+  assert.equal(res400.text, `${"x".repeat(89)}…`);
+  assert.equal(res400.text, res3.text);
+
+  const start50 = performance.now();
+  const res50 = labelParts("((a))".repeat(50), 90, {
+    refs: { a: "((b))".repeat(50), b: `${"[a".repeat(999)}](` },
+  });
+  const elapsed50 = performance.now() - start50;
+  assert.ok(elapsed50 < 50, `50x50 took ${elapsed50.toFixed(1)}ms`);
+  assert.equal(res50.text.length, 90);
+
+  const uniqueRefs = { b: "y" };
+  let outer = "";
+  for (let i = 0; i < 300; i += 1) {
+    const uid = `a${i}`;
+    outer += `((${uid}))`;
+    uniqueRefs[uid] = "((b))".repeat(300);
+  }
+  const start300 = performance.now();
+  const res300 = labelParts(outer, 90, { refs: uniqueRefs });
+  const elapsed300 = performance.now() - start300;
+  assert.ok(elapsed300 < 50, `300 unique outer refs took ${elapsed300.toFixed(1)}ms`);
+  assert.equal(res300.text, `${"y ".repeat(44)}y…`);
+
+  const spaced = labelParts(`a${" ".repeat(500)}((u1)) tail`, 90, {
+    refs: { u1: "Reply to Lori" },
+  });
+  assert.equal(spaced.text, "a Reply to Lori tail");
+});
+
+test("SmartBlock buttons always render as chips and never leak marker text", () => {
+  const emptyLabel = labelParts("{{:SmartBlock:Daily}}");
+  assert.equal(emptyLabel.text, "Daily");
+  assert.deepEqual(emptyLabel.parts, [{ text: "Daily", button: true }]);
+
+  const markupOnlyLabel = labelParts("{{****:SmartBlock:Daily}}");
+  assert.equal(markupOnlyLabel.text, "Daily");
+  assert.deepEqual(markupOnlyLabel.parts, [{ text: "Daily", button: true }]);
+
+  const emptyWorkflow = labelParts("{{Run:SmartBlock:}}");
+  assert.equal(emptyWorkflow.text, "Run");
+  assert.deepEqual(emptyWorkflow.parts, [{ text: "Run", button: true }]);
+
+  const emptyWorkflow42 = labelParts("{{Run:42SmartBlock:}}");
+  assert.equal(emptyWorkflow42.text, "Run");
+  assert.deepEqual(emptyWorkflow42.parts, [{ text: "Run", button: true }]);
+
+  const bothEmpty = labelParts("{{:SmartBlock:}}");
+  assert.equal(bothEmpty.text, "SmartBlock");
+  assert.deepEqual(bothEmpty.parts, [{ text: "SmartBlock", button: true }]);
+
+  const cutFull = labelParts(`${"a".repeat(1983)}{{Run:SmartBlock:Workflow}}`, 4000);
+  assert.deepEqual(cutFull.parts[cutFull.parts.length - 1], { text: "Run", button: true });
+  assert.equal(cutFull.text.includes("SmartBlock:"), false);
+  assert.equal(cutFull.text.includes("SmartBl"), false);
+
+  for (const cutCase of [
+    `${"a".repeat(1987)}{{Run:SmartBlock:Workflow}}`, // cut inside :SmartBl
+    `${"a".repeat(1991)}{{Run:42SmartBlock:Workflow}}`, // cut at Run:42S
+    `${"a".repeat(1994)}{{Run:SmartBlock:Workflow}}`, // cut at Run:
+  ]) {
+    const res = labelParts(cutCase, 4000);
+    assert.deepEqual(res.parts[res.parts.length - 1], { text: "Run", button: true }, cutCase.slice(1980));
+    assert.equal(res.text.includes("SmartBlock:"), false);
+    assert.equal(res.text.includes("SmartBl"), false);
+  }
 });
 
 test("stage-ordered tokenization handles macros and page links inside aliases without expanding alias targets", () => {
