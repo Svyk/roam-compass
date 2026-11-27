@@ -19,7 +19,7 @@ export const SHORTCUTS = Object.freeze([
   Object.freeze({ keys: "Alt+M", action: "Open the selected node menu", group: "Actions" }),
   Object.freeze({ keys: "Alt+/ or Ctrl/Cmd+F", action: "Focus the search box", group: "Actions" }),
   Object.freeze({ keys: "Alt+.", action: "Open the command palette", group: "Actions" }),
-  Object.freeze({ keys: "Alt+?", action: "Show keyboard help", group: "Actions" }),
+  Object.freeze({ keys: "Alt+?", action: "Show this guide", group: "Actions" }),
 ]);
 
 function keyOf(item) {

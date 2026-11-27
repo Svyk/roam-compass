@@ -6336,7 +6336,7 @@ function createMindMap(ctx) {
     element.title = center.title;
     element.setAttribute("aria-label", `Center: ${center.title}`);
     element.style?.setProperty?.("--compass-head-h", `${box.h}px`);
-    const sig = `center|${center.kind}|${center.title}|${center.parts ? 1 : 0}`;
+    const sig = `center|${center.kind}|${center.title}|${JSON.stringify(center.parts ?? null)}`;
     if (element._mmSig !== sig) {
       element._mmSig = sig;
       const head = ctx.el("div", "compass-center-head");
@@ -6385,7 +6385,7 @@ function createMindMap(ctx) {
     const cachedKids = childCache.get(item.uid);
     const knownCount = occ?.childCount != null ? occ.childCount : Array.isArray(cachedKids) ? cachedKids.length : null;
     const hasAlias = typeof node?.alias === "string" && node.alias.length > 0;
-    const sig = `${visibleTitle}|${hasAlias ? 0 : node?.parts ? 1 : 0}|${item.status}|${item.side}|${isTreeBranch ? 1 : 0}|${knownCount ?? ""}`;
+    const sig = `${visibleTitle}|${JSON.stringify(hasAlias ? null : node?.parts ?? null)}|${item.status}|${item.side}|${isTreeBranch ? 1 : 0}|${knownCount ?? ""}`;
     if (element._mmSig !== sig) {
       element._mmSig = sig;
       const titleSpan = fillLabel(ctx.el("span", "compass-node-title"), visibleTitle, hasAlias ? null : node?.parts);
@@ -10464,7 +10464,7 @@ var SHORTCUTS = Object.freeze([
   Object.freeze({ keys: "Alt+M", action: "Open the selected node menu", group: "Actions" }),
   Object.freeze({ keys: "Alt+/ or Ctrl/Cmd+F", action: "Focus the search box", group: "Actions" }),
   Object.freeze({ keys: "Alt+.", action: "Open the command palette", group: "Actions" }),
-  Object.freeze({ keys: "Alt+?", action: "Show keyboard help", group: "Actions" })
+  Object.freeze({ keys: "Alt+?", action: "Show this guide", group: "Actions" })
 ]);
 function keyOf(item) {
   if (typeof item?.key === "string" && item.key) return item.key;
@@ -15394,6 +15394,12 @@ function createDrop(ctx) {
   function hideHint() {
     if (!hint.hidden) hint.hidden = true;
   }
+  function clearDragState() {
+    if (draggedUid == null && hint.hidden) return;
+    cancelClear();
+    draggedUid = null;
+    hideHint();
+  }
   function onDragStart(event) {
     cancelClear();
     draggedUid = draggedBlockUid(event?.target);
@@ -15410,6 +15416,20 @@ function createDrop(ctx) {
       draggedUid = null;
       hideHint();
     }, 0);
+  }
+  function onDocPointer() {
+    clearDragState();
+  }
+  function onDocDragLeave(event) {
+    if (draggedUid == null && hint.hidden) return;
+    const x = event?.clientX;
+    const y = event?.clientY;
+    if (typeof x !== "number" || typeof y !== "number") return;
+    const width = globalThis.innerWidth ?? 0;
+    const height = globalThis.innerHeight ?? 0;
+    if (x <= 0 || y <= 0 || x >= width || y >= height) {
+      clearDragState();
+    }
   }
   function onDragOver(event) {
     if (!draggedUid || !ctx?.state?.isOpen) return;
@@ -15440,6 +15460,9 @@ function createDrop(ctx) {
   ctx.lifecycle.event(doc, "dragstart", onDragStart, true);
   ctx.lifecycle.event(doc, "dragend", onDragEnd, true);
   ctx.lifecycle.event(doc, "drop", onDocDrop, true);
+  ctx.lifecycle.event(doc, "pointermove", onDocPointer, true);
+  ctx.lifecycle.event(doc, "pointerdown", onDocPointer, true);
+  ctx.lifecycle.event(doc, "dragleave", onDocDragLeave, true);
   ctx.lifecycle.event(root, "dragover", onDragOver);
   ctx.lifecycle.event(root, "dragleave", onDragLeave);
   ctx.lifecycle.event(root, "drop", onDrop);

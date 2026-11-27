@@ -708,3 +708,73 @@ test("createMindMap reuses keyed elements, handles chevrons, Alt+Enter, commands
     else globalThis.document = prevDoc;
   }
 });
+
+test("createMindMap refreshes center and item rich labels when parts change with the same flattened title", () => {
+  const prevDoc = globalThis.document;
+  globalThis.document = {
+    activeElement: null,
+    createElement: (tag) => makeMiniEl(tag),
+    createTextNode: (text) => ({ nodeType: 3, textContent: String(text), remove() {} }),
+  };
+  try {
+    const world = makeMiniEl("div");
+    const ctx = {
+      dom: { world },
+      lifecycle: {
+        node(el, parent) {
+          parent.append(el);
+          return el;
+        },
+        event() {},
+      },
+      el: (tag, cls, text) => makeMiniEl(tag, cls, text),
+      svg: (tag, cls) => makeMiniEl(tag, cls),
+      button: (cls, text) => makeMiniEl("button", cls, text),
+      curve: () => ({ d: "M0,0 L1,1" }),
+      state: { snapshot: null, lens: undefined },
+      features: { get: (name) => (name === "views" ? { current: () => ({ view: "mindmap" }) } : null) },
+      host: { snapshot: () => null },
+      setStatus() {},
+      render() {},
+      fit() {},
+    };
+    const mm = createMindMap(ctx);
+    const settings = { view: "mindmap", mindmapDirection: "right", mindmapGenerations: 2, model: {} };
+    const chipParts = [{ text: "Run", button: true }, { text: " Reply" }];
+    const refParts = [{ text: "Run " }, { text: "Reply", ref: true }];
+
+    const hasClass = (el, cls) => {
+      if (!el || typeof el !== "object") return false;
+      if (String(el.className || "").split(/\s+/).includes(cls)) return true;
+      return (el.children ?? []).some((child) => hasClass(child, cls));
+    };
+
+    const hoodChip = {
+      center: { uid: "c1", kind: "block", title: "Run Reply", parts: chipParts, badges: [] },
+      nodes: [node("n1", "Run Reply", { kind: "block", zone: "south", label: "Child", parts: chipParts })],
+      overflow: {},
+    };
+    mm.renderView({ hood: hoodChip, settings, navigate: true });
+    const layer = world.children[0];
+    const centerEl = layer.children.find((c) => c.dataset?.key === "c1");
+    const itemEl = layer.children.find((c) => c.dataset?.key === "c1/n1");
+    assert.equal(hasClass(centerEl, "compass-btn-chip"), true);
+    assert.equal(hasClass(centerEl, "compass-ref"), false);
+    assert.equal(hasClass(itemEl, "compass-btn-chip"), true);
+    assert.equal(hasClass(itemEl, "compass-ref"), false);
+
+    const hoodRef = {
+      center: { uid: "c1", kind: "block", title: "Run Reply", parts: refParts, badges: [] },
+      nodes: [node("n1", "Run Reply", { kind: "block", zone: "south", label: "Child", parts: refParts })],
+      overflow: {},
+    };
+    mm.renderView({ hood: hoodRef, settings, navigate: false });
+    assert.equal(hasClass(centerEl, "compass-btn-chip"), false);
+    assert.equal(hasClass(centerEl, "compass-ref"), true);
+    assert.equal(hasClass(itemEl, "compass-btn-chip"), false);
+    assert.equal(hasClass(itemEl, "compass-ref"), true);
+  } finally {
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+  }
+});

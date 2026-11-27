@@ -82,8 +82,22 @@ export const SCENARIOS = {
 
     await h.harness.extensionAPI.settings.set(SETTING_IDS.facetsPresets, []);
     await views.set("compass");
-    await h.open("b-sb-1");
-    await h.wait(60);
+    // I1 / M4: invoke the second render synchronously in the same frame so we can assert
+    // stale dataset.target and inline opacity 0 are cleared before the queued frame callback runs.
+    h.harness.overlay.focusUid("b-sb-1");
+    const immediateCenter = h.q(".compass-world .compass-node-center");
+    h.equal(
+      "target" in (immediateCenter?.dataset ?? {}),
+      false,
+      "reused center node clears stale dataset.target before frame callback",
+    );
+    h.equal(
+      immediateCenter?.style?.opacity === "0",
+      false,
+      "reused center node clears inline opacity 0 before frame callback",
+    );
+    await h.wait(350);
+    h.harness.overlay.hideResults();
 
     // I1: a second render inside the same frame must not leave nodes stranded at stale enter targets.
     const reopenedCard = h.q(".compass-world .compass-node-center");
@@ -106,15 +120,5 @@ export const SCENARIOS = {
       }
     }
     h.equal(anyOverlap, false, "no .compass-node overlaps another after back-to-back renders");
-    h.equal(
-      nodes.some((node) => "target" in node.dataset),
-      false,
-      "no node still carries stale dataset.target",
-    );
-    h.equal(
-      nodes.some((node) => node.style.opacity === "0"),
-      false,
-      "no node is stuck at inline opacity 0",
-    );
   },
 };

@@ -189,7 +189,7 @@ export function createMindMap(ctx) {
     element.setAttribute("aria-label", `Center: ${center.title}`);
     element.style?.setProperty?.("--compass-head-h", `${box.h}px`);
 
-    const sig = `center|${center.kind}|${center.title}|${center.parts ? 1 : 0}`;
+    const sig = `center|${center.kind}|${center.title}|${JSON.stringify(center.parts ?? null)}`;
     if (element._mmSig !== sig) {
       element._mmSig = sig;
       const head = ctx.el("div", "compass-center-head");
@@ -247,7 +247,7 @@ export function createMindMap(ctx) {
       : (Array.isArray(cachedKids) ? cachedKids.length : null);
 
     const hasAlias = typeof node?.alias === "string" && node.alias.length > 0;
-    const sig = `${visibleTitle}|${hasAlias ? 0 : (node?.parts ? 1 : 0)}|${item.status}|${item.side}|${isTreeBranch ? 1 : 0}|${knownCount ?? ""}`;
+    const sig = `${visibleTitle}|${JSON.stringify(hasAlias ? null : (node?.parts ?? null))}|${item.status}|${item.side}|${isTreeBranch ? 1 : 0}|${knownCount ?? ""}`;
     if (element._mmSig !== sig) {
       element._mmSig = sig;
       const titleSpan = fillLabel(ctx.el("span", "compass-node-title"), visibleTitle, hasAlias ? null : node?.parts);

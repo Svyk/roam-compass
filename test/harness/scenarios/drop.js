@@ -1,14 +1,19 @@
-function makeDragEvent(type, { cancelable = true, relatedTarget = null } = {}) {
+function makeDragEvent(type, { cancelable = true, relatedTarget = null, clientX, clientY } = {}) {
   let event;
+  const init = {
+    bubbles: true,
+    cancelable,
+    composed: true,
+    relatedTarget,
+  };
+  if (clientX != null) init.clientX = clientX;
+  if (clientY != null) init.clientY = clientY;
   if (typeof DragEvent === "function") {
-    event = new DragEvent(type, {
-      bubbles: true,
-      cancelable,
-      composed: true,
-      relatedTarget,
-    });
+    event = new DragEvent(type, init);
   } else {
     event = new Event(type, { bubbles: true, cancelable, composed: true });
+    if (clientX != null) Object.defineProperty(event, "clientX", { value: clientX, configurable: true });
+    if (clientY != null) Object.defineProperty(event, "clientY", { value: clientY, configurable: true });
   }
   if (!event.dataTransfer) {
     const dt = { dropEffect: "none", effectAllowed: "all" };
@@ -108,6 +113,37 @@ export const SCENARIOS = {
     root.dispatchEvent(staleOver);
     h.equal(staleOver.defaultPrevented, false, "dragover after outside drop without dragend is not prevented");
     h.assert(hint.hidden, "drop hint stays hidden after outside drop without dragend");
+
+    // 5. M1(a): pointermove on the document clears stale draggedUid when drag ended silently.
+    bullet.dispatchEvent(makeDragEvent("dragstart"));
+    document.dispatchEvent(new PointerEvent("pointermove", {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: 40,
+      clientY: 40,
+    }));
+    const afterPointerOver = makeDragEvent("dragover");
+    root.dispatchEvent(afterPointerOver);
+    h.equal(afterPointerOver.defaultPrevented, false, "dragover after document pointermove is not prevented");
+    h.assert(hint.hidden, "drop hint stays hidden after document pointermove");
+
+    // 6. M1(b): document dragleave outside viewport (clientX: -1) clears draggedUid.
+    bullet.dispatchEvent(makeDragEvent("dragstart"));
+    document.dispatchEvent(makeDragEvent("dragleave", { clientX: -1, clientY: 40 }));
+    const afterLeaveWindowOver = makeDragEvent("dragover");
+    root.dispatchEvent(afterLeaveWindowOver);
+    h.equal(afterLeaveWindowOver.defaultPrevented, false, "dragover after dragleave outside viewport is not prevented");
+    h.assert(hint.hidden, "drop hint stays hidden after dragleave outside viewport");
+
+    // 7. M1(c): dragleave between elements inside viewport does not clear draggedUid.
+    bullet.dispatchEvent(makeDragEvent("dragstart"));
+    sidebar.dispatchEvent(makeDragEvent("dragleave", { clientX: 200, clientY: 200, relatedTarget: root }));
+    const afterInnerLeaveOver = makeDragEvent("dragover");
+    root.dispatchEvent(afterInnerLeaveOver);
+    h.equal(afterInnerLeaveOver.defaultPrevented, true, "dragover after in-viewport dragleave is still prevented");
+    h.assert(!hint.hidden, "drop hint still shows after in-viewport dragleave");
+    bullet.dispatchEvent(makeDragEvent("dragend"));
 
     // Leave drop hint active for visual inspection in screenshot.
     bullet.dispatchEvent(makeDragEvent("dragstart"));

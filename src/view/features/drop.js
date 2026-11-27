@@ -50,6 +50,13 @@ export function createDrop(ctx) {
     if (!hint.hidden) hint.hidden = true;
   }
 
+  function clearDragState() {
+    if (draggedUid == null && hint.hidden) return;
+    cancelClear();
+    draggedUid = null;
+    hideHint();
+  }
+
   function onDragStart(event) {
     cancelClear();
     // Capture-phase observation only: never preventDefault or stopPropagation so Roam keeps its own drag.
@@ -71,6 +78,24 @@ export function createDrop(ctx) {
       draggedUid = null;
       hideHint();
     }, 0);
+  }
+
+  function onDocPointer() {
+    // Capture-phase observation only: never preventDefault or stopPropagation.
+    clearDragState();
+  }
+
+  function onDocDragLeave(event) {
+    // Capture-phase observation only: never preventDefault or stopPropagation.
+    if (draggedUid == null && hint.hidden) return;
+    const x = event?.clientX;
+    const y = event?.clientY;
+    if (typeof x !== "number" || typeof y !== "number") return;
+    const width = globalThis.innerWidth ?? 0;
+    const height = globalThis.innerHeight ?? 0;
+    if (x <= 0 || y <= 0 || x >= width || y >= height) {
+      clearDragState();
+    }
   }
 
   function onDragOver(event) {
@@ -106,6 +131,9 @@ export function createDrop(ctx) {
   ctx.lifecycle.event(doc, "dragstart", onDragStart, true);
   ctx.lifecycle.event(doc, "dragend", onDragEnd, true);
   ctx.lifecycle.event(doc, "drop", onDocDrop, true);
+  ctx.lifecycle.event(doc, "pointermove", onDocPointer, true);
+  ctx.lifecycle.event(doc, "pointerdown", onDocPointer, true);
+  ctx.lifecycle.event(doc, "dragleave", onDocDragLeave, true);
   ctx.lifecycle.event(root, "dragover", onDragOver);
   ctx.lifecycle.event(root, "dragleave", onDragLeave);
   ctx.lifecycle.event(root, "drop", onDrop);
