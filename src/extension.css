@@ -7,7 +7,7 @@
   --compass-faint: color-mix(in srgb, var(--compass-ink) 22%, transparent);
   --compass-hover: color-mix(in srgb, var(--compass-ink) 7%, var(--compass-paper));
   position: fixed;
-  z-index: 20;
+  z-index: 18;
   top: 0;
   right: 0;
   bottom: 0;

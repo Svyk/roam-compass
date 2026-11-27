@@ -7,7 +7,7 @@
   --compass-faint: color-mix(in srgb, var(--compass-ink) 22%, transparent);
   --compass-hover: color-mix(in srgb, var(--compass-ink) 7%, var(--compass-paper));
   position: fixed;
-  z-index: 20;
+  z-index: 18;
   top: 0;
   right: 0;
   bottom: 0;
@@ -3425,7 +3425,12 @@
 
 .compass-root.compass-full {
   right: 0 !important;
-  z-index: 1000;
+}
+
+/* Only rule outside .compass-root: Roam's #right-sidebar resize handle sits at z-index 1000
+   and would capture pointer events over Full mode (z-index 18) if left interactive. */
+html.compass-full-open #right-sidebar > .rm-resize-handle {
+  pointer-events: none;
 }
 
 .compass-root .compass-zone-count-siblings {
