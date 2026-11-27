@@ -378,6 +378,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   let autoFitted = false;
   let lastStageW = 0;
   let lastStageH = 0;
+  let lastInset = null;
   let frameObserver = null;
   let stageObserver = null;
   let observedMain = null;
@@ -510,7 +511,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (autoFitted) fit(false);
   }
 
-  function placeFrame() {
+  function placeFrame(force = true) {
     syncFrameObservers();
     const sidebar = document.getElementById("right-sidebar");
     const viewport = globalThis.innerWidth || 0;
@@ -519,7 +520,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       const width = sidebar.getBoundingClientRect().width;
       if (width > 48 && width < viewport * 0.6) inset = Math.round(width);
     }
-    root.style.right = `${inset}px`;
+    if (force || inset !== lastInset) {
+      lastInset = inset;
+      root.style.right = `${inset}px`;
+    }
     refitIfResized();
   }
 
@@ -1303,8 +1307,13 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       const members = hood.nodes.filter((node) => node.zone === side);
       const label = zoneCounts[side];
       const total = members.length;
-      label.hidden = total === 0;
-      label.textContent = `${members.filter((node) => !hidden.has(node.uid)).length}/${total}`;
+      const shown = members.filter((node) => !hidden.has(node.uid)).length;
+      const name = SIDE_NAME[side];
+      label.hidden = side === "siblings" && total === 0;
+      label.classList.toggle("compass-zone-count-empty", total === 0);
+      if (total === 0) label.textContent = name;
+      else if (shown === total) label.textContent = `${name} ${total}`;
+      else label.textContent = `${name} ${shown}/${total}`;
     }
   }
 
@@ -2903,7 +2912,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   if (typeof globalThis.ResizeObserver === "function") {
     frameObserver = new globalThis.ResizeObserver(() => {
       syncFrameObservers();
-      if (!root.hidden) placeFrame();
+      if (!root.hidden) placeFrame(false);
     });
     stageObserver = new globalThis.ResizeObserver(() => {
       if (!root.hidden) refitIfResized();

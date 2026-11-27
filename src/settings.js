@@ -42,6 +42,7 @@ export const SETTING_IDS = Object.freeze({
   mindmapDirection: "compass-mindmap-direction",
   mindmapGenerations: "compass-mindmap-generations",
   wanderSeconds: "compass-wander-seconds",
+  guideSeen: "compass-guide-seen",
 });
 
 export const DEFAULTS = Object.freeze({
@@ -85,6 +86,7 @@ export const DEFAULTS = Object.freeze({
   "compass-mindmap-direction": "right",
   "compass-mindmap-generations": "2",
   "compass-wander-seconds": "6",
+  "compass-guide-seen": false,
 });
 
 const SWITCHES = new Set([
@@ -261,6 +263,7 @@ export function readCompassSettings(extensionAPI) {
     mindmapDirection: readChoice(read(SETTING_IDS.mindmapDirection), SELECT_ITEMS[SETTING_IDS.mindmapDirection], "right"),
     mindmapGenerations: readClampedInt(read(SETTING_IDS.mindmapGenerations), 1, 5, 2),
     wanderSeconds: readClampedInt(read(SETTING_IDS.wanderSeconds), 3, 15, 6),
+    guideSeen: flag(read(SETTING_IDS.guideSeen), false),
   };
 }
 

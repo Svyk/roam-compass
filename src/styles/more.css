@@ -10,3 +10,7 @@
 .compass-root .compass-bar .compass-more {
   margin-left: auto;
 }
+
+.compass-root .compass-bar .compass-help-btn ~ .compass-more {
+  margin-left: 0;
+}

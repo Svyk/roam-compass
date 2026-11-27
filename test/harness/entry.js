@@ -160,6 +160,8 @@ async function boot() {
 
   const extensionAPI = createFakeExtensionAPI();
   await initializeSettings(extensionAPI);
+  // Existing scenarios expect the first-run guide to have been seen unless a scenario unsets it.
+  await extensionAPI.settings.set(SETTING_IDS.guideSeen, true);
 
   const rawOverrides = params.get("settings");
   if (rawOverrides) {

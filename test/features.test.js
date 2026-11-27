@@ -348,7 +348,7 @@ test("overlay seam exposes frozen ctx, removes bar lens widgets, and fires all 1
   globalThis.getComputedStyle = () => ({ backgroundColor: "rgb(255, 255, 255)", color: "rgb(0, 0, 0)" });
   listen(globalThis);
 
-  const settingsMap = new Map([["compass-follow", true], ["compass-pin-today", false]]);
+  const settingsMap = new Map([["compass-follow", true], ["compass-pin-today", false], ["compass-guide-seen", true]]);
   const extensionAPI = {
     settings: {
       canSet: true,

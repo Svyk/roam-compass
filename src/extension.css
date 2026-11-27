@@ -848,6 +848,10 @@
   display: none;
 }
 
+.compass-root .compass-zone-count.compass-zone-count-empty {
+  opacity: 0.42;
+}
+
 .compass-root .compass-urls {
   display: flex;
   flex: none;

@@ -3381,7 +3381,8 @@ var SETTING_IDS = Object.freeze({
   weekStart: "compass-week-start",
   mindmapDirection: "compass-mindmap-direction",
   mindmapGenerations: "compass-mindmap-generations",
-  wanderSeconds: "compass-wander-seconds"
+  wanderSeconds: "compass-wander-seconds",
+  guideSeen: "compass-guide-seen"
 });
 var DEFAULTS = Object.freeze({
   "compass-north": MODEL_DEFAULTS.parent,
@@ -3423,7 +3424,8 @@ var DEFAULTS = Object.freeze({
   "compass-week-start": "monday",
   "compass-mindmap-direction": "right",
   "compass-mindmap-generations": "2",
-  "compass-wander-seconds": "6"
+  "compass-wander-seconds": "6",
+  "compass-guide-seen": false
 });
 var SWITCHES = /* @__PURE__ */ new Set([
   SETTING_IDS.links,
@@ -3588,7 +3590,8 @@ function readCompassSettings(extensionAPI) {
     weekStart: readChoice(read(SETTING_IDS.weekStart), SELECT_ITEMS[SETTING_IDS.weekStart], "monday"),
     mindmapDirection: readChoice(read(SETTING_IDS.mindmapDirection), SELECT_ITEMS[SETTING_IDS.mindmapDirection], "right"),
     mindmapGenerations: readClampedInt(read(SETTING_IDS.mindmapGenerations), 1, 5, 2),
-    wanderSeconds: readClampedInt(read(SETTING_IDS.wanderSeconds), 3, 15, 6)
+    wanderSeconds: readClampedInt(read(SETTING_IDS.wanderSeconds), 3, 15, 6),
+    guideSeen: flag2(read(SETTING_IDS.guideSeen), false)
   };
 }
 async function writeSetting(extensionAPI, id, value) {
@@ -10156,6 +10159,16 @@ var ARROW_DIR = Object.freeze({
 });
 var PHRASE_TIMEOUT_MS = 4e3;
 var HELP_GROUPS = Object.freeze(["Move and select", "Actions"]);
+var GUIDE_LINE_2_NORMAL = "Parents sit above it, children below, friends on the left, challengers on the right, siblings on the far right.";
+var GUIDE_LINE_2_FLIPPED = "Parents sit above it, children below, friends on the right, challengers on the left, siblings on the far left.";
+var GUIDE_LINES = Object.freeze([
+  "The card in the middle is the page or block you are looking at.",
+  GUIDE_LINE_2_NORMAL,
+  "Click a neighbor to make it the center. Double-click to open it in the sidebar.",
+  "Use + on a side to link a page there. Drag a solid-bordered node to another side to change its relation.",
+  "Drag a block from the sidebar or the page onto the map to center it.",
+  "Esc closes Compass."
+]);
 function escapeSelector(value) {
   if (typeof globalThis.CSS?.escape === "function") return globalThis.CSS.escape(value);
   return String(value).replace(/["\\]/g, "\\$&");
@@ -10172,23 +10185,70 @@ function createKeys(ctx) {
   let pill = null;
   let helpBackdrop = null;
   let closeHelpBtn = null;
+  let guideLine2 = null;
+  let helpBarBtn = null;
+  let guideSeenLocal = false;
+  function isGuideSeen() {
+    if (guideSeenLocal) return true;
+    const raw = ctx?.extensionAPI?.settings?.get?.(SETTING_IDS.guideSeen);
+    if (raw != null) return raw === true || raw === "true" || raw === "on" || raw === 1;
+    return Boolean(ctx?.state?.settings?.guideSeen);
+  }
+  function isFlipped() {
+    if (ctx?.state?.geometry?.flip != null) return Boolean(ctx.state.geometry.flip);
+    if (ctx?.state?.settings?.flip != null) return Boolean(ctx.state.settings.flip);
+    const raw = ctx?.extensionAPI?.settings?.get?.(SETTING_IDS.flip);
+    return raw === true || raw === "true" || raw === "on" || raw === 1;
+  }
+  function syncGuideCopy() {
+    if (!guideLine2) return;
+    guideLine2.textContent = isFlipped() ? GUIDE_LINE_2_FLIPPED : GUIDE_LINE_2_NORMAL;
+  }
+  function markGuideSeen() {
+    if (guideSeenLocal && isGuideSeen()) return;
+    guideSeenLocal = true;
+    if (typeof ctx?.saveSetting === "function") {
+      void Promise.resolve(ctx.saveSetting(SETTING_IDS.guideSeen, true)).catch((error) => {
+        console.error("[compass] guide", error);
+      });
+    }
+  }
   if (ctx?.el && ctx?.button && ctx?.lifecycle && ctx?.dom?.stage && ctx?.dom?.root) {
     pill = ctx.el("div", "compass-select-pill");
     pill.hidden = true;
     pill.setAttribute("role", "status");
     pill.setAttribute("aria-live", "polite");
     ctx.lifecycle.node(pill, ctx.dom.stage);
+    if (typeof ctx.addBarButton === "function") {
+      helpBarBtn = ctx.button("compass-help-btn", "?", "How Compass works (Alt+?)");
+      ctx.addBarButton(helpBarBtn);
+      ctx.lifecycle.event(helpBarBtn, "click", () => {
+        if (helpOpen) closeHelp();
+        else help();
+      });
+      ctx.lifecycle.add(() => helpBarBtn?.remove?.());
+    }
     helpBackdrop = ctx.el("div", "compass-help-backdrop");
     helpBackdrop.hidden = true;
     const panel = ctx.el("div", "compass-help");
     panel.setAttribute("role", "dialog");
     panel.setAttribute("aria-modal", "true");
-    panel.setAttribute("aria-label", "Keyboard shortcuts");
+    panel.setAttribute("aria-label", "How Compass works");
     const head = ctx.el("div", "compass-help-head");
-    const title = ctx.el("h2", "compass-help-title", "Keyboard shortcuts");
-    closeHelpBtn = ctx.button("compass-help-close", "×", "Close keyboard help");
+    const title = ctx.el("h2", "compass-help-title", "How Compass works");
+    closeHelpBtn = ctx.button("compass-help-close", "×", "Close guide");
     head.append(title, closeHelpBtn);
     const body = ctx.el("div", "compass-help-body");
+    const guideSection = ctx.el("section", "compass-help-group compass-help-guide");
+    guideSection.append(ctx.el("h3", "compass-help-group-title", "The map"));
+    const guideList = ctx.el("ol", "compass-help-guide-list");
+    for (let i = 0; i < GUIDE_LINES.length; i += 1) {
+      const li = ctx.el("li", "compass-help-guide-item", GUIDE_LINES[i]);
+      if (i === 1) guideLine2 = li;
+      guideList.append(li);
+    }
+    guideSection.append(guideList);
+    body.append(guideSection);
     for (const groupName of HELP_GROUPS) {
       const group = ctx.el("section", "compass-help-group");
       group.append(ctx.el("h3", "compass-help-group-title", groupName));
@@ -10372,6 +10432,7 @@ function createKeys(ctx) {
   function help() {
     clearPhrase();
     ctx?.hideFloating?.();
+    syncGuideCopy();
     if (!helpOpen) {
       const active = globalThis.document?.activeElement;
       savedFocus = active && ctx?.dom?.root?.contains?.(active) ? active : null;
@@ -10385,6 +10446,7 @@ function createKeys(ctx) {
   function closeHelp(restore = true) {
     if (!helpOpen) return;
     helpOpen = false;
+    markGuideSeen();
     if (helpBackdrop) helpBackdrop.hidden = true;
     const target = savedFocus;
     savedFocus = null;
@@ -10612,6 +10674,16 @@ function createKeys(ctx) {
     }
     return false;
   }
+  function onOpen() {
+    syncGuideCopy();
+    if (helpBackdrop && !isGuideSeen()) help();
+  }
+  function onSettings(settings) {
+    if (settings && typeof settings.guideSeen === "boolean") {
+      guideSeenLocal = settings.guideSeen;
+    }
+    syncGuideCopy();
+  }
   function onNavigate() {
     clearPhrase();
   }
@@ -10628,6 +10700,8 @@ function createKeys(ctx) {
   return {
     name: "keys",
     help,
+    onOpen,
+    onSettings,
     onKey,
     onEscape,
     onNavigate,
@@ -15392,6 +15466,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   let autoFitted = false;
   let lastStageW = 0;
   let lastStageH = 0;
+  let lastInset = null;
   let frameObserver = null;
   let stageObserver = null;
   let observedMain = null;
@@ -15513,7 +15588,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     lastStageH = h;
     if (autoFitted) fit(false);
   }
-  function placeFrame() {
+  function placeFrame(force = true) {
     syncFrameObservers();
     const sidebar = document.getElementById("right-sidebar");
     const viewport = globalThis.innerWidth || 0;
@@ -15522,7 +15597,10 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       const width = sidebar.getBoundingClientRect().width;
       if (width > 48 && width < viewport * 0.6) inset = Math.round(width);
     }
-    root.style.right = `${inset}px`;
+    if (force || inset !== lastInset) {
+      lastInset = inset;
+      root.style.right = `${inset}px`;
+    }
     refitIfResized();
   }
   function applyCamera(glide = false) {
@@ -16241,8 +16319,13 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       const members = hood.nodes.filter((node) => node.zone === side);
       const label = zoneCounts[side];
       const total = members.length;
-      label.hidden = total === 0;
-      label.textContent = `${members.filter((node) => !hidden.has(node.uid)).length}/${total}`;
+      const shown = members.filter((node) => !hidden.has(node.uid)).length;
+      const name = SIDE_NAME[side];
+      label.hidden = side === "siblings" && total === 0;
+      label.classList.toggle("compass-zone-count-empty", total === 0);
+      if (total === 0) label.textContent = name;
+      else if (shown === total) label.textContent = `${name} ${total}`;
+      else label.textContent = `${name} ${shown}/${total}`;
     }
   }
   function outlineStrings(nodes, out) {
@@ -17775,7 +17858,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   if (typeof globalThis.ResizeObserver === "function") {
     frameObserver = new globalThis.ResizeObserver(() => {
       syncFrameObservers();
-      if (!root.hidden) placeFrame();
+      if (!root.hidden) placeFrame(false);
     });
     stageObserver = new globalThis.ResizeObserver(() => {
       if (!root.hidden) refitIfResized();

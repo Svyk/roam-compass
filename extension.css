@@ -848,6 +848,10 @@
   display: none;
 }
 
+.compass-root .compass-zone-count.compass-zone-count-empty {
+  opacity: 0.42;
+}
+
 .compass-root .compass-urls {
   display: flex;
   flex: none;
@@ -1942,6 +1946,22 @@
 }
 
 /* keys */
+.compass-root .compass-bar .compass-help-btn {
+  margin-left: auto;
+  min-width: 28px;
+  padding: 2px 6px;
+}
+
+.compass-root .compass-help-guide-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .compass-root .compass-node:focus {
   outline: 2.5px solid var(--compass-accent);
   outline-offset: 2px;
@@ -2941,6 +2961,10 @@
 
 .compass-root .compass-bar .compass-more {
   margin-left: auto;
+}
+
+.compass-root .compass-bar .compass-help-btn ~ .compass-more {
+  margin-left: 0;
 }
 
 /* palette */
