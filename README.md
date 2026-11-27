@@ -2,7 +2,7 @@
 
 Compass is a spatial navigator for a Roam graph. One page or block sits in the center, and everything connected to it sits around it. Click a neighbor and it becomes the center. The page you came from lands on the opposite side, so position keeps its meaning as you move.
 
-Run **Compass: Open** from the command palette. It opens on the page in the main window, or today's daily note when the main window shows the daily notes log. **Compass: Focus page** centers the page in the main window. **Compass: Focus block** (palette or block context menu) centers the block under the cursor. **Compass: Mind Map**, **Compass: Facets** and **Compass: Wander** open straight into those modes.
+Run **Compass: Open** from the command palette. It opens on the page in the main window, or today's daily note when the main window shows the daily notes log. **Compass: Focus page** centers the page in the main window. **Compass: Focus block** (palette or block context menu) centers the block under the cursor. Drag a block bullet from the sidebar or the page onto the map to center that block. **Compass: Mind Map**, **Compass: Facets** and **Compass: Wander** open straight into those modes.
 
 ## Three views
 
@@ -56,6 +56,7 @@ Write `Name|Partner` in a role list to give each end of a relation its own word.
 
 Compass only ever edits the one `Name::` block behind an edge. Before writing it re-reads that block and stops if it changed.
 
+- **Add.** Click `+` on a side (or press Ctrl/Cmd+Arrow) to link a page there. The popup names the attribute it will write. Press Enter to add the highlighted page, pick **Create page** when no page matches, or pick **Create drawing** when Roam Plexus is loaded.
 - **Move.** Drag a node with a solid accent border to another side, or use its context menu. A block that holds only that value is renamed in place and nested labels stay. A block with several values gets the moved value in a new attribute block right after it. The new attribute is the first name in that side's list.
 - **Unlink.** In "Why is this here?" (click an edge, or the node's context menu), Unlink removes that one value after a confirmation that shows exactly what goes. Other blocks that connect the two pages stay.
 - **Flip owner.** Moves the declaration to the other page with the inverse field: `Parent:: [[B]]` on A becomes `Child:: [[A]]` on B. The dialog shows the relation now and after saving. The new block is written first, then the old one is removed.
@@ -100,7 +101,9 @@ The **Views and lenses** panel holds the view switch and the filters. Filters an
 - **Expanded** shows each neighbor's own children under it, one level further out.
 - **Outline** expands the center into its blocks. Edges leave the card at the block that holds the link. Click a block to center it.
 - **Show all** under a crowded side lifts its limit.
-- Hovering a node highlights its edges and dims the rest. Hold Ctrl or Cmd for a drawing thumbnail.
+- Each side shows its name and count (or its name alone when empty). Click **?** in the bar or press Alt+? to open **How Compass works**, which also opens once on first run in a graph.
+- Hovering a neighbor highlights its edges and keeps the center, cross-link peers, and expanded parents or children lit while dimming the rest. Hovering the center dims nothing. Hold Ctrl or Cmd for a drawing thumbnail.
+- Block references (`((uid))`) in labels show the referenced block's text with a dotted underline, resolved up to two levels. SmartBlock buttons render as inline chips.
 - **Flip East–West** puts friends on the right and challengers on the left. **One-sided layout** puts both in one list on the left. Meanings do not change.
 
 ## Finding your way back
@@ -129,14 +132,14 @@ Selection is the focused node. Arrows move it without changing the center.
 | Alt+B, Alt+H | Open pins, open Footprints |
 | Alt+M | The selected node's menu |
 | Alt+. | Command palette |
-| Alt+? | Keyboard help |
+| Alt+? | How Compass works and keyboard shortcuts |
 | Esc | Clear the typed phrase, leave Zen, close a panel, then close Compass |
 
 The command palette lists every action available right now. Type to filter, Enter to run.
 
 ## Zen, fullscreen and Wander
 
-- **Zen** hides the bar and the pin row. **Fullscreen** covers the right sidebar too. Both leave the map, zoom and selection as they were. The controls sit at the bottom right.
+- **Zen** hides the bar and the pin row. **Fullscreen** covers the right sidebar too while keeping Roam dialogs above Compass. Both keep your selection and manual pan or zoom, and refit automatically if you have not moved the camera. The controls sit at the bottom right.
 - **Wander** walks from page to page on its own, 3 to 15 seconds per move, so old notes come back into view. Anything you do pauses it. It only visits nodes that are drawn, so filters steer it.
 
 ## Export

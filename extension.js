@@ -1,4 +1,4 @@
-/* Compass v1.1.0 | MIT | generated; edit src/ */
+/* Compass v1.2.0 | MIT | generated; edit src/ */
 
 // src/extension-tools.js
 var EXTENSION_TOOLS_KEY = "roam-compass";

@@ -4,6 +4,25 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-26
+
+### Added
+
+- Each side shows its name and count, and a `?` button opens How Compass works (which also opens once on first run in a graph).
+- Dragging a Roam block bullet from the sidebar or page onto the map centers that block without writing to the graph.
+
+### Changed
+
+- Hovering the center dims nothing; hovering a neighbor keeps the center, cross-link peers, and expanded parents or children lit.
+- The `+` add popup names the side and attribute write, highlights the first result for Enter, offers Create page when no page matches, shows Create drawing only when Roam Plexus is loaded, stays inside the frame, and returns focus to `+` on Esc.
+
+### Fixed
+
+- The overlay follows right sidebar opens, closes and resizes with `ResizeObserver`, refits automatically unless the camera was moved by hand, and leaves room around `+` buttons and side labels.
+- Roam dialogs stay above Compass in normal and Full modes, while the sidebar resize handle stays inactive in Full mode.
+- SmartBlock buttons render as inline chips without `:SmartBlock:` markup or arguments, and long center titles expand to a two-line header without clipping.
+- Block references (`((uid))`) in node titles, center titles, outline rows and attribute badges show the referenced block's text with a dotted underline instead of `(( ))`.
+
 ## [1.1.0] - 2026-11-11
 
 ### Added
