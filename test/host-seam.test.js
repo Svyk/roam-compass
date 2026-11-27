@@ -20,6 +20,13 @@ test("host.entity pulls page and block titles and degrades to null on missing or
         seen.push([pattern, ref]);
         if (ref.includes('"page-1"')) return { ":block/uid": "page-1", ":node/title": "Alpha" };
         if (ref.includes('"blk-1"')) return { ":block/uid": "blk-1", ":block/string": "**Hello** [[World]]" };
+        if (ref.includes('"ref-1"')) {
+          return {
+            ":block/uid": "ref-1",
+            ":block/string": "Slot ((target-1))",
+            ":block/refs": [{ ":block/uid": "target-1", ":block/string": "Reply to [[Lori]]" }],
+          };
+        }
         if (ref.includes('"draw-1"')) {
           return { ":block/uid": "draw-1", ":block/string": "{{[[excalidraw]]}} Text elements in drawing: Map;" };
         }
@@ -35,11 +42,15 @@ test("host.entity pulls page and block titles and degrades to null on missing or
   try {
     assert.deepEqual(host.entity("page-1"), { uid: "page-1", kind: "page", title: "Alpha" });
     assert.deepEqual(host.entity("blk-1"), { uid: "blk-1", kind: "block", title: "Hello World" });
+    assert.deepEqual(host.entity("ref-1"), { uid: "ref-1", kind: "block", title: "Slot Reply to Lori" });
     assert.deepEqual(host.entity("draw-1"), { uid: "draw-1", kind: "block", title: "Drawing: Map" });
     assert.equal(host.entity("missing"), null);
     assert.equal(host.entity(""), null);
     assert.equal(host.entity("boom"), null);
-    assert.equal(seen[0][0], "[:block/uid :node/title :block/string]");
+    assert.equal(
+      seen[0][0],
+      "[:block/uid :node/title :block/string {:block/refs [:block/uid :block/string {:block/refs [:block/uid :block/string]}]}]",
+    );
     assert.ok(errors.some((line) => String(line[0]).startsWith("[compass]")));
   } finally {
     console.error = originalError;
@@ -110,7 +121,7 @@ test("host.pageAttributes merges harcs of the same attribute, normalizes values,
       pull(pattern, ref) {
         assert.equal(
           pattern,
-          "[:block/uid {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string]}]}]",
+          "[:block/uid {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string {:block/refs [:block/uid :block/string]}]}]}]",
         );
         const match = /:block\/uid "([^"]+)"/.exec(ref);
         const uid = match?.[1];

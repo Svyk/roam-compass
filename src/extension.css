@@ -351,6 +351,12 @@
   line-height: 1;
 }
 
+.compass-root .compass-ref {
+  text-decoration: underline dotted var(--compass-line);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
 .compass-root .compass-node.compass-node-center {
   z-index: 2;
   display: block;

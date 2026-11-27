@@ -117,8 +117,52 @@ export function attributeForRole(role, settings) {
   return name;
 }
 
-// Title and optional button parts of a block string. A Plexus region takes the resolver's label when it gives a non-empty string.
-function blockLabel(uid, string, max, resolveRegion) {
+function hasRichParts(parts) {
+  return Array.isArray(parts) && parts.some((part) => part.button || part.ref);
+}
+
+function addRefEntity(map, entity) {
+  if (!entity || typeof entity !== "object") return;
+  if (typeof entity.uid === "string" && entity.uid && typeof entity.string === "string" && !map.has(entity.uid)) {
+    map.set(entity.uid, entity.string);
+  }
+  if (Array.isArray(entity.refs)) {
+    for (const ref of entity.refs) addRefEntity(map, ref);
+  }
+}
+
+function buildRefMap(source) {
+  const map = new Map();
+  if (!source || typeof source !== "object") return map;
+  if (source.refs instanceof Map) {
+    for (const [uid, str] of source.refs) if (typeof str === "string") map.set(uid, str);
+  } else if (source.refs && typeof source.refs === "object" && !Array.isArray(source.refs)) {
+    for (const [uid, str] of Object.entries(source.refs)) if (typeof str === "string") map.set(uid, str);
+  }
+  addRefEntity(map, source.center);
+  addRefEntity(map, source.center?.parent);
+  for (const sib of source.center?.siblings ?? []) addRefEntity(map, sib);
+  walk(source.outline, (block) => addRefEntity(map, block));
+  for (const harc of source.out ?? []) {
+    addRefEntity(map, harc.source);
+    for (const child of harc.source?.children ?? []) addRefEntity(map, child);
+    for (const val of harc.values ?? []) addRefEntity(map, val);
+  }
+  for (const harc of source.in ?? []) {
+    addRefEntity(map, harc.entity);
+    addRefEntity(map, harc.source);
+    for (const child of harc.source?.children ?? []) addRefEntity(map, child);
+  }
+  for (const mention of source.mentions ?? []) addRefEntity(map, mention);
+  for (const peer of source.peers ?? []) {
+    for (const row of peer?.incoming ?? []) addRefEntity(map, row?.entity);
+    for (const row of peer?.outgoing ?? []) addRefEntity(map, row?.value);
+  }
+  return map;
+}
+
+// Title and optional chip/ref parts of a block string. A Plexus region takes the resolver's label when it gives a non-empty string.
+function blockLabel(uid, string, max, resolveRegion, refs) {
   if (resolveRegion && regionOwner(string) !== null) {
     const label = resolveRegion(uid, string);
     if (label) {
@@ -128,17 +172,17 @@ function blockLabel(uid, string, max, resolveRegion) {
   }
   const drawn = drawingTitle(string, max);
   if (drawn !== null) return { text: drawn, parts: null };
-  const built = labelParts(string ?? "", max);
+  const built = labelParts(string ?? "", max, { refs, selfUid: uid });
   return {
     text: built.text,
-    parts: built.parts.some((part) => part.button) ? built.parts : null,
+    parts: hasRichParts(built.parts) ? built.parts : null,
   };
 }
 
-function labelOf(entity, resolveRegion) {
+function labelOf(entity, resolveRegion, refs) {
   if (!entity) return { text: "", parts: null };
   if (typeof entity.title === "string" && entity.title) return { text: entity.title, parts: null };
-  return blockLabel(entity.uid, entity.string, 90, resolveRegion);
+  return blockLabel(entity.uid, entity.string, 90, resolveRegion, refs);
 }
 
 export function isDrawingLike(node) {
@@ -235,12 +279,12 @@ export function linkRefs(block) {
   return resolveTokens(scanRefs(text), block?.refs);
 }
 
-function outlineIndex(outline, resolveRegion) {
+function outlineIndex(outline, resolveRegion, refs) {
   const index = new Map();
   const rows = [];
   walk(outline, (block, depth, parentUid) => {
     index.set(block.uid, { parentUid, depth });
-    const built = blockLabel(block.uid, block.string, 72, resolveRegion);
+    const built = blockLabel(block.uid, block.string, 72, resolveRegion, refs);
     const row = {
       uid: block.uid,
       text: built.text || " ",
@@ -417,7 +461,8 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
   const evidence = new Map();
   const badges = [];
   const resolveRegion = typeof options.regionLabel === "function" ? regionResolver(options.regionLabel) : null;
-  const outline = outlineIndex(source.outline, resolveRegion);
+  const refMap = buildRefMap(source);
+  const outline = outlineIndex(source.outline, resolveRegion, refMap);
 
   function add(entity, item) {
     if (!isNode(entity) || entity.uid === centerUid) return;
@@ -444,7 +489,11 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
     for (const value of harc.values ?? []) {
       if (!isNode(value)) {
         if (value?.text != null && settings.badges && badges.length < BADGE_CAP) {
-          badges.push({ attribute: harc.attribute, text: String(value.text) });
+          const rawBadge = String(value.text);
+          const built = labelParts(rawBadge, 90, { refs: refMap });
+          const badge = { attribute: harc.attribute, text: built.text || rawBadge };
+          if (hasRichParts(built.parts)) badge.parts = built.parts;
+          badges.push(badge);
         }
         continue;
       }
@@ -524,7 +573,7 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
     const entity = entities.get(uid);
     const picked = pickRole(items);
     const typed = picked.strongest.filter((item) => item.kind === "typed");
-    const built = labelOf(entity, resolveRegion);
+    const built = labelOf(entity, resolveRegion, refMap);
     const node = {
       uid,
       kind: kindOf(entity),
@@ -557,7 +606,7 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
         existing.evidence.push(item);
         return;
       }
-      const built = labelOf(entity, resolveRegion);
+      const built = labelOf(entity, resolveRegion, refMap);
       const sibling = {
         uid: entity.uid,
         kind: kindOf(entity),
@@ -623,7 +672,7 @@ export function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
   for (const node of kept) if (node.via && !keptUids.has(node.via)) node.via = null;
 
   const centerBuilt = center.kind === "block"
-    ? blockLabel(centerUid, center.string, 120, resolveRegion)
+    ? blockLabel(centerUid, center.string, 120, resolveRegion, refMap)
     : { text: center.title || "", parts: null };
   const centerOut = {
     uid: centerUid,

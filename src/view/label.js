@@ -1,4 +1,4 @@
-// Renders plain text or structured label parts ({ text, button? }) into an element.
+// Renders plain text or structured label parts ({ text, button?, ref? }) into an element.
 export function fillLabel(element, text, parts) {
   if (!element) return element;
   if (!Array.isArray(parts) || !parts.length) {
@@ -18,6 +18,11 @@ export function fillLabel(element, text, parts) {
       chip.className = "compass-btn-chip";
       chip.textContent = part.text;
       element.append(chip);
+    } else if (part.ref) {
+      const ref = doc.createElement("span");
+      ref.className = "compass-ref";
+      ref.textContent = part.text;
+      element.append(ref);
     } else {
       element.append(doc.createTextNode(part.text));
     }

@@ -102,6 +102,61 @@ test("labelParts truncates parts in lockstep with plain text", () => {
   assert.equal(cut.parts.some((part) => part.button && part.text === "⇥🕞"), true);
 });
 
+test("labelParts resolves block references with depth cap, cycle guard, and missing fallback", () => {
+  const refs = {
+    b1: "Reply to [[Lori]] — recurring costs",
+    b2: "Follow up on ((b3))",
+    b3: "Budget review ((b4))",
+    b4: "Too deep",
+    self: "Loop ((self))",
+  };
+
+  const single = labelParts("19:15 - 19:45 (30') ((b1))", 90, { refs });
+  assert.equal(single.text, "19:15 - 19:45 (30') Reply to Lori — recurring costs");
+  assert.deepEqual(single.parts, [
+    { text: "19:15 - 19:45 (30') " },
+    { text: "Reply to Lori — recurring costs", ref: true },
+  ]);
+  assert.equal(plainText("19:15 - 19:45 (30') ((b1))", 90, { refs }), single.text);
+
+  // Ref inside a ref resolves once more (depth 2), then stops at (( )).
+  const nested = labelParts("Slot ((b2))", 90, { refs });
+  assert.equal(nested.text, "Slot Follow up on Budget review (( ))");
+  assert.deepEqual(nested.parts, [
+    { text: "Slot " },
+    { text: "Follow up on Budget review (( ))", ref: true },
+  ]);
+
+  // Self-reference does not loop.
+  const cyc = labelParts("Note ((self))", 90, { refs });
+  assert.equal(cyc.text, "Note Loop (( ))");
+  const directSelf = labelParts("Loop ((self))", 90, { refs, selfUid: "self" });
+  assert.equal(directSelf.text, "Loop (( ))");
+
+  // Missing ref keeps (( )).
+  const missing = labelParts("See ((nope123))", 90, { refs });
+  assert.equal(missing.text, "See (( ))");
+  assert.deepEqual(missing.parts, [{ text: "See (( ))" }]);
+
+  // Ref next to a SmartBlock button.
+  const combo = labelParts("21:13 {{⇥🕞:SmartBlock:Elapsed time}} ((b1))", 120, { refs });
+  assert.equal(combo.text, "21:13 ⇥🕞 Reply to Lori — recurring costs");
+  assert.deepEqual(combo.parts, [
+    { text: "21:13 " },
+    { text: "⇥🕞", button: true },
+    { text: " " },
+    { text: "Reply to Lori — recurring costs", ref: true },
+  ]);
+
+  // Truncation applies after resolving refs.
+  const cut = labelParts("19:15 - 19:45 (30') ((b1))", 30, { refs });
+  assert.equal(cut.text.length <= 30, true);
+  assert.ok(cut.text.endsWith("…"));
+  assert.ok(cut.text.includes("Reply"));
+  assert.equal(cut.parts.map((part) => part.text).join(""), cut.text);
+  assert.equal(cut.parts.some((part) => part.ref), true);
+});
+
 test("removeToken drops one ref and its spacing", () => {
   const text = "Owner:: [[Jane]] [[Bob]]";
   const token = scanRefs(text).find((item) => item.title === "Jane");

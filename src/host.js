@@ -8,16 +8,16 @@ const LABELS = "{:harc/_e [{:harc/a [:node/title :edit/time :create/time]} {:har
 const SOURCE = "[:block/uid :block/string :block/order {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order]}]";
 
 export const CENTER_PULL = `[:block/uid :node/title :edit/time :create/time :block/string :block/order
- {:block/refs [:block/uid :node/title :edit/time :create/time :block/string]}
+ {:block/refs [:block/uid :node/title :edit/time :create/time :block/string {:block/refs [:block/uid :block/string]}]}
  {:block/page [:block/uid :node/title :edit/time :create/time]}
- {:block/_children [:block/uid :node/title :edit/time :create/time :block/string {:block/children [:block/uid :block/string :block/order]}]}
+ {:block/_children [:block/uid :node/title :edit/time :create/time :block/string {:block/refs [:block/uid :block/string]} {:block/children [:block/uid :block/string :block/order {:block/refs [:block/uid :block/string]}]}]}
  {:harc/_e [:block/uid
    {:harc/a [:node/title :edit/time :create/time]}
-   {:harc/v [:block/uid :node/title :edit/time :create/time :block/string :harc/v-string]}
+   {:harc/v [:block/uid :node/title :edit/time :create/time :block/string :harc/v-string {:block/refs [:block/uid :block/string]}]}
    {:harc/a-source ${SOURCE}}
    ${LABELS}]}
  {:harc/_v [:block/uid
-   {:harc/e [:block/uid :node/title :edit/time :create/time :block/string]}
+   {:harc/e [:block/uid :node/title :edit/time :create/time :block/string {:block/refs [:block/uid :block/string]}]}
    {:harc/a [:node/title :edit/time :create/time]}
    {:harc/a-source ${SOURCE}}
    {:harc/v-source [:block/uid]}
@@ -26,11 +26,11 @@ export const CENTER_PULL = `[:block/uid :node/title :edit/time :create/time :blo
    {:block/page [:block/uid :node/title :edit/time :create/time]}
    {:block/refs [:block/uid :node/title :edit/time :create/time :block/string]}]}]`;
 
-export const OUTLINE_PULL = "[:block/uid :block/string :block/order {:block/refs [:block/uid :node/title :block/string]} {:block/children ...}]";
+export const OUTLINE_PULL = "[:block/uid :block/string :block/order {:block/refs [:block/uid :node/title :block/string {:block/refs [:block/uid :block/string]}]} {:block/children ...}]";
 
 export const PEER_PULL = `[:block/uid
- {:harc/_v [{:harc/a [:node/title]} {:harc/e [:block/uid :node/title :block/string]}]}
- {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string]}]}]`;
+ {:harc/_v [{:harc/a [:node/title]} {:harc/e [:block/uid :node/title :block/string {:block/refs [:block/uid :block/string]}]}]}
+ {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string {:block/refs [:block/uid :block/string]}]}]}]`;
 
 const WATCHES = [
   "[:block/string :node/title {:block/_refs [:block/uid :block/string]} {:harc/_e [:block/uid]} {:harc/_v [:block/uid]}]",
@@ -63,9 +63,9 @@ const ATTR_BLOCK_PULL = "[:block/uid {:block/children [:block/uid :block/string 
 const SOURCE_BLOCK_PULL = "[:block/uid :block/string :block/order {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order {:block/children [:block/uid]}]}]";
 const RECENT_PAGES_QUERY = "[:find ?uid ?title ?edit ?create :where [?e :node/title ?title] [?e :block/uid ?uid] [?e :edit/time ?edit] [?e :create/time ?create]]";
 const RECENT_DRAWINGS_QUERY = `[:find ?uid ?edit :where [?b :block/uid ?uid] [?b :block/string ?s] [(clojure.string/includes? ?s "excalidraw")] [?b :edit/time ?edit]]`;
-const ENTITY_PULL = "[:block/uid :node/title :block/string]";
+const ENTITY_PULL = "[:block/uid :node/title :block/string {:block/refs [:block/uid :block/string {:block/refs [:block/uid :block/string]}]}]";
 const GUARD_PULL = "[:block/uid :block/string]";
-const PAGE_ATTRIBUTES_PULL = "[:block/uid {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string]}]}]";
+const PAGE_ATTRIBUTES_PULL = "[:block/uid {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string {:block/refs [:block/uid :block/string]}]}]}]";
 const PAGE_ATTRIBUTES_CAP = 200;
 const BLOCK_STRINGS_PULL = "[:block/uid :block/string]";
 const BLOCK_STRINGS_CAP = 50;
@@ -114,6 +114,10 @@ export function entityOf(node) {
   if (typeof node[":block/string"] === "string") {
     const entity = { uid, string: node[":block/string"] };
     if (Number.isFinite(node[":block/order"])) entity.order = node[":block/order"];
+    if (node[":block/refs"] != null) {
+      const refs = asList(node[":block/refs"]).map(entityOf).filter(Boolean);
+      if (refs.length) entity.refs = refs;
+    }
     return withTimes(entity, node);
   }
   if (node[":harc/v-string"] != null) return { uid, text: String(node[":harc/v-string"]) };
@@ -474,6 +478,20 @@ function hasForbiddenToken(string) {
   return FORBIDDEN_WRITE_TOKENS.some((token) => string.includes(token));
 }
 
+function refsMapFromRaw(raw, map = new Map()) {
+  if (!raw || typeof raw !== "object") return map;
+  for (const ref of asList(raw[":block/refs"])) {
+    if (!ref || typeof ref !== "object") continue;
+    const uid = ref[":block/uid"];
+    const string = ref[":block/string"];
+    if (typeof uid === "string" && uid && typeof string === "string" && !map.has(uid)) {
+      map.set(uid, string);
+    }
+    if (ref[":block/refs"] != null) refsMapFromRaw(ref, map);
+  }
+  return map;
+}
+
 function attributeValueOf(raw) {
   if (!raw || typeof raw !== "object") return null;
   const uid = raw[":block/uid"];
@@ -481,7 +499,7 @@ function attributeValueOf(raw) {
     return { uid, title: raw[":node/title"] };
   }
   if (typeof uid === "string" && uid && typeof raw[":block/string"] === "string") {
-    return { uid, text: plainText(raw[":block/string"], 90) };
+    return { uid, text: plainText(raw[":block/string"], 90, { refs: refsMapFromRaw(raw), selfUid: uid }) };
   }
   if (raw[":harc/v-string"] != null) {
     return { text: String(raw[":harc/v-string"]) };
@@ -866,7 +884,8 @@ export function createHost({ lifecycle }) {
       }
       if (typeof pulled[":block/string"] === "string") {
         const string = pulled[":block/string"];
-        return { uid: resolvedUid, kind: "block", title: drawingTitle(string) ?? plainText(string, 90) };
+        const refs = refsMapFromRaw(pulled);
+        return { uid: resolvedUid, kind: "block", title: drawingTitle(string) ?? plainText(string, 90, { refs, selfUid: resolvedUid }) };
       }
       return null;
     } catch (error) {

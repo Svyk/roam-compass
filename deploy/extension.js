@@ -550,6 +550,16 @@ function refMarkup(target) {
   return "";
 }
 var SMARTBLOCK_RE = /\{\{\s*([^:}][^:}]*?)\s*:(?:42)?SmartBlock:([^:}]+)(?::[^}]*)?\}\}/g;
+var BLOCK_REF_RE = /\(\(([\w-]+)\)\)/g;
+var MAX_REF_DEPTH = 2;
+function lookupRef(refs, uid) {
+  if (!refs || !uid) return null;
+  let value;
+  if (typeof refs === "function") value = refs(uid);
+  else if (refs instanceof Map) value = refs.get(uid);
+  else if (typeof refs === "object" && Object.prototype.hasOwnProperty.call(refs, uid)) value = refs[uid];
+  return typeof value === "string" ? value : null;
+}
 function cleanMarkup(raw) {
   let text = String(raw ?? "");
   text = text.replace(/\{\{\s*\[\[(TODO|DONE)\]\]\s*\}\}/g, "$1");
@@ -573,6 +583,9 @@ function safeSlice(text, len) {
   if (code >= 55296 && code <= 56319) end -= 1;
   return text.slice(0, end);
 }
+function isSpecialPart(part) {
+  return Boolean(part?.button || part?.ref);
+}
 function normalizeParts(rawParts) {
   const merged = [];
   for (const part of rawParts) {
@@ -580,28 +593,37 @@ function normalizeParts(rawParts) {
     if (part.button) {
       const label = part.text.replace(/\s+/g, " ").trim();
       if (!label) continue;
-      if (merged.length && merged[merged.length - 1].button) {
+      if (merged.length && isSpecialPart(merged[merged.length - 1])) {
         merged.push({ text: " " });
       }
       merged.push({ text: label, button: true });
       continue;
     }
+    if (part.ref) {
+      const text2 = part.text.replace(/\s+/g, " ").trim();
+      if (!text2) continue;
+      if (merged.length && isSpecialPart(merged[merged.length - 1])) {
+        merged.push({ text: " " });
+      }
+      merged.push({ text: text2, ref: true });
+      continue;
+    }
     let text = part.text.replace(/\s+/g, " ");
     if (!text) continue;
     const prev = merged[merged.length - 1];
-    if (prev && !prev.button) {
+    if (prev && !isSpecialPart(prev)) {
       if (prev.text.endsWith(" ") && text.startsWith(" ")) text = text.slice(1);
       prev.text += text;
     } else {
       merged.push({ text });
     }
   }
-  while (merged.length && !merged[0].button) {
+  while (merged.length && !isSpecialPart(merged[0])) {
     merged[0].text = merged[0].text.replace(/^ +/, "");
     if (!merged[0].text) merged.shift();
     else break;
   }
-  while (merged.length && !merged[merged.length - 1].button) {
+  while (merged.length && !isSpecialPart(merged[merged.length - 1])) {
     merged[merged.length - 1].text = merged[merged.length - 1].text.replace(/ +$/, "");
     if (!merged[merged.length - 1].text) merged.pop();
     else break;
@@ -625,27 +647,56 @@ function truncateParts(parts, max) {
       remaining = 0;
     }
   }
-  while (cut.length && !cut[cut.length - 1].button) {
+  while (cut.length && !isSpecialPart(cut[cut.length - 1])) {
     cut[cut.length - 1].text = cut[cut.length - 1].text.replace(/ +$/, "");
     if (!cut[cut.length - 1].text) cut.pop();
     else break;
   }
-  if (cut.length && !cut[cut.length - 1].button) {
+  if (cut.length && !isSpecialPart(cut[cut.length - 1])) {
     cut[cut.length - 1].text += "…";
   } else {
     cut.push({ text: "…" });
   }
   return { text: cut.map((part) => part.text).join(""), parts: cut };
 }
-function labelParts(input, max = 90) {
-  const raw = String(input ?? "");
+function expandSegment(rawSegment, refs, depth, seen) {
+  if (!rawSegment) return [];
+  const pieces = [];
+  const re = new RegExp(BLOCK_REF_RE.source, "g");
+  let cursor = 0;
+  let match;
+  while (match = re.exec(rawSegment)) {
+    if (match.index > cursor) {
+      const text = cleanMarkup(rawSegment.slice(cursor, match.index));
+      if (text) pieces.push({ text });
+    }
+    const uid = match[1];
+    const target = depth < MAX_REF_DEPTH && !seen.has(uid) ? lookupRef(refs, uid) : null;
+    if (target != null) {
+      const nextSeen = new Set(seen);
+      nextSeen.add(uid);
+      const resolved = buildRawParts(target, refs, depth + 1, nextSeen).map((part) => part.text).join("").replace(/\s+/g, " ").trim();
+      if (resolved) pieces.push({ text: resolved, ref: true });
+      else pieces.push({ text: "(( ))" });
+    } else {
+      pieces.push({ text: "(( ))" });
+    }
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < rawSegment.length) {
+    const text = cleanMarkup(rawSegment.slice(cursor));
+    if (text) pieces.push({ text });
+  }
+  return pieces;
+}
+function buildRawParts(raw, refs, depth, seen) {
   const tokens = [];
   let cursor = 0;
-  SMARTBLOCK_RE.lastIndex = 0;
+  const sbRe = new RegExp(SMARTBLOCK_RE.source, "g");
   let match;
-  while (match = SMARTBLOCK_RE.exec(raw)) {
+  while (match = sbRe.exec(raw)) {
     if (match.index > cursor) {
-      tokens.push({ button: false, text: cleanMarkup(raw.slice(cursor, match.index)) });
+      tokens.push({ button: false, pieces: expandSegment(raw.slice(cursor, match.index), refs, depth, seen) });
     }
     tokens.push({
       button: true,
@@ -655,13 +706,15 @@ function labelParts(input, max = 90) {
     cursor = match.index + match[0].length;
   }
   if (cursor < raw.length) {
-    tokens.push({ button: false, text: cleanMarkup(raw.slice(cursor)) });
+    tokens.push({ button: false, pieces: expandSegment(raw.slice(cursor), refs, depth, seen) });
   }
-  const hasOtherText = tokens.some((token) => !token.button && token.text.trim() !== "");
+  const hasOtherText = tokens.some(
+    (token) => !token.button && token.pieces.some((piece) => piece.text.trim() !== "")
+  );
   const rawParts = [];
   for (const token of tokens) {
     if (!token.button) {
-      if (token.text) rawParts.push({ text: token.text });
+      for (const piece of token.pieces) rawParts.push(piece);
       continue;
     }
     if (token.label) rawParts.push({ text: token.label, button: true });
@@ -669,11 +722,18 @@ function labelParts(input, max = 90) {
       rawParts.push({ text: ` ${token.workflow}` });
     }
   }
-  const normalized = normalizeParts(rawParts);
+  return normalizeParts(rawParts);
+}
+function labelParts(input, max = 90, options = {}) {
+  const raw = String(input ?? "");
+  const refs = options?.refs ?? null;
+  const seen = /* @__PURE__ */ new Set();
+  if (typeof options?.selfUid === "string" && options.selfUid) seen.add(options.selfUid);
+  const normalized = buildRawParts(raw, refs, 0, seen);
   return truncateParts(normalized, max);
 }
-function plainText(input, max = 90) {
-  return labelParts(input, max).text;
+function plainText(input, max = 90, options = {}) {
+  return labelParts(input, max, options).text;
 }
 function drawingTitle(input, max = 90) {
   const text = String(input ?? "").trimStart();
@@ -794,7 +854,48 @@ function attributeForRole(role, settings) {
   if (!name || name.includes("::") || /[[\]\n]/.test(name) || isReadOnlyAttribute(name)) return null;
   return name;
 }
-function blockLabel(uid, string, max, resolveRegion) {
+function hasRichParts(parts) {
+  return Array.isArray(parts) && parts.some((part) => part.button || part.ref);
+}
+function addRefEntity(map, entity) {
+  if (!entity || typeof entity !== "object") return;
+  if (typeof entity.uid === "string" && entity.uid && typeof entity.string === "string" && !map.has(entity.uid)) {
+    map.set(entity.uid, entity.string);
+  }
+  if (Array.isArray(entity.refs)) {
+    for (const ref of entity.refs) addRefEntity(map, ref);
+  }
+}
+function buildRefMap(source) {
+  const map = /* @__PURE__ */ new Map();
+  if (!source || typeof source !== "object") return map;
+  if (source.refs instanceof Map) {
+    for (const [uid, str] of source.refs) if (typeof str === "string") map.set(uid, str);
+  } else if (source.refs && typeof source.refs === "object" && !Array.isArray(source.refs)) {
+    for (const [uid, str] of Object.entries(source.refs)) if (typeof str === "string") map.set(uid, str);
+  }
+  addRefEntity(map, source.center);
+  addRefEntity(map, source.center?.parent);
+  for (const sib of source.center?.siblings ?? []) addRefEntity(map, sib);
+  walk(source.outline, (block) => addRefEntity(map, block));
+  for (const harc of source.out ?? []) {
+    addRefEntity(map, harc.source);
+    for (const child of harc.source?.children ?? []) addRefEntity(map, child);
+    for (const val of harc.values ?? []) addRefEntity(map, val);
+  }
+  for (const harc of source.in ?? []) {
+    addRefEntity(map, harc.entity);
+    addRefEntity(map, harc.source);
+    for (const child of harc.source?.children ?? []) addRefEntity(map, child);
+  }
+  for (const mention of source.mentions ?? []) addRefEntity(map, mention);
+  for (const peer of source.peers ?? []) {
+    for (const row of peer?.incoming ?? []) addRefEntity(map, row?.entity);
+    for (const row of peer?.outgoing ?? []) addRefEntity(map, row?.value);
+  }
+  return map;
+}
+function blockLabel(uid, string, max, resolveRegion, refs) {
   if (resolveRegion && regionOwner(string) !== null) {
     const label = resolveRegion(uid, string);
     if (label) {
@@ -804,16 +905,16 @@ function blockLabel(uid, string, max, resolveRegion) {
   }
   const drawn = drawingTitle(string, max);
   if (drawn !== null) return { text: drawn, parts: null };
-  const built = labelParts(string ?? "", max);
+  const built = labelParts(string ?? "", max, { refs, selfUid: uid });
   return {
     text: built.text,
-    parts: built.parts.some((part) => part.button) ? built.parts : null
+    parts: hasRichParts(built.parts) ? built.parts : null
   };
 }
-function labelOf(entity, resolveRegion) {
+function labelOf(entity, resolveRegion, refs) {
   if (!entity) return { text: "", parts: null };
   if (typeof entity.title === "string" && entity.title) return { text: entity.title, parts: null };
-  return blockLabel(entity.uid, entity.string, 90, resolveRegion);
+  return blockLabel(entity.uid, entity.string, 90, resolveRegion, refs);
 }
 function isDrawingLike(node) {
   const text = typeof node?.string === "string" ? node.string.trimStart() : "";
@@ -890,12 +991,12 @@ function linkRefs(block) {
   const text = attribute ? attribute.tail : block?.string;
   return resolveTokens(scanRefs(text), block?.refs);
 }
-function outlineIndex(outline, resolveRegion) {
+function outlineIndex(outline, resolveRegion, refs) {
   const index = /* @__PURE__ */ new Map();
   const rows = [];
   walk(outline, (block, depth, parentUid) => {
     index.set(block.uid, { parentUid, depth });
-    const built = blockLabel(block.uid, block.string, 72, resolveRegion);
+    const built = blockLabel(block.uid, block.string, 72, resolveRegion, refs);
     const row = {
       uid: block.uid,
       text: built.text || " ",
@@ -1054,7 +1155,8 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
   const evidence = /* @__PURE__ */ new Map();
   const badges = [];
   const resolveRegion = typeof options.regionLabel === "function" ? regionResolver(options.regionLabel) : null;
-  const outline = outlineIndex(source.outline, resolveRegion);
+  const refMap = buildRefMap(source);
+  const outline = outlineIndex(source.outline, resolveRegion, refMap);
   function add(entity, item) {
     if (!isNode(entity) || entity.uid === centerUid) return;
     if (!entities.has(entity.uid)) entities.set(entity.uid, entity);
@@ -1078,7 +1180,11 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
     for (const value of harc.values ?? []) {
       if (!isNode(value)) {
         if (value?.text != null && settings.badges && badges.length < BADGE_CAP) {
-          badges.push({ attribute: harc.attribute, text: String(value.text) });
+          const rawBadge = String(value.text);
+          const built = labelParts(rawBadge, 90, { refs: refMap });
+          const badge = { attribute: harc.attribute, text: built.text || rawBadge };
+          if (hasRichParts(built.parts)) badge.parts = built.parts;
+          badges.push(badge);
         }
         continue;
       }
@@ -1154,7 +1260,7 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
     const entity = entities.get(uid);
     const picked = pickRole(items);
     const typed = picked.strongest.filter((item) => item.kind === "typed");
-    const built = labelOf(entity, resolveRegion);
+    const built = labelOf(entity, resolveRegion, refMap);
     const node = {
       uid,
       kind: kindOf(entity),
@@ -1186,7 +1292,7 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
         existing.evidence.push(item);
         return;
       }
-      const built = labelOf(entity, resolveRegion);
+      const built = labelOf(entity, resolveRegion, refMap);
       const sibling = {
         uid: entity.uid,
         kind: kindOf(entity),
@@ -1249,7 +1355,7 @@ function buildNeighborhood(snapshot, rawSettings = {}, options = {}) {
   appendExtras(kept, options.cards, "south", "child", "card", settings.maxPerZone, centerUid);
   const keptUids = new Set(kept.map((node) => node.uid));
   for (const node of kept) if (node.via && !keptUids.has(node.via)) node.via = null;
-  const centerBuilt = center.kind === "block" ? blockLabel(centerUid, center.string, 120, resolveRegion) : { text: center.title || "", parts: null };
+  const centerBuilt = center.kind === "block" ? blockLabel(centerUid, center.string, 120, resolveRegion, refMap) : { text: center.title || "", parts: null };
   const centerOut = {
     uid: centerUid,
     kind: center.kind === "block" ? "block" : "page",
@@ -1351,16 +1457,16 @@ function planMove({ source, fromAttribute, toAttribute, value, newUid }) {
 var LABELS = "{:harc/_e [{:harc/a [:node/title :edit/time :create/time]} {:harc/v [:block/uid :node/title :edit/time :create/time :block/string :harc/v-string]}]}";
 var SOURCE = "[:block/uid :block/string :block/order {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order]}]";
 var CENTER_PULL = `[:block/uid :node/title :edit/time :create/time :block/string :block/order
- {:block/refs [:block/uid :node/title :edit/time :create/time :block/string]}
+ {:block/refs [:block/uid :node/title :edit/time :create/time :block/string {:block/refs [:block/uid :block/string]}]}
  {:block/page [:block/uid :node/title :edit/time :create/time]}
- {:block/_children [:block/uid :node/title :edit/time :create/time :block/string {:block/children [:block/uid :block/string :block/order]}]}
+ {:block/_children [:block/uid :node/title :edit/time :create/time :block/string {:block/refs [:block/uid :block/string]} {:block/children [:block/uid :block/string :block/order {:block/refs [:block/uid :block/string]}]}]}
  {:harc/_e [:block/uid
    {:harc/a [:node/title :edit/time :create/time]}
-   {:harc/v [:block/uid :node/title :edit/time :create/time :block/string :harc/v-string]}
+   {:harc/v [:block/uid :node/title :edit/time :create/time :block/string :harc/v-string {:block/refs [:block/uid :block/string]}]}
    {:harc/a-source ${SOURCE}}
    ${LABELS}]}
  {:harc/_v [:block/uid
-   {:harc/e [:block/uid :node/title :edit/time :create/time :block/string]}
+   {:harc/e [:block/uid :node/title :edit/time :create/time :block/string {:block/refs [:block/uid :block/string]}]}
    {:harc/a [:node/title :edit/time :create/time]}
    {:harc/a-source ${SOURCE}}
    {:harc/v-source [:block/uid]}
@@ -1368,10 +1474,10 @@ var CENTER_PULL = `[:block/uid :node/title :edit/time :create/time :block/string
  {:block/_refs [:block/uid :block/string
    {:block/page [:block/uid :node/title :edit/time :create/time]}
    {:block/refs [:block/uid :node/title :edit/time :create/time :block/string]}]}]`;
-var OUTLINE_PULL = "[:block/uid :block/string :block/order {:block/refs [:block/uid :node/title :block/string]} {:block/children ...}]";
+var OUTLINE_PULL = "[:block/uid :block/string :block/order {:block/refs [:block/uid :node/title :block/string {:block/refs [:block/uid :block/string]}]} {:block/children ...}]";
 var PEER_PULL = `[:block/uid
- {:harc/_v [{:harc/a [:node/title]} {:harc/e [:block/uid :node/title :block/string]}]}
- {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string]}]}]`;
+ {:harc/_v [{:harc/a [:node/title]} {:harc/e [:block/uid :node/title :block/string {:block/refs [:block/uid :block/string]}]}]}
+ {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string {:block/refs [:block/uid :block/string]}]}]}]`;
 var WATCHES = [
   "[:block/string :node/title {:block/_refs [:block/uid :block/string]} {:harc/_e [:block/uid]} {:harc/_v [:block/uid]}]",
   "[:block/uid :block/string {:block/children ...}]"
@@ -1402,9 +1508,9 @@ var ATTR_BLOCK_PULL = "[:block/uid {:block/children [:block/uid :block/string :b
 var SOURCE_BLOCK_PULL = "[:block/uid :block/string :block/order {:block/_children [:block/uid]} {:block/children [:block/uid :block/string :block/order {:block/children [:block/uid]}]}]";
 var RECENT_PAGES_QUERY = "[:find ?uid ?title ?edit ?create :where [?e :node/title ?title] [?e :block/uid ?uid] [?e :edit/time ?edit] [?e :create/time ?create]]";
 var RECENT_DRAWINGS_QUERY = `[:find ?uid ?edit :where [?b :block/uid ?uid] [?b :block/string ?s] [(clojure.string/includes? ?s "excalidraw")] [?b :edit/time ?edit]]`;
-var ENTITY_PULL = "[:block/uid :node/title :block/string]";
+var ENTITY_PULL = "[:block/uid :node/title :block/string {:block/refs [:block/uid :block/string {:block/refs [:block/uid :block/string]}]}]";
 var GUARD_PULL = "[:block/uid :block/string]";
-var PAGE_ATTRIBUTES_PULL = "[:block/uid {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string]}]}]";
+var PAGE_ATTRIBUTES_PULL = "[:block/uid {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string :harc/v-string {:block/refs [:block/uid :block/string]}]}]}]";
 var PAGE_ATTRIBUTES_CAP = 200;
 var BLOCK_STRINGS_PULL = "[:block/uid :block/string]";
 var BLOCK_STRINGS_CAP = 50;
@@ -1445,6 +1551,10 @@ function entityOf(node) {
   if (typeof node[":block/string"] === "string") {
     const entity = { uid, string: node[":block/string"] };
     if (Number.isFinite(node[":block/order"])) entity.order = node[":block/order"];
+    if (node[":block/refs"] != null) {
+      const refs = asList(node[":block/refs"]).map(entityOf).filter(Boolean);
+      if (refs.length) entity.refs = refs;
+    }
     return withTimes(entity, node);
   }
   if (node[":harc/v-string"] != null) return { uid, text: String(node[":harc/v-string"]) };
@@ -1765,6 +1875,19 @@ function hasForbiddenToken(string) {
   if (typeof string !== "string") return false;
   return FORBIDDEN_WRITE_TOKENS.some((token) => string.includes(token));
 }
+function refsMapFromRaw(raw, map = /* @__PURE__ */ new Map()) {
+  if (!raw || typeof raw !== "object") return map;
+  for (const ref of asList(raw[":block/refs"])) {
+    if (!ref || typeof ref !== "object") continue;
+    const uid = ref[":block/uid"];
+    const string = ref[":block/string"];
+    if (typeof uid === "string" && uid && typeof string === "string" && !map.has(uid)) {
+      map.set(uid, string);
+    }
+    if (ref[":block/refs"] != null) refsMapFromRaw(ref, map);
+  }
+  return map;
+}
 function attributeValueOf(raw) {
   if (!raw || typeof raw !== "object") return null;
   const uid = raw[":block/uid"];
@@ -1772,7 +1895,7 @@ function attributeValueOf(raw) {
     return { uid, title: raw[":node/title"] };
   }
   if (typeof uid === "string" && uid && typeof raw[":block/string"] === "string") {
-    return { uid, text: plainText(raw[":block/string"], 90) };
+    return { uid, text: plainText(raw[":block/string"], 90, { refs: refsMapFromRaw(raw), selfUid: uid }) };
   }
   if (raw[":harc/v-string"] != null) {
     return { text: String(raw[":harc/v-string"]) };
@@ -2125,7 +2248,8 @@ function createHost({ lifecycle }) {
       }
       if (typeof pulled[":block/string"] === "string") {
         const string = pulled[":block/string"];
-        return { uid: resolvedUid, kind: "block", title: drawingTitle(string) ?? plainText(string, 90) };
+        const refs = refsMapFromRaw(pulled);
+        return { uid: resolvedUid, kind: "block", title: drawingTitle(string) ?? plainText(string, 90, { refs, selfUid: resolvedUid }) };
       }
       return null;
     } catch (error) {
@@ -5566,6 +5690,11 @@ function fillLabel(element, text, parts) {
       chip.className = "compass-btn-chip";
       chip.textContent = part.text;
       element.append(chip);
+    } else if (part.ref) {
+      const ref = doc.createElement("span");
+      ref.className = "compass-ref";
+      ref.textContent = part.text;
+      element.append(ref);
     } else {
       element.append(doc.createTextNode(part.text));
     }
@@ -15821,8 +15950,14 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (hood.center.badges.length) {
       const badges = el("div", "compass-badges");
       for (const badge of hood.center.badges) {
-        const chip = el("span", "compass-badge", `${badge.attribute}: ${badge.text}`);
-        chip.title = chip.textContent;
+        const chip = el("span", "compass-badge");
+        const plain = `${badge.attribute}: ${badge.text}`;
+        if (badge.parts) {
+          fillLabel(chip, plain, [{ text: `${badge.attribute}: ` }, ...badge.parts]);
+        } else {
+          chip.textContent = plain;
+        }
+        chip.title = plain;
         badges.append(chip);
       }
       element.append(badges);

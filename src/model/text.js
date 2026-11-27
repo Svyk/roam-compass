@@ -179,6 +179,17 @@ export function refMarkup(target) {
 }
 
 const SMARTBLOCK_RE = /\{\{\s*([^:}][^:}]*?)\s*:(?:42)?SmartBlock:([^:}]+)(?::[^}]*)?\}\}/g;
+const BLOCK_REF_RE = /\(\(([\w-]+)\)\)/g;
+const MAX_REF_DEPTH = 2;
+
+function lookupRef(refs, uid) {
+  if (!refs || !uid) return null;
+  let value;
+  if (typeof refs === "function") value = refs(uid);
+  else if (refs instanceof Map) value = refs.get(uid);
+  else if (typeof refs === "object" && Object.prototype.hasOwnProperty.call(refs, uid)) value = refs[uid];
+  return typeof value === "string" ? value : null;
+}
 
 function cleanMarkup(raw) {
   let text = String(raw ?? "");
@@ -205,6 +216,10 @@ function safeSlice(text, len) {
   return text.slice(0, end);
 }
 
+function isSpecialPart(part) {
+  return Boolean(part?.button || part?.ref);
+}
+
 function normalizeParts(rawParts) {
   const merged = [];
   for (const part of rawParts) {
@@ -212,28 +227,37 @@ function normalizeParts(rawParts) {
     if (part.button) {
       const label = part.text.replace(/\s+/g, " ").trim();
       if (!label) continue;
-      if (merged.length && merged[merged.length - 1].button) {
+      if (merged.length && isSpecialPart(merged[merged.length - 1])) {
         merged.push({ text: " " });
       }
       merged.push({ text: label, button: true });
       continue;
     }
+    if (part.ref) {
+      const text = part.text.replace(/\s+/g, " ").trim();
+      if (!text) continue;
+      if (merged.length && isSpecialPart(merged[merged.length - 1])) {
+        merged.push({ text: " " });
+      }
+      merged.push({ text, ref: true });
+      continue;
+    }
     let text = part.text.replace(/\s+/g, " ");
     if (!text) continue;
     const prev = merged[merged.length - 1];
-    if (prev && !prev.button) {
+    if (prev && !isSpecialPart(prev)) {
       if (prev.text.endsWith(" ") && text.startsWith(" ")) text = text.slice(1);
       prev.text += text;
     } else {
       merged.push({ text });
     }
   }
-  while (merged.length && !merged[0].button) {
+  while (merged.length && !isSpecialPart(merged[0])) {
     merged[0].text = merged[0].text.replace(/^ +/, "");
     if (!merged[0].text) merged.shift();
     else break;
   }
-  while (merged.length && !merged[merged.length - 1].button) {
+  while (merged.length && !isSpecialPart(merged[merged.length - 1])) {
     merged[merged.length - 1].text = merged[merged.length - 1].text.replace(/ +$/, "");
     if (!merged[merged.length - 1].text) merged.pop();
     else break;
@@ -258,12 +282,12 @@ function truncateParts(parts, max) {
       remaining = 0;
     }
   }
-  while (cut.length && !cut[cut.length - 1].button) {
+  while (cut.length && !isSpecialPart(cut[cut.length - 1])) {
     cut[cut.length - 1].text = cut[cut.length - 1].text.replace(/ +$/, "");
     if (!cut[cut.length - 1].text) cut.pop();
     else break;
   }
-  if (cut.length && !cut[cut.length - 1].button) {
+  if (cut.length && !isSpecialPart(cut[cut.length - 1])) {
     cut[cut.length - 1].text += "…";
   } else {
     cut.push({ text: "…" });
@@ -271,16 +295,49 @@ function truncateParts(parts, max) {
   return { text: cut.map((part) => part.text).join(""), parts: cut };
 }
 
-// Structured one-line label parts for a block string: plain text plus SmartBlock button chips.
-export function labelParts(input, max = 90) {
-  const raw = String(input ?? "");
+function expandSegment(rawSegment, refs, depth, seen) {
+  if (!rawSegment) return [];
+  const pieces = [];
+  const re = new RegExp(BLOCK_REF_RE.source, "g");
+  let cursor = 0;
+  let match;
+  while ((match = re.exec(rawSegment))) {
+    if (match.index > cursor) {
+      const text = cleanMarkup(rawSegment.slice(cursor, match.index));
+      if (text) pieces.push({ text });
+    }
+    const uid = match[1];
+    const target = depth < MAX_REF_DEPTH && !seen.has(uid) ? lookupRef(refs, uid) : null;
+    if (target != null) {
+      const nextSeen = new Set(seen);
+      nextSeen.add(uid);
+      const resolved = buildRawParts(target, refs, depth + 1, nextSeen)
+        .map((part) => part.text)
+        .join("")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (resolved) pieces.push({ text: resolved, ref: true });
+      else pieces.push({ text: "(( ))" });
+    } else {
+      pieces.push({ text: "(( ))" });
+    }
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < rawSegment.length) {
+    const text = cleanMarkup(rawSegment.slice(cursor));
+    if (text) pieces.push({ text });
+  }
+  return pieces;
+}
+
+function buildRawParts(raw, refs, depth, seen) {
   const tokens = [];
   let cursor = 0;
-  SMARTBLOCK_RE.lastIndex = 0;
+  const sbRe = new RegExp(SMARTBLOCK_RE.source, "g");
   let match;
-  while ((match = SMARTBLOCK_RE.exec(raw))) {
+  while ((match = sbRe.exec(raw))) {
     if (match.index > cursor) {
-      tokens.push({ button: false, text: cleanMarkup(raw.slice(cursor, match.index)) });
+      tokens.push({ button: false, pieces: expandSegment(raw.slice(cursor, match.index), refs, depth, seen) });
     }
     tokens.push({
       button: true,
@@ -290,14 +347,16 @@ export function labelParts(input, max = 90) {
     cursor = match.index + match[0].length;
   }
   if (cursor < raw.length) {
-    tokens.push({ button: false, text: cleanMarkup(raw.slice(cursor)) });
+    tokens.push({ button: false, pieces: expandSegment(raw.slice(cursor), refs, depth, seen) });
   }
 
-  const hasOtherText = tokens.some((token) => !token.button && token.text.trim() !== "");
+  const hasOtherText = tokens.some(
+    (token) => !token.button && token.pieces.some((piece) => piece.text.trim() !== ""),
+  );
   const rawParts = [];
   for (const token of tokens) {
     if (!token.button) {
-      if (token.text) rawParts.push({ text: token.text });
+      for (const piece of token.pieces) rawParts.push(piece);
       continue;
     }
     if (token.label) rawParts.push({ text: token.label, button: true });
@@ -305,13 +364,22 @@ export function labelParts(input, max = 90) {
       rawParts.push({ text: ` ${token.workflow}` });
     }
   }
-  const normalized = normalizeParts(rawParts);
+  return normalizeParts(rawParts);
+}
+
+// Structured one-line label parts for a block string: plain text, SmartBlock button chips, and resolved block refs.
+export function labelParts(input, max = 90, options = {}) {
+  const raw = String(input ?? "");
+  const refs = options?.refs ?? null;
+  const seen = new Set();
+  if (typeof options?.selfUid === "string" && options.selfUid) seen.add(options.selfUid);
+  const normalized = buildRawParts(raw, refs, 0, seen);
   return truncateParts(normalized, max);
 }
 
 // Plain one-line text for a node label. Keeps the words, drops Roam markup.
-export function plainText(input, max = 90) {
-  return labelParts(input, max).text;
+export function plainText(input, max = 90, options = {}) {
+  return labelParts(input, max, options).text;
 }
 
 // Title for Plexus region and Excalidraw drawing blocks; null for any other block.

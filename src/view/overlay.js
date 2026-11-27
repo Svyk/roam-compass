@@ -1013,8 +1013,14 @@ function mountReal({ extensionAPI, lifecycle, host }) {
     if (hood.center.badges.length) {
       const badges = el("div", "compass-badges");
       for (const badge of hood.center.badges) {
-        const chip = el("span", "compass-badge", `${badge.attribute}: ${badge.text}`);
-        chip.title = chip.textContent;
+        const chip = el("span", "compass-badge");
+        const plain = `${badge.attribute}: ${badge.text}`;
+        if (badge.parts) {
+          fillLabel(chip, plain, [{ text: `${badge.attribute}: ` }, ...badge.parts]);
+        } else {
+          chip.textContent = plain;
+        }
+        chip.title = plain;
         badges.append(chip);
       }
       element.append(badges);
