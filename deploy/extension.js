@@ -555,6 +555,7 @@ function refMarkup(target) {
   return "";
 }
 var BLOCK_REF_RE = /\(\(([\w-]+)\)\)/g;
+var HAS_BLOCK_REF_RE = /\(\([\w-]+\)\)/;
 var MAX_REF_DEPTH = 2;
 var RAW_CAP = 2e3;
 var EMBED_NAMES = /* @__PURE__ */ new Set(["embed", "embed-path", "embed-children"]);
@@ -688,14 +689,14 @@ function parseSmartBlockBody(body, closedAtCut = false) {
     const lastColon = body.lastIndexOf(":");
     if (lastColon >= 0) {
       const tail = body.slice(lastColon);
-      const matchesPrefix = SMARTBLOCK_MARKERS.some((marker) => marker.startsWith(tail) && tail.length < marker.length);
+      const matchesPrefix = tail.length >= 2 && SMARTBLOCK_MARKERS.some((marker) => marker.startsWith(tail) && tail.length < marker.length);
       if (matchesPrefix) {
         if (lastColon > 0) {
           const rawLabel = body.slice(0, lastColon).trim();
           const cleanLabel = rawLabel ? cleanMarkup(rawLabel).replace(/\s+/g, " ").trim() : "";
           if (cleanLabel) return { label: cleanLabel, workflow: "" };
         }
-        if (tail.length > 1) return { label: "SmartBlock", workflow: "" };
+        return { label: "SmartBlock", workflow: "" };
       }
     }
   }
@@ -1126,19 +1127,49 @@ function expandToken(token, refs, depth, seen, memo, budget, expandRefs) {
   })();
   return [{ kind: "pieces", pieces }];
 }
+function tokenContainsSmartBlock(token) {
+  if (token.kind === "smartblock") return true;
+  if (token.kind === "alias") return token.labelTokens.some(tokenContainsSmartBlock);
+  return false;
+}
+function tokenHasOtherText(token, expandRefs) {
+  if (token.kind === "smartblock") return false;
+  if (token.kind === "embed") return true;
+  if (token.kind === "code") return cleanMarkup(token.raw).trim() !== "";
+  if (token.kind === "macro") return renderOtherMacro(token.body).trim() !== "";
+  if (token.kind === "alias") {
+    if (token.labelTokens.some((child) => tokenHasOtherText(child, false))) return true;
+    return Boolean(token.isImage && !tokenContainsSmartBlock(token));
+  }
+  if (expandRefs && token.text.includes("((") && token.text.includes("))") && HAS_BLOCK_REF_RE.test(token.text)) {
+    return true;
+  }
+  return cleanMarkup(token.text).trim() !== "";
+}
 function buildRawParts(raw, refs, depth, seen, memo, limit) {
   const { text, cut } = capInput(raw);
   const stage2 = tokenizeCodeAndMacros(text, cut);
   const stage3 = tokenizeAliases(stage2, cut);
   const budget = { count: 0, limit };
   const expanded = [];
-  for (const token of stage3) {
+  let hasOtherText = false;
+  let i = 0;
+  for (; i < stage3.length; i += 1) {
     if (budget.count > budget.limit) break;
-    expanded.push(...expandToken(token, refs, depth, seen, memo, budget, true));
+    const items = expandToken(stage3[i], refs, depth, seen, memo, budget, true);
+    expanded.push(...items);
+    if (!hasOtherText && items.some((item) => item.kind !== "smartblock" && item.pieces.some((piece) => piece.text.trim() !== ""))) {
+      hasOtherText = true;
+    }
   }
-  const hasOtherText = expanded.some(
-    (token) => token.kind !== "smartblock" && token.pieces.some((piece) => piece.text.trim() !== "")
-  );
+  if (!hasOtherText && budget.count > budget.limit) {
+    for (let j = Math.max(0, i - 1); j < stage3.length; j += 1) {
+      if (tokenHasOtherText(stage3[j], true)) {
+        hasOtherText = true;
+        break;
+      }
+    }
+  }
   const rawParts = [];
   for (const token of expanded) {
     if (token.kind !== "smartblock") {
@@ -1157,7 +1188,7 @@ function labelParts(input, max = 90, options = {}) {
   const refs = options?.refs ?? null;
   const seen = /* @__PURE__ */ new Set();
   if (typeof options?.selfUid === "string" && options.selfUid) seen.add(options.selfUid);
-  const limit = Number.isFinite(max) && max > 0 ? max : 90;
+  const limit = Number.isFinite(max) ? Math.max(1, max) : Infinity;
   const normalized = buildRawParts(raw, refs, 0, seen, /* @__PURE__ */ new Map(), limit);
   return truncateParts(normalized, max);
 }

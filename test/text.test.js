@@ -363,13 +363,71 @@ test("SmartBlock buttons always render as chips and never leak marker text", () 
   for (const cutCase of [
     `${"a".repeat(1987)}{{Run:SmartBlock:Workflow}}`, // cut inside :SmartBl
     `${"a".repeat(1991)}{{Run:42SmartBlock:Workflow}}`, // cut at Run:42S
-    `${"a".repeat(1994)}{{Run:SmartBlock:Workflow}}`, // cut at Run:
+    `${"a".repeat(1993)}{{Run:SmartBlock:Workflow}}`, // cut at Run:S
   ]) {
     const res = labelParts(cutCase, 4000);
     assert.deepEqual(res.parts[res.parts.length - 1], { text: "Run", button: true }, cutCase.slice(1980));
     assert.equal(res.text.includes("SmartBlock:"), false);
     assert.equal(res.text.includes("SmartBl"), false);
   }
+});
+
+test("expansion budget preserves SmartBlock workflow suppression, non-finite max, and cut-macro colons", () => {
+  const buttons = Array.from(
+    { length: 12 },
+    (_, i) => `{{Button${String(i).padStart(4, "0")}:SmartBlock:flow${i}}}`,
+  ).join(" ");
+
+  // K1: trailing text past the budget still suppresses workflow names on every chip.
+  const withNote = labelParts(`${buttons} trailing note`, 90);
+  assert.equal(
+    withNote.text,
+    "Button0000 Button0001 Button0002 Button0003 Button0004 Button0005 Button0006 Button0007 B…",
+  );
+  assert.deepEqual(withNote.parts, [
+    { text: "Button0000", button: true },
+    { text: " " },
+    { text: "Button0001", button: true },
+    { text: " " },
+    { text: "Button0002", button: true },
+    { text: " " },
+    { text: "Button0003", button: true },
+    { text: " " },
+    { text: "Button0004", button: true },
+    { text: " " },
+    { text: "Button0005", button: true },
+    { text: " " },
+    { text: "Button0006", button: true },
+    { text: " " },
+    { text: "Button0007", button: true },
+    { text: " " },
+    { text: "B", button: true },
+    { text: "…" },
+  ]);
+
+  // K1: a trailing block ref past the budget also counts as other text without resolving it.
+  const withRef = labelParts(`${buttons} ((u1))`, 90);
+  assert.equal(withRef.text, withNote.text);
+  assert.deepEqual(withRef.parts, withNote.parts);
+
+  // K1: the same twelve buttons with no trailing text still show workflow names.
+  const buttonsOnly = labelParts(buttons, 90);
+  assert.equal(
+    buttonsOnly.text,
+    "Button0000 flow0 Button0001 flow1 Button0002 flow2 Button0003 flow3 Button0004 flow4 Butt…",
+  );
+
+  // K2: non-finite max disables the expansion budget.
+  const allSixty = labelParts("word ((u1)) ".repeat(60), Infinity, { refs: { u1: "ref" } });
+  assert.equal(allSixty.text, Array(60).fill("word ref").join(" "));
+
+  // K3: a 2,000-character cut ending in `{{[[query]]:` with only markup before it reads `query`, not a chip.
+  const cutQuery = `${"****".repeat(497)}{{[[query]]: {and: [[TODO]]}}}`;
+  assert.equal(cutQuery.slice(0, 2000).endsWith("{{[[query]]:"), true);
+  const queryRes = labelParts(cutQuery, 90);
+  assert.equal(queryRes.text, "query");
+  assert.deepEqual(queryRes.parts, [{ text: "query" }]);
+  assert.equal(queryRes.parts.some((part) => part.button), false);
 });
 
 test("stage-ordered tokenization handles macros and page links inside aliases without expanding alias targets", () => {
