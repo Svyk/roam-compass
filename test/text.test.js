@@ -258,19 +258,65 @@ test("SmartBlock labels allow colons and strip Roam markup", () => {
 });
 
 test("plainText handles 25,000 spaces after {{ without backtracking", () => {
+  const shortUncut = `{{${" ".repeat(1000)}x`;
+  assert.equal(plainText(shortUncut, 90), "{{ x");
+
   const input = `{{${" ".repeat(25000)}x`;
   const start = performance.now();
   const out = plainText(input, 90);
   const elapsed = performance.now() - start;
-  assert.equal(out, "{{ x");
+  assert.equal(out, "");
   assert.ok(elapsed < 100, `expected < 100ms, got ${elapsed.toFixed(1)}ms`);
 });
 
-test("safeSlice cuts on grapheme boundaries for complex emoji", () => {
+test("labelParts bounds adversarial inputs to 2000 chars and handles macros cut at the boundary", () => {
+  const cases = [
+    ["nested braces", `${"{{".repeat(8000)}x${"}}".repeat(8000)}`],
+    ["alias bracket chain", `${"[a]([[".repeat(8000)}]]`],
+    ["unclosed aliases", "[a](".repeat(8000)],
+    ["unclosed brackets", `${"[x ".repeat(8000)}] end ](`],
+  ];
+  for (const [name, input] of cases) {
+    const start = performance.now();
+    const res = labelParts(input, 90);
+    const elapsed = performance.now() - start;
+    assert.equal(typeof res.text, "string", name);
+    assert.ok(elapsed < 50, `${name}: expected < 50ms, got ${elapsed.toFixed(1)}ms`);
+  }
+
+  const prefix = `${"Plain opening text for a very long block with details ".repeat(2)}`;
+  const longBlock = `${prefix}${"z".repeat(5000)}`;
+  assert.equal(plainText(longBlock), plainText(longBlock.slice(0, 2000)));
+
+  const hugeQuery = `{{[[query]]: {and: [[TODO]] ${"x ".repeat(1500)}}}}`;
+  assert.ok(hugeQuery.length > 3000);
+  assert.equal(plainText(hugeQuery), "query");
+});
+
+test("stage-ordered tokenization handles macros and page links inside aliases without expanding alias targets", () => {
+  const refs = { abc123def: "Reply to Lori" };
+
+  const todoAlias = labelParts("[{{[[TODO]]}} task](((abc123def)))", 90, { refs });
+  assert.equal(todoAlias.text, "TODO task");
+  assert.equal(todoAlias.parts.some((part) => part.ref), false);
+
+  const pageAlias = labelParts("[see [[Page]]](((abc123def)))", 90, { refs });
+  assert.equal(pageAlias.text, "see Page");
+  assert.equal(pageAlias.parts.some((part) => part.ref), false);
+
+  const sbAlias = labelParts("[{{Run:SmartBlock:Flow}}](https://example.com)", 90, { refs });
+  assert.equal(sbAlias.parts.some((part) => part.button && part.text === "Run"), true);
+  assert.equal(sbAlias.text.includes(":SmartBlock:"), false);
+});
+
+test("safeSlice cuts on grapheme boundaries for complex emoji and truncateParts preserves cross-part graphemes", () => {
   assert.equal(safeSlice("ab👨‍👩‍👧‍👦cd", 8), "ab");
   assert.equal(safeSlice("ab👍🏽cd", 4), "ab");
   assert.equal(safeSlice("ab🇺🇸cd", 4), "ab");
   assert.equal(safeSlice("ab❤️cd", 3), "ab");
   assert.equal(plainText("ab👨‍👩‍👧‍👦cd", 9), "ab…");
   assert.equal(plainText("ab🇺🇸cd", 5), "ab…");
+
+  const crossPart = labelParts("((u1))🇸🇦xyz", 5, { refs: { u1: "🇺" } });
+  assert.equal(crossPart.text, "🇺🇸…");
 });

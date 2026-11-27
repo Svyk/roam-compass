@@ -180,6 +180,7 @@ export function refMarkup(target) {
 
 const BLOCK_REF_RE = /\(\(([\w-]+)\)\)/g;
 const MAX_REF_DEPTH = 2;
+const RAW_CAP = 2000;
 const EMBED_NAMES = new Set(["embed", "embed-path", "embed-children"]);
 const GRAPHEME_SEGMENTER = typeof Intl !== "undefined" && typeof Intl.Segmenter === "function"
   ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
@@ -194,6 +195,12 @@ function lookupRef(refs, uid) {
   return typeof value === "string" ? value : null;
 }
 
+function capInput(raw) {
+  const text = String(raw ?? "");
+  if (text.length <= RAW_CAP) return { text, cut: false };
+  return { text: safeSlice(text, RAW_CAP), cut: true };
+}
+
 function closedCodeEnd(text, index) {
   if (text.startsWith("```", index)) {
     const end = text.indexOf("```", index + 3);
@@ -203,17 +210,34 @@ function closedCodeEnd(text, index) {
   return end < 0 ? -1 : end + 1;
 }
 
-function matchBracePairs(text, ignoreCode) {
+function findCodeRanges(text, cut) {
+  const ranges = [];
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === "`") {
+      let end = closedCodeEnd(text, i);
+      if (end < 0 && cut) end = text.length;
+      if (end > i) {
+        ranges.push([i, end]);
+        i = end;
+        continue;
+      }
+    }
+    i += 1;
+  }
+  return ranges;
+}
+
+function matchBracePairs(text, codeRanges = null) {
   if (!text.includes("{{") || !text.includes("}}")) return null;
   const pairs = new Map();
   const stack = [];
+  let rIdx = 0;
   for (let i = 0; i < text.length; i += 1) {
-    if (ignoreCode && text[i] === "`") {
-      const end = closedCodeEnd(text, i);
-      if (end > i) {
-        i = end - 1;
-        continue;
-      }
+    if (codeRanges && rIdx < codeRanges.length && i === codeRanges[rIdx][0]) {
+      i = codeRanges[rIdx][1] - 1;
+      rIdx += 1;
+      continue;
     }
     const ch = text[i];
     if (ch === "{") stack.push(i);
@@ -230,31 +254,45 @@ function doubleBraceEnd(pairs, start) {
   return outer === inner + 1 ? outer + 1 : -1;
 }
 
-function matchLinkTarget(text, openParen) {
+function matchLinkTarget(text, openParen, allowCut = false) {
   if (text[openParen] !== "(") return -1;
   if (text.startsWith("((", openParen + 1)) {
     const end = text.indexOf(")))", openParen + 3);
-    return end < 0 ? -1 : end + 3;
+    if (end >= 0) return end + 3;
+    return allowCut ? text.length : -1;
   }
   if (text.startsWith("[[", openParen + 1)) {
     const end = matchBrackets(text, openParen + 1);
-    return end >= 0 && text[end] === ")" ? end + 1 : -1;
+    if (end >= 0 && text[end] === ")") return end + 1;
+    return allowCut ? text.length : -1;
   }
   const end = text.indexOf(")", openParen + 1);
-  return end < 0 ? -1 : end + 1;
+  if (end >= 0) return end + 1;
+  return allowCut ? text.length : -1;
 }
 
 function matchAliasOrImage(text, index, lastCloseBracket) {
   if (index >= lastCloseBracket) return null;
-  const isImage = text[index] === "!" && text[index + 1] === "[";
+  const isImage = text[index] === "!" && text[index + 1] === "[" && text[index + 2] !== "[";
   if (!isImage && (text[index] !== "[" || text[index + 1] === "[")) return null;
   const labelStart = isImage ? index + 2 : index + 1;
-  const closeBracket = text.indexOf("]", labelStart);
-  if (closeBracket < 0 || text[closeBracket + 1] !== "(") return null;
-  if (!isImage && closeBracket === labelStart) return null;
-  const end = matchLinkTarget(text, closeBracket + 1);
-  if (end < 0) return null;
-  return { isImage, label: text.slice(labelStart, closeBracket), end };
+  let p = labelStart;
+  while (p < text.length) {
+    if (text[p] === "[" && text[p + 1] === "[") {
+      const bEnd = matchBrackets(text, p);
+      p = bEnd > p ? bEnd : p + 2;
+      continue;
+    }
+    if (text[p] === "]") {
+      if (text[p + 1] !== "(") return null;
+      if (!isImage && p === labelStart) return null;
+      const end = matchLinkTarget(text, p + 1, false);
+      if (end < 0) return null;
+      return { isImage, label: text.slice(labelStart, p), end };
+    }
+    p += 1;
+  }
+  return null;
 }
 
 function parseSmartBlockBody(body) {
@@ -304,19 +342,38 @@ function renderOtherMacro(body) {
 }
 
 function stripMacrosLinear(text) {
-  const pairs = matchBracePairs(text, false);
+  const pairs = matchBracePairs(text);
   if (!pairs) return text;
   let out = "";
   let cursor = 0;
   let i = 0;
+  const skip = new Set();
   while (i < text.length) {
+    if (skip.has(i)) {
+      if (i > cursor) out += text.slice(cursor, i);
+      i += 1;
+      cursor = i;
+      continue;
+    }
     if (text[i] === "{" && text[i + 1] === "{") {
       const end = doubleBraceEnd(pairs, i);
       if (end > i) {
         if (i > cursor) out += text.slice(cursor, i);
-        out += renderOtherMacro(text.slice(i + 2, end - 2));
-        i = end;
-        cursor = end;
+        const body = text.slice(i + 2, end - 2);
+        const trimmed = body.trimStart();
+        if (trimmed.startsWith("[[")) {
+          const bEnd = matchBrackets(trimmed, 0);
+          if (bEnd >= 0) {
+            out += trimmed.slice(2, bEnd - 2);
+            i = end;
+            cursor = end;
+            continue;
+          }
+        }
+        skip.add(end - 2);
+        skip.add(end - 1);
+        i += 2;
+        cursor = i;
         continue;
       }
     }
@@ -333,6 +390,11 @@ function stripAliasesLinear(text) {
   let cursor = 0;
   let i = 0;
   while (i < text.length) {
+    if (text[i] === "[" && text[i + 1] === "[") {
+      const bEnd = matchBrackets(text, i);
+      i = bEnd > i ? bEnd : i + 2;
+      continue;
+    }
     const hit = matchAliasOrImage(text, i, lastCloseBracket);
     if (hit) {
       if (i > cursor) out += text.slice(cursor, i);
@@ -443,7 +505,7 @@ function truncateParts(parts, max) {
       cut.push({ ...part });
       remaining -= part.text.length;
     } else {
-      const slice = safeSlice(part.text, remaining);
+      const slice = part.text.slice(0, remaining);
       if (slice) cut.push({ ...part, text: slice });
       remaining = 0;
     }
@@ -501,32 +563,33 @@ function expandBareRefs(rawSegment, refs, depth, seen) {
   return pieces;
 }
 
-function tokenizeLabel(raw) {
+function tokenizeCodeAndMacros(text, cut) {
+  const codeRanges = findCodeRanges(text, cut);
+  const pairs = matchBracePairs(text, codeRanges);
   const tokens = [];
-  const pairs = matchBracePairs(raw, true);
-  const lastCloseBracket = raw.includes("](") ? raw.lastIndexOf("]") : -1;
   let cursor = 0;
+  let rIdx = 0;
   let i = 0;
-  const flushText = (end) => {
-    if (end > cursor) tokens.push({ kind: "text", raw: raw.slice(cursor, end) });
+  const flushRaw = (end) => {
+    if (end > cursor) tokens.push({ kind: "raw", text: text.slice(cursor, end) });
   };
-  while (i < raw.length) {
-    const ch = raw[i];
-    if (ch === "`") {
-      const end = closedCodeEnd(raw, i);
-      if (end > i) {
-        flushText(i);
-        tokens.push({ kind: "code", raw: raw.slice(i, end) });
-        i = end;
-        cursor = end;
-        continue;
-      }
+  while (i < text.length) {
+    if (rIdx < codeRanges.length && i === codeRanges[rIdx][0]) {
+      const cEnd = codeRanges[rIdx][1];
+      flushRaw(i);
+      tokens.push({ kind: "code", raw: text.slice(i, cEnd) });
+      i = cEnd;
+      cursor = cEnd;
+      rIdx += 1;
+      continue;
     }
-    if (ch === "{" && raw[i + 1] === "{") {
-      const end = doubleBraceEnd(pairs, i);
+    if (text[i] === "{" && text[i + 1] === "{") {
+      const matchedEnd = doubleBraceEnd(pairs, i);
+      const closedAtCut = matchedEnd < 0 && cut;
+      const end = closedAtCut ? text.length : matchedEnd;
       if (end > i) {
-        flushText(i);
-        const body = raw.slice(i + 2, end - 2);
+        flushRaw(i);
+        const body = closedAtCut ? text.slice(i + 2) : text.slice(i + 2, end - 2);
         const sb = parseSmartBlockBody(body);
         if (sb) {
           tokens.push({ kind: "smartblock", label: sb.label, workflow: sb.workflow });
@@ -537,47 +600,142 @@ function tokenizeLabel(raw) {
         }
         i = end;
         cursor = end;
-        continue;
-      }
-    }
-    if (lastCloseBracket >= 0 && (ch === "[" || ch === "!")) {
-      const hit = matchAliasOrImage(raw, i, lastCloseBracket);
-      if (hit) {
-        flushText(i);
-        tokens.push({ kind: "alias", isImage: hit.isImage, label: hit.label });
-        i = hit.end;
-        cursor = hit.end;
+        while (rIdx < codeRanges.length && codeRanges[rIdx][0] < end) rIdx += 1;
         continue;
       }
     }
     i += 1;
   }
-  flushText(raw.length);
+  flushRaw(text.length);
   return tokens;
 }
 
+function matchAliasAcrossTokens(tokens, startT, startI, isImage, cut) {
+  const labelTokens = [];
+  let scanT = startT;
+  let scanI = isImage ? startI + 2 : startI + 1;
+  while (scanT < tokens.length) {
+    const tok = tokens[scanT];
+    if (tok.kind !== "raw") {
+      labelTokens.push(tok);
+      scanT += 1;
+      scanI = 0;
+      continue;
+    }
+    const rs = tok.text;
+    let p = scanI;
+    while (p < rs.length) {
+      if (rs[p] === "[" && rs[p + 1] === "[") {
+        const bEnd = matchBrackets(rs, p);
+        p = bEnd > p ? bEnd : p + 2;
+        continue;
+      }
+      if (rs[p] === "]") {
+        if (rs[p + 1] !== "(") return null;
+        if (p > scanI) labelTokens.push({ kind: "raw", text: rs.slice(scanI, p) });
+        if (!isImage && labelTokens.length === 0) return null;
+        const isLastRaw = scanT === tokens.length - 1;
+        const targetEnd = matchLinkTarget(rs, p + 1, cut && isLastRaw);
+        if (targetEnd < 0) return null;
+        return { labelTokens, endT: scanT, endI: targetEnd };
+      }
+      p += 1;
+    }
+    if (rs.length > scanI) labelTokens.push({ kind: "raw", text: rs.slice(scanI) });
+    scanT += 1;
+    scanI = 0;
+  }
+  return null;
+}
+
+function tokenizeAliases(tokens, cut) {
+  const hasMarker = tokens.some((tok) => tok.kind === "raw" && tok.text.includes("]("));
+  if (!hasMarker) return tokens;
+  const out = [];
+  for (let tIdx = 0; tIdx < tokens.length; tIdx += 1) {
+    const tok = tokens[tIdx];
+    if (tok.kind !== "raw") {
+      out.push(tok);
+      continue;
+    }
+    let s = tok.text;
+    let cursor = 0;
+    let i = 0;
+    while (i < s.length) {
+      if (s[i] === "[" && s[i + 1] === "[") {
+        const bEnd = matchBrackets(s, i);
+        i = bEnd > i ? bEnd : i + 2;
+        continue;
+      }
+      const isImage = s[i] === "!" && s[i + 1] === "[" && s[i + 2] !== "[";
+      const isAlias = !isImage && s[i] === "[" && s[i + 1] !== "[";
+      if (isImage || isAlias) {
+        const hit = matchAliasAcrossTokens(tokens, tIdx, i, isImage, cut);
+        if (hit) {
+          if (i > cursor) out.push({ kind: "raw", text: s.slice(cursor, i) });
+          out.push({ kind: "alias", isImage, labelTokens: hit.labelTokens });
+          if (hit.endT === tIdx) {
+            i = hit.endI;
+            cursor = hit.endI;
+          } else {
+            tIdx = hit.endT;
+            s = tokens[tIdx].text;
+            i = hit.endI;
+            cursor = hit.endI;
+          }
+          continue;
+        }
+      }
+      i += 1;
+    }
+    if (cursor < s.length) out.push({ kind: "raw", text: s.slice(cursor) });
+  }
+  return out;
+}
+
+function expandToken(token, refs, depth, seen, expandRefs) {
+  if (token.kind === "smartblock") return [token];
+  if (token.kind === "code") {
+    const text = cleanMarkup(token.raw);
+    return [{ kind: "pieces", pieces: text ? [{ text }] : [] }];
+  }
+  if (token.kind === "embed") {
+    return [{ kind: "pieces", pieces: [resolveBlockRef(token.uid, refs, depth, seen)] }];
+  }
+  if (token.kind === "macro") {
+    const text = renderOtherMacro(token.body);
+    return [{ kind: "pieces", pieces: text ? [{ text }] : [] }];
+  }
+  if (token.kind === "alias") {
+    const inner = [];
+    for (const child of token.labelTokens) {
+      inner.push(...expandToken(child, refs, depth, seen, false));
+    }
+    if (token.isImage) {
+      const hasContent = inner.some((item) => (
+        item.kind === "smartblock" || item.pieces.some((piece) => piece.text.trim() !== "")
+      ));
+      if (!hasContent) return [{ kind: "pieces", pieces: [{ text: "image" }] }];
+    }
+    return inner;
+  }
+  const pieces = expandRefs
+    ? expandBareRefs(token.text, refs, depth, seen)
+    : (() => {
+      const text = cleanMarkup(token.text);
+      return text ? [{ text }] : [];
+    })();
+  return [{ kind: "pieces", pieces }];
+}
+
 function buildRawParts(raw, refs, depth, seen) {
-  const tokens = tokenizeLabel(raw);
-  const expanded = tokens.map((token) => {
-    if (token.kind === "smartblock") return token;
-    if (token.kind === "code") {
-      const text = cleanMarkup(token.raw);
-      return { kind: "pieces", pieces: text ? [{ text }] : [] };
-    }
-    if (token.kind === "embed") {
-      return { kind: "pieces", pieces: [resolveBlockRef(token.uid, refs, depth, seen)] };
-    }
-    if (token.kind === "macro") {
-      const text = renderOtherMacro(token.body);
-      return { kind: "pieces", pieces: text ? [{ text }] : [] };
-    }
-    if (token.kind === "alias") {
-      const cleaned = cleanMarkup(token.label);
-      const text = token.isImage ? (cleaned || "image") : cleaned;
-      return { kind: "pieces", pieces: text ? [{ text }] : [] };
-    }
-    return { kind: "pieces", pieces: expandBareRefs(token.raw, refs, depth, seen) };
-  });
+  const { text, cut } = capInput(raw);
+  const stage2 = tokenizeCodeAndMacros(text, cut);
+  const stage3 = tokenizeAliases(stage2, cut);
+  const expanded = [];
+  for (const token of stage3) {
+    expanded.push(...expandToken(token, refs, depth, seen, true));
+  }
 
   const hasOtherText = expanded.some(
     (token) => token.kind !== "smartblock" && token.pieces.some((piece) => piece.text.trim() !== ""),
