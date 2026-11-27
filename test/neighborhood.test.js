@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { buildNeighborhood, createPlexusOpener, drawingLinkEdges, isDrawingLike, plexusKind, plexusOpenPlan, plexusRegionLabels, roleOf, modelSettings, typedParentUids } from "../src/model/neighborhood.js";
+import { normalizeCenter, normalizeMentions, normalizeOutline } from "../src/host.js";
 
 const page = (uid, title, extra) => ({ uid, title, ...extra });
 
@@ -644,4 +645,69 @@ test("paired fields flip incoming captions and edge labels while preserving raw 
   assert.equal(step.zone, "east");
   assert.equal(step.label, "Next");
   assert.equal(step.evidence[0].attribute, "Previous");
+});
+
+test("referenced and linked blocks resolve two levels of reference text through host normalization and buildNeighborhood", () => {
+  const b3Pulled = { ":block/uid": "b3", ":block/string": "Leaf" };
+  const b2Pulled = { ":block/uid": "b2", ":block/string": "Task ((b3))", ":block/refs": [b3Pulled] };
+  const b1Pulled = { ":block/uid": "b1", ":block/string": "Slot ((b2))", ":block/refs": [b2Pulled] };
+
+  // 1. Outline block `See ((b1))` -> neighbor b1 resolves two levels of its own refs to `Slot Task Leaf`.
+  const outline = normalizeOutline({
+    ":block/children": [{
+      ":block/uid": "o1",
+      ":block/string": "See ((b1))",
+      ":block/order": 0,
+      ":block/refs": [b1Pulled],
+    }],
+  });
+  const outlineHood = buildNeighborhood(snap({ outline }));
+  const outlineB1 = outlineHood.nodes.find((node) => node.uid === "b1");
+  assert.equal(outlineB1?.title, "Slot Task Leaf");
+
+  // 2. Center block `See ((b1))` carries b1 -> b2 -> b3 through normalizeCenter into refMap so neighbor b1 reads `Slot Task Leaf`
+  // even when the neighbor path itself only carried a shallow b1 entity.
+  const center = normalizeCenter({
+    ":block/uid": "c0",
+    ":block/string": "See ((b1))",
+    ":block/page": { ":block/uid": "pg", ":node/title": "Page" },
+    ":block/_children": [{ ":block/uid": "pg", ":node/title": "Page" }],
+    ":block/refs": [b1Pulled],
+  }, "c0");
+  const centerHood = buildNeighborhood(snap({
+    center,
+    mentions: [{
+      uid: "co1",
+      string: "Co ((c0)) ((b1))",
+      page: page("p-co", "Co Page"),
+      refs: [{ uid: "c0", string: "See ((b1))" }, { uid: "b1", string: "Slot ((b2))" }],
+    }],
+  }));
+  const centerB1 = centerHood.nodes.find((node) => node.uid === "b1");
+  assert.equal(centerB1?.title, "Slot Task Leaf");
+
+  // 3. Linked-reference block `Meeting ((b1))` with b1 = `Slot ((b2))`, b2 = `Task`:
+  // :block/_refs pulls one nested level below b1, so co-mentioned sibling b1 resolves to `Slot Task`
+  // and `m1` itself (when labelled via the snapshot's refMap) resolves two levels to `Meeting Slot Task`.
+  const mentions = normalizeMentions([{
+    ":block/uid": "m1",
+    ":block/string": "Meeting ((b1)) [[Center]]",
+    ":block/page": { ":block/uid": "p-notes", ":node/title": "Notes" },
+    ":block/refs": [
+      { ":block/uid": "c", ":node/title": "Center" },
+      {
+        ":block/uid": "b1",
+        ":block/string": "Slot ((b2))",
+        ":block/refs": [{ ":block/uid": "b2", ":block/string": "Task" }],
+      },
+    ],
+  }]);
+  const mentionHood = buildNeighborhood(snap({
+    mentions,
+    outline: [block("o-ref-m1", "Ref ((m1))", [{ uid: "m1", string: "Meeting ((b1))" }])],
+  }));
+  const mentionB1 = mentionHood.nodes.find((node) => node.uid === "b1");
+  const mentionM1 = mentionHood.nodes.find((node) => node.uid === "m1");
+  assert.equal(mentionB1?.title, "Slot Task");
+  assert.equal(mentionM1?.title, "Meeting Slot Task");
 });

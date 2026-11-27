@@ -618,7 +618,7 @@ export function createFakeHost(graph = createGraph(), { lifecycle } = {}) {
         uid: child.uid,
         string: child.string ?? "",
         order: child.order ?? 0,
-        refs: index.refsOfString(child.string ?? ""),
+        refs: index.refsOfString(child.string ?? "", 2),
         children: outlineTree(child.children, index),
       }));
   }
@@ -660,7 +660,7 @@ export function createFakeHost(graph = createGraph(), { lifecycle } = {}) {
   function mentionsFor(targetUid, index) {
     const mentions = [];
     for (const { block, page } of index.blocksByUid.values()) {
-      const refs = index.refsOfString(block.string ?? "", 0);
+      const refs = index.refsOfString(block.string ?? "", 1);
       if (!refs.some((ref) => ref.uid === targetUid)) continue;
       mentions.push({
         uid: block.uid,
@@ -725,7 +725,7 @@ export function createFakeHost(graph = createGraph(), { lifecycle } = {}) {
           .filter((sib) => sib.uid !== block.uid)
           .map((sib) => blockEntity(sib, index.blocksByUid, 2))
           .sort(byOrder),
-        refs: index.refsOfString(block.string ?? "", 1),
+        refs: index.refsOfString(block.string ?? "", 2),
       };
       rawChildren = block.children;
     }

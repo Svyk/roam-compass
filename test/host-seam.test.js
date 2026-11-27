@@ -468,25 +468,42 @@ test("host.blockStrings pulls one string per uid, caps at 50, and skips errors",
   }
 });
 
-test("every labelled block pull includes the shared two-level refs sub-pattern while :block/_refs stays one level", () => {
+test("every labelled block pull includes the shared two-level refs sub-pattern and :block/_refs pulls one nested level", () => {
   const leaf = "{:block/refs [:block/uid :block/string]}";
   assert.equal(REFS_TEXT_PULL, `{:block/refs [:block/uid :block/string ${leaf}]}`);
 
-  // CENTER_PULL: center refs, parent, siblings, outgoing harc values, and incoming harc entities all pull two levels.
+  const balanced = (pattern) => {
+    const stack = [];
+    const close = { "[": "]", "{": "}" };
+    for (const ch of pattern) {
+      if (ch === "[" || ch === "{") stack.push(close[ch]);
+      else if (ch === "]" || ch === "}") {
+        if (stack.pop() !== ch) return false;
+      }
+    }
+    return stack.length === 0;
+  };
+  for (const pull of [CENTER_PULL, OUTLINE_PULL, PEER_PULL, ENTITY_PULL, PAGE_ATTRIBUTES_PULL]) {
+    assert.ok(balanced(pull), `balanced pull syntax: ${pull}`);
+  }
+
+  // CENTER_PULL: center refs, parent, siblings, outgoing harc values, and incoming harc entities pull REFS_TEXT_PULL;
+  // :block/_refs inner :block/refs pulls REFS_LEAF_PULL.
+  const centerRefs = CENTER_PULL.slice(0, CENTER_PULL.indexOf("{:block/page"));
   const parentAndSiblings = CENTER_PULL.slice(CENTER_PULL.indexOf("{:block/_children"), CENTER_PULL.indexOf("{:harc/_e"));
   const harcOut = CENTER_PULL.slice(CENTER_PULL.indexOf("{:harc/_e"), CENTER_PULL.indexOf("{:harc/_v"));
   const harcIn = CENTER_PULL.slice(CENTER_PULL.indexOf("{:harc/_v"), CENTER_PULL.indexOf("{:block/_refs"));
   const mentions = CENTER_PULL.slice(CENTER_PULL.indexOf("{:block/_refs"));
 
-  assert.ok(CENTER_PULL.slice(0, CENTER_PULL.indexOf("{:block/page")).includes(leaf));
+  assert.ok(centerRefs.includes(REFS_TEXT_PULL));
   assert.equal(parentAndSiblings.split(REFS_TEXT_PULL).length - 1, 2);
   assert.ok(harcOut.includes(REFS_TEXT_PULL));
   assert.ok(harcIn.includes(REFS_TEXT_PULL));
   assert.ok(!mentions.includes(REFS_TEXT_PULL));
-  assert.ok(!mentions.includes(leaf));
+  assert.ok(mentions.includes(leaf));
 
-  // OUTLINE_PULL pulls two levels on outline block refs.
-  assert.ok(OUTLINE_PULL.includes(leaf));
+  // OUTLINE_PULL pulls REFS_TEXT_PULL on outline block refs so referenced blocks resolve two levels of their own refs.
+  assert.ok(OUTLINE_PULL.includes(REFS_TEXT_PULL));
 
   // PEER_PULL pulls two levels on both incoming entities and outgoing values.
   assert.equal(PEER_PULL.split(REFS_TEXT_PULL).length - 1, 2);

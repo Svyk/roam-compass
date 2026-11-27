@@ -1888,7 +1888,7 @@ var SOURCE = "[:block/uid :block/string :block/order {:block/_children [:block/u
 var REFS_LEAF_PULL = "{:block/refs [:block/uid :block/string]}";
 var REFS_TEXT_PULL = `{:block/refs [:block/uid :block/string ${REFS_LEAF_PULL}]}`;
 var CENTER_PULL = `[:block/uid :node/title :edit/time :create/time :block/string :block/order
- {:block/refs [:block/uid :node/title :edit/time :create/time :block/string ${REFS_LEAF_PULL}]}
+ {:block/refs [:block/uid :node/title :edit/time :create/time :block/string ${REFS_TEXT_PULL}]}
  {:block/page [:block/uid :node/title :edit/time :create/time]}
  {:block/_children [:block/uid :node/title :edit/time :create/time :block/string ${REFS_TEXT_PULL} {:block/children [:block/uid :block/string :block/order ${REFS_TEXT_PULL}]}]}
  {:harc/_e [:block/uid
@@ -1904,8 +1904,8 @@ var CENTER_PULL = `[:block/uid :node/title :edit/time :create/time :block/string
    ${LABELS}]}
  {:block/_refs [:block/uid :block/string
    {:block/page [:block/uid :node/title :edit/time :create/time]}
-   {:block/refs [:block/uid :node/title :edit/time :create/time :block/string]}]}]`;
-var OUTLINE_PULL = `[:block/uid :block/string :block/order {:block/refs [:block/uid :node/title :block/string ${REFS_LEAF_PULL}]} {:block/children ...}]`;
+   {:block/refs [:block/uid :node/title :edit/time :create/time :block/string ${REFS_LEAF_PULL}]}]}]`;
+var OUTLINE_PULL = `[:block/uid :block/string :block/order {:block/refs [:block/uid :node/title :block/string ${REFS_TEXT_PULL}]} {:block/children ...}]`;
 var PEER_PULL = `[:block/uid
  {:harc/_v [{:harc/a [:node/title]} {:harc/e [:block/uid :node/title :block/string ${REFS_TEXT_PULL}]}]}
  {:harc/_e [{:harc/a [:node/title]} {:harc/v [:block/uid :node/title :block/string ${REFS_TEXT_PULL}]}]}]`;
