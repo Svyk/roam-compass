@@ -33,6 +33,14 @@ export function createDrop(ctx) {
   ctx.lifecycle.node(hint, stage);
 
   let draggedUid = null;
+  let clearTimer = null;
+
+  function cancelClear() {
+    if (clearTimer != null) {
+      globalThis.clearTimeout(clearTimer);
+      clearTimer = null;
+    }
+  }
 
   function showHint() {
     if (hint.hidden) hint.hidden = false;
@@ -43,13 +51,26 @@ export function createDrop(ctx) {
   }
 
   function onDragStart(event) {
+    cancelClear();
     // Capture-phase observation only: never preventDefault or stopPropagation so Roam keeps its own drag.
     draggedUid = draggedBlockUid(event?.target);
   }
 
   function onDragEnd() {
+    cancelClear();
     draggedUid = null;
     hideHint();
+  }
+
+  function onDocDrop() {
+    // Capture-phase cleanup only: never preventDefault or stopPropagation.
+    // Defer to a macrotask so root's own drop handler still reads draggedUid first.
+    cancelClear();
+    clearTimer = globalThis.setTimeout(() => {
+      clearTimer = null;
+      draggedUid = null;
+      hideHint();
+    }, 0);
   }
 
   function onDragOver(event) {
@@ -75,6 +96,7 @@ export function createDrop(ctx) {
   function onDrop(event) {
     if (!draggedUid || !ctx?.state?.isOpen) return;
     event.preventDefault();
+    cancelClear();
     const uid = draggedUid;
     draggedUid = null;
     hideHint();
@@ -83,11 +105,14 @@ export function createDrop(ctx) {
 
   ctx.lifecycle.event(doc, "dragstart", onDragStart, true);
   ctx.lifecycle.event(doc, "dragend", onDragEnd, true);
+  ctx.lifecycle.event(doc, "drop", onDocDrop, true);
   ctx.lifecycle.event(root, "dragover", onDragOver);
   ctx.lifecycle.event(root, "dragleave", onDragLeave);
   ctx.lifecycle.event(root, "drop", onDrop);
+  ctx.lifecycle.add?.(() => cancelClear());
 
   function onClose() {
+    cancelClear();
     draggedUid = null;
     hideHint();
   }

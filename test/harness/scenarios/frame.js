@@ -7,9 +7,11 @@ function twoFrames() {
 function checkFit(h, label) {
   const stageRect = h.rect(".compass-stage");
   const nodes = h.qa(".compass-node");
-  const adds = h.qa(".compass-zone-add").filter((el) => !el.hidden);
-  const counts = h.qa(".compass-zone-count").filter((el) => !el.hidden);
+  const adds = h.qa(".compass-zone-add").filter((el) => !el.hidden && el.getBoundingClientRect().width > 0);
+  const counts = h.qa(".compass-zone-count").filter((el) => !el.hidden && el.getBoundingClientRect().width > 0);
   h.assert(nodes.length > 0, `${label}: nodes rendered`);
+  h.equal(adds.length, 4, `${label}: all 4 .compass-zone-add buttons are visible`);
+  h.assert(counts.length >= 4, `${label}: at least 4 .compass-zone-count labels are visible (got ${counts.length})`);
   let allInside = true;
   let noAddHit = true;
   let noCountHit = true;

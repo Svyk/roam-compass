@@ -5,6 +5,8 @@ export const SCENARIOS = {
       h.harness.graph.addPage(`Popup Option ${String(i).padStart(2, "0")}`);
     }
 
+    // Visit p-budget first so history is non-empty when we verify Backspace does not navigate while popup is open.
+    await h.open("p-budget");
     await h.open("p-alpha");
 
     // Verify + tooltips read "Add a parent" etc.
@@ -155,10 +157,42 @@ export const SCENARIOS = {
       delete window.RoamPlexus;
     }
 
-    // Reopen with 20 results for visual inspection in the screenshot.
+    // Reopen with 20 results for I2 shortcut-isolation checks and visual inspection in the screenshot.
     h.click(".compass-zone-add-south");
     await h.wait(50);
     h.type(".compass-zone-input", "Popup Option");
     await h.wait(50);
+
+    // I2: Tab on input is prevented and keeps focus in input; Backspace and letters never trigger
+    // Compass navigation/shortcuts when focus is on a result button or document.body.
+    const zoneInputEl = h.q(".compass-zone-input");
+    const tabEv = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    zoneInputEl.dispatchEvent(tabEv);
+    h.equal(tabEv.defaultPrevented, true, "Tab keydown on popup input is defaultPrevented");
+    h.equal(h.focused(), zoneInputEl, "Tab leaves focus in popup input");
+
+    const firstResultBtn = h.q(".compass-zone-results .compass-result");
+    h.equal(firstResultBtn.tabIndex, -1, "popup result row has tabIndex -1");
+    firstResultBtn.focus();
+    firstResultBtn.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true }));
+    await h.wait(30);
+    h.equal(h.harness.overlay.ctx.state.current, "p-alpha", "Backspace on popup result button keeps center unchanged");
+    h.assert(!h.q(".compass-zone-pop").hidden, "Backspace on popup result button keeps popup open");
+    firstResultBtn.dispatchEvent(new KeyboardEvent("keydown", { key: "p", bubbles: true, cancelable: true }));
+    await h.wait(30);
+    h.equal(h.harness.overlay.ctx.state.current, "p-alpha", "letter key on popup result button keeps center unchanged");
+    h.assert(!h.q(".compass-zone-pop").hidden, "letter key on popup result button keeps popup open");
+
+    document.activeElement?.blur?.();
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true }));
+    await h.wait(30);
+    h.equal(h.harness.overlay.ctx.state.current, "p-alpha", "Backspace on document.body keeps center unchanged while popup is open");
+    h.assert(!h.q(".compass-zone-pop").hidden, "Backspace on document.body keeps popup open");
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "p", bubbles: true, cancelable: true }));
+    await h.wait(30);
+    h.equal(h.harness.overlay.ctx.state.current, "p-alpha", "letter key on document.body keeps center unchanged while popup is open");
+    h.assert(!h.q(".compass-zone-pop").hidden, "letter key on document.body keeps popup open");
+
+    zoneInputEl.focus();
   },
 };

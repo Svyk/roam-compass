@@ -84,5 +84,37 @@ export const SCENARIOS = {
     await views.set("compass");
     await h.open("b-sb-1");
     await h.wait(60);
+
+    // I1: a second render inside the same frame must not leave nodes stranded at stale enter targets.
+    const reopenedCard = h.q(".compass-world .compass-node-center");
+    const reopenedTitle = reopenedCard?.querySelector(".compass-node-title");
+    h.assert(Boolean(reopenedCard && reopenedTitle), "reopened Compass renders center card and title");
+    h.assert(
+      reopenedCard.clientHeight >= 70,
+      `reopened Compass center card is tall enough for two lines (clientHeight=${reopenedCard.clientHeight})`,
+    );
+    h.assert(
+      reopenedTitle.clientHeight >= 37,
+      `reopened Compass center title shows two full lines (clientHeight=${reopenedTitle.clientHeight})`,
+    );
+    const nodes = h.qa(".compass-world .compass-node");
+    h.assert(nodes.length >= 2, `reopened Compass rendered nodes (got ${nodes.length})`);
+    let anyOverlap = false;
+    for (let i = 0; i < nodes.length; i += 1) {
+      for (let j = i + 1; j < nodes.length; j += 1) {
+        if (h.overlaps(nodes[i], nodes[j])) anyOverlap = true;
+      }
+    }
+    h.equal(anyOverlap, false, "no .compass-node overlaps another after back-to-back renders");
+    h.equal(
+      nodes.some((node) => "target" in node.dataset),
+      false,
+      "no node still carries stale dataset.target",
+    );
+    h.equal(
+      nodes.some((node) => node.style.opacity === "0"),
+      false,
+      "no node is stuck at inline opacity 0",
+    );
   },
 };

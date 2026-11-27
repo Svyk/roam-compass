@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { centerSize, layout, NODE, sideAt, SUB_H } from "../src/model/layout.js";
+import { centerSize, headerHeight, layout, NODE, sideAt, SUB_H } from "../src/model/layout.js";
 
 function hood(counts, overflow = {}) {
   const nodes = [];
@@ -248,4 +248,15 @@ test("long center titles use a two-line header and shift rows and edges accordin
   const longRowOffset = (withRowsLong.rows[0].y - withRowsLong.rows[0].h / 2) - (-withRowsLong.center.h / 2);
   assert.equal(longRowOffset - shortRowOffset, longSize.headerH - shortSize.headerH);
   assert.ok(withRowsLong.items[0].y - withRowsLong.items[0].h / 2 > withRowsLong.center.h / 2);
+});
+
+test("headerHeight counts wide East Asian characters and emoji as width 2", () => {
+  assert.equal(headerHeight("日本語のタイトルが二行になるテスト例"), 76);
+  assert.equal(headerHeight("日本語タイトル十文字"), 56);
+  assert.equal(headerHeight("a".repeat(20)), 56);
+  assert.equal(headerHeight("a".repeat(21)), 76);
+  assert.equal(headerHeight("a".repeat(26), true), 56);
+  assert.equal(headerHeight("a".repeat(27), true), 76);
+  assert.equal(headerHeight("🚀".repeat(10)), 56);
+  assert.equal(headerHeight("🚀".repeat(11)), 76);
 });

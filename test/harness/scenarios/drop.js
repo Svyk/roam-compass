@@ -100,6 +100,15 @@ export const SCENARIOS = {
     h.assert(hint.hidden, "window-headers drag shows no drop hint");
     winHeader.dispatchEvent(makeDragEvent("dragend"));
 
+    // 4. I3: drag that ends with a drop outside .compass-root and no dragend clears stale uid.
+    bullet.dispatchEvent(makeDragEvent("dragstart"));
+    sidebar.dispatchEvent(makeDragEvent("drop"));
+    await h.wait(20);
+    const staleOver = makeDragEvent("dragover");
+    root.dispatchEvent(staleOver);
+    h.equal(staleOver.defaultPrevented, false, "dragover after outside drop without dragend is not prevented");
+    h.assert(hint.hidden, "drop hint stays hidden after outside drop without dragend");
+
     // Leave drop hint active for visual inspection in screenshot.
     bullet.dispatchEvent(makeDragEvent("dragstart"));
     root.dispatchEvent(makeDragEvent("dragover"));

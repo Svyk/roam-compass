@@ -3473,10 +3473,23 @@ function columnHeight(nodes, size, gap, sub) {
   for (const node of nodes) total += nodeHeight(node.uid, size.h, sub);
   return total;
 }
+var EMOJI_RE = /\p{Extended_Pictographic}/u;
+function isWideChar(ch) {
+  if (EMOJI_RE.test(ch)) return true;
+  const cp = ch.codePointAt(0);
+  return cp >= 4352 && cp <= 4447 || cp === 9001 || cp === 9002 || cp >= 11904 && cp <= 12350 || cp >= 12352 && cp <= 42191 || cp >= 44032 && cp <= 55203 || cp >= 63744 && cp <= 64255 || cp >= 65040 && cp <= 65049 || cp >= 65072 && cp <= 65135 || cp >= 65281 && cp <= 65376 || cp >= 65504 && cp <= 65510 || cp >= 131072 && cp <= 262141;
+}
+function displayWidth(text) {
+  let width = 0;
+  for (const ch of text) {
+    width += isWideChar(ch) ? 2 : 1;
+  }
+  return width;
+}
 function headerHeight(title, expanded = false) {
   const text = typeof title === "string" ? title.trim() : "";
   const limit = expanded ? 26 : 20;
-  return text.length > limit ? HEADER_TWO_H : HEADER_H;
+  return displayWidth(text) > limit ? HEADER_TWO_H : HEADER_H;
 }
 function centerSize({ badges = 0, rows = 0, more = false, title = "" } = {}) {
   const expanded = rows > 0 || more;
@@ -15334,6 +15347,13 @@ function createDrop(ctx) {
   hint.append(ctx.el("div", "compass-drop-pill", "Drop to center this block"));
   ctx.lifecycle.node(hint, stage);
   let draggedUid = null;
+  let clearTimer = null;
+  function cancelClear() {
+    if (clearTimer != null) {
+      globalThis.clearTimeout(clearTimer);
+      clearTimer = null;
+    }
+  }
   function showHint() {
     if (hint.hidden) hint.hidden = false;
   }
@@ -15341,11 +15361,21 @@ function createDrop(ctx) {
     if (!hint.hidden) hint.hidden = true;
   }
   function onDragStart(event) {
+    cancelClear();
     draggedUid = draggedBlockUid(event?.target);
   }
   function onDragEnd() {
+    cancelClear();
     draggedUid = null;
     hideHint();
+  }
+  function onDocDrop() {
+    cancelClear();
+    clearTimer = globalThis.setTimeout(() => {
+      clearTimer = null;
+      draggedUid = null;
+      hideHint();
+    }, 0);
   }
   function onDragOver(event) {
     if (!draggedUid || !ctx?.state?.isOpen) return;
@@ -15367,6 +15397,7 @@ function createDrop(ctx) {
   function onDrop(event) {
     if (!draggedUid || !ctx?.state?.isOpen) return;
     event.preventDefault();
+    cancelClear();
     const uid = draggedUid;
     draggedUid = null;
     hideHint();
@@ -15374,10 +15405,13 @@ function createDrop(ctx) {
   }
   ctx.lifecycle.event(doc, "dragstart", onDragStart, true);
   ctx.lifecycle.event(doc, "dragend", onDragEnd, true);
+  ctx.lifecycle.event(doc, "drop", onDocDrop, true);
   ctx.lifecycle.event(root, "dragover", onDragOver);
   ctx.lifecycle.event(root, "dragleave", onDragLeave);
   ctx.lifecycle.event(root, "drop", onDrop);
+  ctx.lifecycle.add?.(() => cancelClear());
   function onClose() {
+    cancelClear();
     draggedUid = null;
     hideHint();
   }
@@ -16939,6 +16973,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       const canLink = linkableTitle(trimmed);
       for (const row of found) {
         const item = button("compass-result", row.title);
+        item.tabIndex = -1;
         item.dataset.action = "page";
         item.dataset.uid = row.uid;
         item.dataset.title = row.title;
@@ -16947,6 +16982,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       }
       if (canLink && !exactMatch) {
         const createPageRow = button("compass-result compass-zone-create-page", `Create page "${trimmed}"`);
+        createPageRow.tabIndex = -1;
         createPageRow.dataset.action = "create-page";
         createPageRow.dataset.title = trimmed;
         createPageRow.setAttribute("role", "option");
@@ -16954,6 +16990,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       }
       if (canLink && typeof plexus()?.create === "function") {
         const drawRow = button("compass-result compass-result-drawing compass-zone-create-drawing", `Create drawing "${trimmed}"`);
+        drawRow.tabIndex = -1;
         drawRow.dataset.action = "create-drawing";
         drawRow.dataset.title = trimmed;
         drawRow.setAttribute("role", "option");
@@ -16995,6 +17032,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       event.preventDefault();
       event.stopPropagation();
       closeZonePopToOpener();
+    } else if (event.key === "Tab") {
+      event.preventDefault();
     }
   }
   async function writeZone(zone, title) {
@@ -17320,8 +17359,15 @@ function mountReal({ extensionAPI, lifecycle, host }) {
         element.title = `${node.title}${why}`;
         attachThumb(element, node);
       }
-      if (!entering.includes(element)) placeElement2(element, box);
-      else element.dataset.target = JSON.stringify(box);
+      if (!entering.includes(element)) {
+        if ("target" in element.dataset) {
+          delete element.dataset.target;
+          element.style.opacity = "";
+        }
+        placeElement2(element, box);
+      } else {
+        element.dataset.target = JSON.stringify(box);
+      }
     };
     place(hood.center.uid, { ...geometry.center, zone: "center" }, true, null);
     for (const node of hood.nodes) {
@@ -18161,6 +18207,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       searchInput.select();
       return;
     }
+    if (!zonePopEl.hidden) return;
     if (typing) return;
     if (features.any("onKey", event)) {
       event.preventDefault();
@@ -18317,7 +18364,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   lifecycle.event(outlineButton, "click", guard(() => toggleOutline()));
   lifecycle.event(zoneInput, "input", () => paintZoneResults(zoneInput.value));
   lifecycle.event(zoneInput, "keydown", onZoneKey);
-  lifecycle.event(zoneResults, "mousedown", (event) => event.preventDefault());
+  lifecycle.event(zonePopEl, "mousedown", (event) => {
+    if (event.target !== zoneInput) event.preventDefault();
+  });
   lifecycle.event(zoneResults, "click", (event) => {
     chooseZoneItem(event.target.closest?.(".compass-result"));
   });

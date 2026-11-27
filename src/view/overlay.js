@@ -1419,6 +1419,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       const canLink = linkableTitle(trimmed);
       for (const row of found) {
         const item = button("compass-result", row.title);
+        item.tabIndex = -1;
         item.dataset.action = "page";
         item.dataset.uid = row.uid;
         item.dataset.title = row.title;
@@ -1427,6 +1428,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       }
       if (canLink && !exactMatch) {
         const createPageRow = button("compass-result compass-zone-create-page", `Create page "${trimmed}"`);
+        createPageRow.tabIndex = -1;
         createPageRow.dataset.action = "create-page";
         createPageRow.dataset.title = trimmed;
         createPageRow.setAttribute("role", "option");
@@ -1434,6 +1436,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       }
       if (canLink && typeof plexus()?.create === "function") {
         const drawRow = button("compass-result compass-result-drawing compass-zone-create-drawing", `Create drawing "${trimmed}"`);
+        drawRow.tabIndex = -1;
         drawRow.dataset.action = "create-drawing";
         drawRow.dataset.title = trimmed;
         drawRow.setAttribute("role", "option");
@@ -1477,6 +1480,8 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       event.preventDefault();
       event.stopPropagation();
       closeZonePopToOpener();
+    } else if (event.key === "Tab") {
+      event.preventDefault();
     }
   }
 
@@ -1806,8 +1811,15 @@ function mountReal({ extensionAPI, lifecycle, host }) {
         element.title = `${node.title}${why}`;
         attachThumb(element, node);
       }
-      if (!entering.includes(element)) placeElement(element, box);
-      else element.dataset.target = JSON.stringify(box);
+      if (!entering.includes(element)) {
+        if ("target" in element.dataset) {
+          delete element.dataset.target;
+          element.style.opacity = "";
+        }
+        placeElement(element, box);
+      } else {
+        element.dataset.target = JSON.stringify(box);
+      }
     };
 
     place(hood.center.uid, { ...geometry.center, zone: "center" }, true, null);
@@ -2707,6 +2719,7 @@ function mountReal({ extensionAPI, lifecycle, host }) {
       searchInput.select();
       return;
     }
+    if (!zonePopEl.hidden) return;
     if (typing) return;
     if (features.any("onKey", event)) {
       event.preventDefault();
@@ -2857,7 +2870,9 @@ function mountReal({ extensionAPI, lifecycle, host }) {
   lifecycle.event(outlineButton, "click", guard(() => toggleOutline()));
   lifecycle.event(zoneInput, "input", () => paintZoneResults(zoneInput.value));
   lifecycle.event(zoneInput, "keydown", onZoneKey);
-  lifecycle.event(zoneResults, "mousedown", (event) => event.preventDefault());
+  lifecycle.event(zonePopEl, "mousedown", (event) => {
+    if (event.target !== zoneInput) event.preventDefault();
+  });
   lifecycle.event(zoneResults, "click", (event) => {
     chooseZoneItem(event.target.closest?.(".compass-result"));
   });
