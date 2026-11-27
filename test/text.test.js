@@ -3,6 +3,10 @@ import test from "node:test";
 
 import { drawingTitle, labelParts, parseAttribute, plainText, removeToken, safeSlice, scanRefs, tailShape } from "../src/model/text.js";
 
+// Timing limit for the adversarial-input tests. The regressions they guard against ran for 3 to 34 seconds;
+// GitHub's shared runners need up to about 70 ms for inputs that take 15 ms locally.
+const TIME_LIMIT_MS = 1000;
+
 const titles = (text) => scanRefs(text).map((token) => (token.type === "block" ? `((${token.uid}))` : token.title));
 
 test("scanRefs finds links, tags, and block refs", () => {
@@ -266,7 +270,7 @@ test("plainText handles 25,000 spaces after {{ without backtracking", () => {
   const out = plainText(input, 90);
   const elapsed = performance.now() - start;
   assert.equal(out, "");
-  assert.ok(elapsed < 100, `expected < 100ms, got ${elapsed.toFixed(1)}ms`);
+  assert.ok(elapsed < TIME_LIMIT_MS, `expected < ${TIME_LIMIT_MS}ms, got ${elapsed.toFixed(1)}ms`);
 });
 
 test("labelParts bounds adversarial inputs to 2000 chars and handles macros cut at the boundary", () => {
@@ -282,7 +286,7 @@ test("labelParts bounds adversarial inputs to 2000 chars and handles macros cut 
     const elapsed = performance.now() - start;
     assert.ok(res.text.length <= 90, `${name}: length ${res.text.length} <= 90`);
     assert.equal(res.text, expected, name);
-    assert.ok(elapsed < 50, `${name}: expected < 50ms, got ${elapsed.toFixed(1)}ms`);
+    assert.ok(elapsed < TIME_LIMIT_MS, `${name}: expected < ${TIME_LIMIT_MS}ms, got ${elapsed.toFixed(1)}ms`);
   }
 
   const prefix = `${"Plain opening text for a very long block with details ".repeat(2)}`;
@@ -300,7 +304,7 @@ test("labelParts bounds reference fan-out without truncating across long whitesp
     refs: { a: "((b))".repeat(400), b: "x".repeat(2000) },
   });
   const elapsed400 = performance.now() - start400;
-  assert.ok(elapsed400 < 50, `400x400 took ${elapsed400.toFixed(1)}ms`);
+  assert.ok(elapsed400 < TIME_LIMIT_MS, `400x400 took ${elapsed400.toFixed(1)}ms`);
   const res3 = labelParts("((a))".repeat(3), 90, {
     refs: { a: "((b))".repeat(3), b: "x".repeat(2000) },
   });
@@ -312,7 +316,7 @@ test("labelParts bounds reference fan-out without truncating across long whitesp
     refs: { a: "((b))".repeat(50), b: `${"[a".repeat(999)}](` },
   });
   const elapsed50 = performance.now() - start50;
-  assert.ok(elapsed50 < 50, `50x50 took ${elapsed50.toFixed(1)}ms`);
+  assert.ok(elapsed50 < TIME_LIMIT_MS, `50x50 took ${elapsed50.toFixed(1)}ms`);
   assert.equal(res50.text.length, 90);
 
   const uniqueRefs = { b: "y" };
@@ -325,7 +329,7 @@ test("labelParts bounds reference fan-out without truncating across long whitesp
   const start300 = performance.now();
   const res300 = labelParts(outer, 90, { refs: uniqueRefs });
   const elapsed300 = performance.now() - start300;
-  assert.ok(elapsed300 < 50, `300 unique outer refs took ${elapsed300.toFixed(1)}ms`);
+  assert.ok(elapsed300 < TIME_LIMIT_MS, `300 unique outer refs took ${elapsed300.toFixed(1)}ms`);
   assert.equal(res300.text, `${"y ".repeat(44)}y…`);
 
   const spaced = labelParts(`a${" ".repeat(500)}((u1)) tail`, 90, {
@@ -456,13 +460,13 @@ test("page-link and tag brackets that span code, macros, aliases, or block refer
   const startLong = performance.now();
   const longResult = plainText(`${"[[".repeat(1000)}\`a\`${"]]".repeat(1000)}`);
   const elapsedLong = performance.now() - startLong;
-  assert.ok(elapsedLong < 50, `1000-bracket timing case took ${elapsedLong.toFixed(1)}ms`);
+  assert.ok(elapsedLong < TIME_LIMIT_MS, `1000-bracket timing case took ${elapsedLong.toFixed(1)}ms`);
   assert.equal(longResult.length, 90);
 
   const startDeep = performance.now();
   const deepResult = plainText(`${"[[".repeat(499)}\`a\`${"]]".repeat(499)}`);
   const elapsedDeep = performance.now() - startDeep;
-  assert.ok(elapsedDeep < 50, `499-pair cross-token timing case took ${elapsedDeep.toFixed(1)}ms`);
+  assert.ok(elapsedDeep < TIME_LIMIT_MS, `499-pair cross-token timing case took ${elapsedDeep.toFixed(1)}ms`);
   assert.equal(deepResult, "a");
 });
 
